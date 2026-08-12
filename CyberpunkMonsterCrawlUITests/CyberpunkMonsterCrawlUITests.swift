@@ -38,7 +38,17 @@ final class CyberpunkMonsterCrawlUITests: XCTestCase {
         wait(for: [menuDismissed], timeout: 5)
         XCTAssertEqual(app.state, .runningForeground)
 
-        let gameplayContainer = app.descendants(matching: .any)["gameplay.container"]
+        // Matched on the container marker's accessibility *label*, not on
+        // `gameplay.container`. `SKNode` has no real `accessibilityIdentifier`
+        // (see `SKNodeAccessibilityIdentifier`): that property is a Swift-side
+        // associated object that never reaches the accessibility element
+        // `SKView` synthesises, so an identifier subscript here would be a
+        // silent no-op that can never match - the exact "green over an
+        // unplayable build" failure this test exists to prevent. SpriteKit does
+        // forward `accessibilityLabel`, which is why the PLAY query above
+        // resolves, and `GameplayScreenNode`'s marker sets
+        // `accessibilityLabel = "Gameplay"`.
+        let gameplayContainer = app.descendants(matching: .any)["Gameplay"]
         XCTAssertTrue(
             gameplayContainer.waitForExistence(timeout: 5),
             "PLAY must land on the (skeleton) gameplay screen, not an empty uiLayer"

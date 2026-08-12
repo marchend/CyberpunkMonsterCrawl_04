@@ -162,6 +162,15 @@ final class GameSceneScreenSwitchingTests: XCTestCase {
         scene.register(menu, for: .menu)
         scene.register(gameplay, for: .gameplay)
 
+        // `register(_:for:)` for the current state activates immediately
+        // (see `test_registeringScreenForCurrentState_activatesItImmediately`),
+        // which records its own "menu.willEnter" here. That is unrelated to
+        // what this test checks - the *relative* order of the outgoing
+        // screen's willExit() and the incoming screen's willEnter() during
+        // an actual transition - so reset the recorder right before
+        // triggering the transition under test.
+        order.removeAll()
+
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
 
         XCTAssertEqual(order, ["menu.willExit", "gameplay.willEnter"])

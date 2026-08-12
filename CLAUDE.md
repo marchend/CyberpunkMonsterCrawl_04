@@ -67,9 +67,16 @@ CyberpunkMonsterCrawl/
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
   Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule; Double math with a CGFloat cast only at the boundary
+  Sources/World/SeedMixer.swift            explicit splitmix64-style bit mixer over (seed, tileX, tileY), wrapping arithmetic only - never Hasher/.hashValue, which is randomized per process
+  Sources/World/WorldSeed.swift            thin UInt64-wrapping per-run seed type: "a run is fully described by its seed"
+  Sources/World/TileKind.swift             asphalt/junctionStopLine/kerbSidewalk/lot/buildingFootprint + isWalkable (asphalt, sidewalk, stop-line and empty lot walkable; building footprint solid)
+  Sources/World/CityLatticeGenerator.swift pure classify(tileX:tileY:seed:) -> TileInfo: 6-tile period, 3x3 block + 3-tile street corridor, intersections structurally always street (seed never reaches street tiles), ~1-in-4 empty-lot decision made once per block via SeedMixer
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
   IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile + off-centre and on-seam cases pinning tile(containing:)
+  CityLatticeGeneratorTests.swift          6-tile period test, intersection-always-street test, ~1-in-4 empty-lot-ratio test, per-block decision consistency, determinism
+  ConnectivityTests.swift                  flood-fill over classify's walkable output across >=20 seeds and a 12x12-block region, reaching every intersection tile; private BFS helper over a Set<Coord>
+  ConcurrencyDeterminismTests.swift        dispatches classify for the same and for many distinct (tileX, tileY, seed) inputs across DispatchQueue.concurrentPerform and asserts every result matches a single-threaded reference
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
   ImagePixelSampling.swift                 shared alpha/RGBA decode helper for the asset gates
   AtlasCatalogTests.swift                  catalog-existence + alpha-channel gate for the 10 atlas sheets
@@ -205,19 +212,52 @@ docs/bootstrap.md                          original spec (source of truth)
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
   rounded tile (deferred — future PR)
-- Pure-function world generation `(tileX, tileY, seed) → chunk`, 8×8 chunk
-  streaming, no cross-chunk neighbour lookups (deferred — CYBERPUN-17-3-t2).
-  CYBERPUN-17-3 is deliberately split in two: `-t1` ships the isometric
-  coordinate transform above, `-t2` ships the seeded chunked city lattice
+- Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
+  (implemented — `Sources/World/CityLatticeGenerator.swift`,
+  `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,
+  `Sources/World/TileKind.swift`). Wrapping this into 8×8 chunks with
+  camera-driven streaming and no cross-chunk neighbour lookups is deferred
+  — `CYBERPUN-17-3-t3`. CYBERPUN-17-3 is deliberately split in three: `-t1`
+  shipped the isometric coordinate transform, `-t2` ships the pure seeded
+  city-lattice function below, `-t3` wraps it into chunks and streaming.
+  **Moving AC2 (chunk-boundary agreement) and AC8 (bounded resident-chunk
+  window) out of `-t2` is a scope change, not a docs detail.** It needs an
+  explicit product call and `-t3` must exist as a filed, tracked story — a
+  deferral that lives only in this file points nowhere. Raised on
+  CYBERPUN-17-3-t2 so the split is recorded in the tracker rather than only
+  here; do not treat CYBERPUN-17-3 as closed by `-t2` until `-t3` is filed
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
-  on a tile grid (deferred — future PR)
+  on a tile grid (deferred — future PR; `TileKind.isWalkable` is the data
+  this will consume)
 - City lattice: 6-tile period per axis, 3×3 building block ringed by a
   3-tile street corridor that doubles as the navmesh, `TileKind` +
   walkability, ~1-in-4 empty lots, every intersection tile street under
-  every seed (deferred — CYBERPUN-17-3-t2). Chunk-boundary agreement with no
-  neighbour lookups and intersection-is-street are the load-bearing
-  guarantees of the story, so `-t2` proves them with seed-sweep tests rather
-  than assuming them
+  every seed (implemented — `CityLatticeGenerator.classify`). Street tiles
+  are decided purely structurally from the tile coordinate's position in
+  the 6-tile period (`SeedMixer` is never consulted for them), which is
+  what makes "every intersection tile is street under every seed" true by
+  construction and makes the lattice's connectivity seed-independent; only
+  a block interior's lot-vs-building decision is seed-driven, made once per
+  block via `SeedMixer` so every interior tile of one block agrees.
+  `CityLatticeGeneratorTests` pins the period/intersection/ratio/
+  determinism contracts (including the crossing's sub-kinds by name: centre
+  lane asphalt, the four junction mouths stop-line, the four corners
+  sidewalk so the ring around each block is unbroken), `ConnectivityTests`
+  flood-fills the walkable output across >=20 seeds and a 12x12-block region
+  straddling the origin and reaches every intersection tile, and
+  `ConcurrencyDeterminismTests` proves thread safety.
+  Chunk-boundary agreement (AC2) and the bounded resident-chunk window
+  (AC8) are `CYBERPUN-17-3-t3`'s concern once chunking exists — this PR is
+  scoped to the pure per-tile function only, no chunking, no streaming.
+  Why that split is safe rather than convenient: because `classify` is a
+  pure function of `(tileX, tileY, seed)` and consults no neighbour, chunk
+  or cached state, two chunks meeting at a boundary cannot disagree — AC2
+  becomes true by construction the moment chunking wraps `classify`, so
+  `-t3`'s boundary-agreement test is a thin wrapper assertion (chunk-embedded
+  tile == standalone `classify` tile) rather than a genuine risk. AC8's
+  bounded resident-chunk window is the real engineering left in `-t3`. This
+  reasoning belongs on the `-t3` ticket too, so its reviewer knows which of
+  its ACs is load-bearing
 - Local high-score persistence, no network/Game Center (deferred — future PR)
 - `// SCAFFOLDING:` marker convention + grep-based removal gate
   (deferred — future PR)
@@ -237,9 +277,13 @@ docs/bootstrap.md                          original spec (source of truth)
   floating-thumbstick story); the death/high-scores placeholders are tagged
   for CYBERPUN-17-16 (integration checkpoint #2)
 - Depth module
-- Procedural world generation + chunk streaming, the city lattice and its
-  `TileKind` walkability model — tracked as CYBERPUN-17-3-t2 (the second
-  half of CYBERPUN-17-3; `-t1` shipped the coordinate transform only)
+- Chunk assembly (8×8), lot-reservation hooks and camera-driven chunk
+  streaming with a bounded resident-chunk window — tracked as
+  `CYBERPUN-17-3-t3` (the third of CYBERPUN-17-3's three PRs; `-t1` shipped
+  the coordinate transform, `-t2` shipped the pure seeded city-lattice
+  function itself). This carries CYBERPUN-17-3's AC2 and AC8, so it has to
+  be a filed story in the tracker and not merely this bullet — confirm it
+  exists (and link it on the `-t2` PR) before CYBERPUN-17-3 is signed off
 - Tile-grid collision system
 - Local high-score persistence
 - SCAFFOLDING marker grep gate

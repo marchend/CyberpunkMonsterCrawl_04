@@ -34,7 +34,7 @@ final class GameplayScreenNode: ScreenNode {
     let node = SKNode()
 
     // SCAFFOLDING(CYBERPUN-17-7): placeholder label only; no real HUD yet.
-    private let placeholderLabel = SKLabelNode(text: "GAMEPLAY \u2014 WORLD COMING SOON")
+    private let placeholderLabel = SKLabelNode(text: "GAMEPLAY \u{2014} WORLD COMING SOON")
 
     /// Non-visual accessibility anchor identifying "gameplay is mounted",
     /// so a UI test can assert the PLAY -> gameplay transition landed
