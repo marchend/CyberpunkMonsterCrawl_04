@@ -48,13 +48,19 @@ enum GroundTileKind: CaseIterable {
 /// index" (what the sheet measurement is keyed by) — so `AtlasSheet.swift`
 /// stays the single source of truth for the pixel arithmetic.
 ///
-/// The six-way mapping itself, from the story's asset contract. The lane
-/// pair follows `AtlasGroundDiamond`'s own case order: `.asphaltEastWest`
-/// takes `laneEastWest`, whose `pixelRect` is the crop at **x:0**, and
-/// `.asphaltNorthSouth` takes `laneNorthSouth` at **x:96** (both numbers
-/// read off `AtlasGroundDiamond.pixelRect` in
-/// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth
-/// for the pixel arithmetic).
+/// The six-way mapping itself, from the story's asset contract. Every kind
+/// takes the diamond that carries its own name — `.asphaltEastWest` takes
+/// `laneEastWest`, `.asphaltNorthSouth` takes `laneNorthSouth` — and which
+/// crop each of those names is bound to was **measured** off the shipped
+/// pixels rather than read off the sheet's left-to-right order: the pack ships
+/// the featureless bare-ground diamond first (`plainLot`, the crop at **x:0**,
+/// the one asphalt-toned crop with no paint on it), the north-south lane
+/// second (`laneNorthSouth`, at **x:96**, its dash on the tile-Y diagonal) and
+/// the east-west lane third (`laneEastWest`, at **x:192**, its dash on the
+/// tile-X diagonal), so `AtlasGroundDiamond` names them that way round (every
+/// number here read off `AtlasGroundDiamond.pixelRect` in
+/// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth for
+/// the pixel arithmetic).
 ///
 /// That pairing is not left as prose either.
 /// `GroundTileSemanticsTests
@@ -68,12 +74,16 @@ enum GroundTileKind: CaseIterable {
 /// numbers for both crops, so a red run reports which crop is which instead
 /// of leaving the reader to re-measure by hand.
 ///
-/// **If it does go red, swap the two `case` returns in `diamond(for:)`
-/// below — do not edit this comment to match the art.** The mapping is the
-/// thing under test, and prose disagreeing with `diamond(for:)` is how a
+/// **If it does go red, fix the assignment — never edit this comment to
+/// match the art.** It has gone red once already: the lane pair was
+/// originally bound the other way round (`laneEastWest` naming the x:0
+/// crop), the measurement showed that crop's paint running along tile *Y*,
+/// and the fix was to re-bind `AtlasGroundDiamond`'s two lane cases to the
+/// crops they actually hold rather than to soften the test. The mapping is
+/// the thing under test, and prose disagreeing with the pixels is how a
 /// later reader ends up inverting every street in the city:
-/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
-/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
+/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:0,   96x60)
+/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:96,  96x60)
 /// - `.lot`               -> `AtlasGroundDiamond.plainLot`       (x:192, 96x60)
 /// - `.junctionStopLine`  -> `AtlasGroundDiamond.intersection`   (x:288, 96x60)
 /// - `.kerbSidewalk`      -> `AtlasGroundDiamond.kerbTransition` (x:384, 96x60)

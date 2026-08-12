@@ -151,10 +151,38 @@ enum AtlasSheet: CaseIterable {
 /// 96px-plus-padding layout, or the 112px cell placed at x:0 instead of
 /// x:480 all fail (c), which a bounds-containment check alone cannot
 /// discriminate between.
+/// **Which crop holds which diamond was measured too, not read off the
+/// sheet's left-to-right order.** The three left-hand crops (x:0 / x:96 /
+/// x:192) all share the dark asphalt base (luminance median 20.7, minimum
+/// 4.6); the three right-hand ones (x:288 / x:384 / x:480) are the light
+/// concrete family (median 54-68). Inside the asphalt family only *two* crops
+/// carry high-contrast paint, and they carry the same amount of it: x:96 and
+/// x:192 share a 98th-percentile luminance of 58.4 and peak at 133.2 / 132.2,
+/// while x:0's brightest pixel reaches only 29.7 against the same 20.7 median.
+/// So x:96 and x:192 are the pack's directional lane pair (identical marking
+/// colour and paint budget, dashes on the two *opposite* screen diagonals) and
+/// x:0 is the featureless bare-ground diamond. `GroundTileSemanticsTests`
+/// re-measures both facts at test time.
 enum AtlasGroundDiamond: Int, CaseIterable {
-    case laneEastWest = 0
+    /// The sheet's first diamond (x:0): the asphalt-toned crop that carries
+    /// **no paint at all** (brightest pixel 29.7 against a 20.7 median, a
+    /// 1.4x contrast, where both lane crops reach 6.4x), so it is the
+    /// featureless bare-ground diamond rather than either lane.
+    case plainLot = 0
+    /// The sheet's second diamond (x:96): its painted dash runs along the
+    /// **tile-Y** diagonal, which is the axis a north-south corridor runs
+    /// along.
+    ///
+    /// `GroundTileSemanticsTests
+    /// .test_eachLaneCrop_carriesPaintElongatedAlongTheAxisItsCaseNameClaims`
+    /// re-measures the shipped pixels and fails if the two lane names are ever
+    /// bound the other way round, or bound onto the paintless `plainLot` crop
+    /// next door.
     case laneNorthSouth = 1
-    case plainLot = 2
+    /// The sheet's third diamond (x:192): paint elongated along the **tile-X**
+    /// diagonal, i.e. the east-west corridor. See `laneNorthSouth` above for
+    /// how the pair was measured.
+    case laneEastWest = 2
     case intersection = 3
     case kerbTransition = 4
     case overhangLot = 5
@@ -163,11 +191,11 @@ enum AtlasGroundDiamond: Int, CaseIterable {
     /// `AtlasSheet.groundTiles.sheet.texture(forPixelRect:)`.
     var pixelRect: CGRect {
         switch self {
-        case .laneEastWest:
+        case .plainLot:
             return CGRect(x: 0, y: 0, width: 96, height: 60)
         case .laneNorthSouth:
             return CGRect(x: 96, y: 0, width: 96, height: 60)
-        case .plainLot:
+        case .laneEastWest:
             return CGRect(x: 192, y: 0, width: 96, height: 60)
         case .intersection:
             return CGRect(x: 288, y: 0, width: 96, height: 60)

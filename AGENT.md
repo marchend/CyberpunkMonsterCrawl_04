@@ -36,10 +36,21 @@ Cmd+U in Xcode on the `CyberpunkMonsterCrawl` scheme, or:
 xcodebuild test -scheme CyberpunkMonsterCrawl
 ```
 
+That scheme runs both bundles against **Debug**. A second scheme runs the
+launch → PLAY → gameplay UI journey against **Release** — the configuration
+the shipped product and the runtime probe actually use, and the one where
+every `assert`-based safety net is compiled out (`CYBERPUN-17-4-t6`):
+```
+xcodebuild test -scheme CyberpunkMonsterCrawl-Release
+```
+Only `CyberpunkMonsterCrawlUITests` is in that scheme:
+`CyberpunkMonsterCrawlTests` uses `@testable import`, which needs
+`SWIFT_ENABLE_TESTABILITY` and is therefore Debug-only by design.
+
 ## Directory structure
 
 ```
-project.yml                          XcodeGen spec (app + test targets)
+project.yml                          XcodeGen spec (app + test targets; CyberpunkMonsterCrawl scheme = both bundles in Debug, CyberpunkMonsterCrawl-Release scheme = the UI journey in Release)
 setup.sh, .gitignore
 CyberpunkMonsterCrawl/
   AppDelegate.swift, SceneDelegate.swift   UIKit scene wiring
@@ -50,7 +61,7 @@ CyberpunkMonsterCrawl/
   Layers/ScreenNode.swift                  ScreenNode protocol + PlaceholderScreenNode test double
   Layers/TouchResponder.swift              touch-consumer protocol + the "scene is the sole dispatcher" contract
   Layers/ButtonNode.swift                  minimal tappable button (plate + label, optional neon accent frame) delivered to via TouchResponder
-  Layers/SceneInvariants.swift             runtime audits: cumulative-z band escapes, nodes bypassing scene touch dispatch
+  Layers/SceneInvariants.swift             runtime audits, compiled into every configuration (Release included): cumulative-z band escapes, nodes bypassing scene touch dispatch; enforceSceneInvariants() reports via os.Logger + GameScene.onSceneInvariantViolation always and additionally asserts in DEBUG
   Layers/PixelGritPalette.swift            shared dark-background / neon-accent colors for every screen
   Layers/SKNodeAccessibilityIdentifier.swift  Swift-side accessibilityIdentifier storage for SKNode (SKNode never adopts UIAccessibilityIdentification); AccessibleSKView is what carries the value into a real accessibility element, and only for nodes under uiLayer in an AccessibleSKView-hosted scene - world/effects-layer identifiers stay invisible to XCUITest
   Layers/AccessibleSKView.swift            the hosted SKView subclass: publishes one UIAccessibilityElement per accessible uiLayer node, with a screen-space accessibilityFrame derived from the same coordinate path routeTouch(at:) hit-tests, so identifier/element-driven taps (XCUITest, the runtime probe, VoiceOver) land on the button instead of missing it
@@ -102,13 +113,14 @@ CyberpunkMonsterCrawlTests/
   DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
   GameStateMachineTests.swift              exhaustive legal/illegal transition matrix for GameStateMachine
   LayerOrderingTests.swift                 zPosition ordering invariant (named constants) + hostile out-of-band descendants caught by the band audit
+  SceneInvariantsTests.swift               the audits' non-fatal reporting path (the only reaction a Release build has) driven with hostile input, plus a source scan failing if any audit/report/logger line is put back behind #if DEBUG or a GameScene call site is re-gated
   TouchRoutingTests.swift                  UI-first touch routing: an overlapping UI node always wins over a world node
   TouchDispatchTests.swift                 the routed touch is delivered to a TouchResponder; no node bypasses scene dispatch
   GameSceneScreenSwitchingTests.swift      state-machine-driven screen registry swap incl. replace-while-active, using PlaceholderScreenNode doubles
   GameViewControllerCompositionTests.swift composition root builds GameScene, mounts MenuScreenNode + the three skeleton screens, wires PLAY to the state machine, and hosts the scene in an AccessibleSKView (asserted against the view actually installed in the hierarchy)
   AccessibleSKViewTests.swift              the accessibility-frame regression guard: the uiLayer accessible-node walk, and the published frame's centre being the exact scene point routeTouch(at:)/dispatchTouch(atScenePoint:) resolves to the PLAY button
 CyberpunkMonsterCrawlUITests/
-  CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run and lands on the gameplay screen
+  CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run and lands on the gameplay screen; plus a cold-launch, label-only replay of the runtime probe's menu-to-gameplay journey, run in Debug and — via the CyberpunkMonsterCrawl-Release scheme — in Release
   AppLaunchAndRotationUITests.swift        launch shows the menu in portrait, rotation re-lays it out in landscape with nothing off-screen, PLAY dismisses the menu
 docs/bootstrap.md                          original spec (source of truth)
 .mothership/journeys/menu-to-gameplay.json product-verification journey: launch -> tap PLAY by accessibility element -> screenshot the streamed ground plane
@@ -201,8 +213,18 @@ docs/bootstrap.md                          original spec (source of truth)
   `isUserInteractionEnabled` (UIKit would deliver the touch before the
   scene's `touchesBegan` and bypass UI-first routing) — both audited by
   `GameScene.nodesEscapingTheirLayerBand()` /
-  `nodesBypassingSceneTouchDispatch()` and asserted in DEBUG whenever a
-  screen mounts, the scene is presented, or a touch is dispatched. A third
+  `nodesBypassingSceneTouchDispatch()` whenever a screen mounts, the ground
+  plane mounts, the scene is presented, or a touch is dispatched. Since
+  `CYBERPUN-17-4-t6` those audits run in **every** build configuration and
+  only the reaction differs: `assert` in DEBUG (fail fast at the offending
+  mount), a non-fatal `os.Logger` fault plus the
+  `GameScene.onSceneInvariantViolation` hook in Release, because crashing a
+  shipped build over a caught invariant would be worse than the bug. They
+  used to be reachable only through an `#if DEBUG` `assertSceneInvariants()`
+  while CI built Debug only, which switched the whole safety net off in
+  precisely the configuration users and the runtime probe get;
+  `SceneInvariantsTests` now pins both the reporting behaviour and (by source
+  scan) the absence of any `#if DEBUG` around the machinery. A third
   rule is a screen-authoring convention rather than a runtime audit: a screen
   that is meant to sit *over* live world content (today only
   `GameplayScreenNode`) must not mount a node that blankets the viewport,
@@ -470,6 +492,13 @@ docs/bootstrap.md                          original spec (source of truth)
   not. `GameplayScreenNode`'s placeholder is tagged for CYBERPUN-17-7 (the
   floating-thumbstick story); the death/high-scores placeholders are tagged
   for CYBERPUN-17-16 (integration checkpoint #2)
+- Wiring the `CyberpunkMonsterCrawl-Release` scheme into automated CI: the
+  iOS build/test workflow lives outside this repo (`.github/workflows/ci.yml`
+  is the Linux runner and deliberately skips iOS), so the Release UI pass is
+  a documented command (`xcodebuild test -scheme
+  CyberpunkMonsterCrawl-Release`) that a human or the iOS workflow owner has
+  to invoke — the scheme exists and passes, but it is not yet an enforced
+  pre-merge gate (`CYBERPUN-17-4-t6`)
 - Tile-grid collision system
 - Local high-score persistence
 - SCAFFOLDING marker grep gate

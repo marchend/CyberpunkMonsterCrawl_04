@@ -53,11 +53,39 @@ targets:
     dependencies:
       - target: CyberpunkMonsterCrawl
 schemes:
+  # Everyday scheme: both test bundles against the Debug configuration (the
+  # unit-test bundle needs SWIFT_ENABLE_TESTABILITY, which is Debug-only).
   CyberpunkMonsterCrawl:
     build:
       targets: { CyberpunkMonsterCrawl: all }
     test:
       targets:
         - name: CyberpunkMonsterCrawlTests
+        - name: CyberpunkMonsterCrawlUITests
+      parallelizable: false
+  # CYBERPUN-17-4-t6: the same launch -> PLAY -> gameplay journey, run against
+  # the **Release** configuration - the one the shipped product and the
+  # runtime probe actually use, and the one nothing verified before.
+  #
+  # This exists because every structural safety net in this codebase used to
+  # be `assert`-based, i.e. compiled out of Release, while CI only ever built
+  # Debug: a regression that needs an optimized build (or a Release-only
+  # compile-out, `#if DEBUG` code that a Debug run silently depends on) to
+  # manifest would go red in no test we had and still ship. So this scheme
+  # runs the UI journey where the audits are non-fatal and the debug-only
+  # code is gone.
+  #
+  # Only the UI-test bundle is listed on purpose: `CyberpunkMonsterCrawlTests`
+  # uses `@testable import`, which cannot link against a Release build of the
+  # app module (testability is Debug-only, deliberately - see `settings`), so
+  # adding it here would fail to build rather than add coverage.
+  CyberpunkMonsterCrawl-Release:
+    build:
+      targets: { CyberpunkMonsterCrawl: all }
+    run:
+      config: Release
+    test:
+      config: Release
+      targets:
         - name: CyberpunkMonsterCrawlUITests
       parallelizable: false

@@ -86,8 +86,10 @@ final class LayerOrderingTests: XCTestCase {
     // escapes its band and reproduces the v1 "world paints over UI" bug.
     // Checking the three container nodes cannot catch that, so
     // `GameScene.nodesEscapingTheirLayerBand()` walks every descendant and
-    // `assertSceneInvariants()` trips on it in DEBUG. These tests drive that
-    // mechanism with the violations it exists to catch.
+    // `enforceSceneInvariants()` reacts to it in every build configuration
+    // (`assert` in DEBUG, a non-fatal report in Release - see
+    // `SceneInvariantsTests`). These tests drive that mechanism with the
+    // violations it exists to catch.
 
     func test_bandAudit_isClean_forAFreshScene_andForAMountedScreen() {
         let scene = makeScene()

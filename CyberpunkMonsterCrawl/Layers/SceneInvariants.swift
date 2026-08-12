@@ -1,5 +1,6 @@
 import CoreGraphics
 import SpriteKit
+import os
 
 /// One layer container plus the `LayerConstants` band its whole subtree must
 /// stay inside. `baseZ` is the container's own *cumulative* zPosition (for
@@ -26,11 +27,25 @@ private struct LayerBand {
 /// Both audits are plain functions so tests can drive them with hostile
 /// input (a UI child with a large negative `zPosition`, a world child with a
 /// large positive one, a node that opts into UIKit touch delivery), and both
-/// are wired into `assertSceneInvariants()`, which `GameScene` trips in
-/// DEBUG when a screen is mounted, when the scene is presented and on every
-/// dispatched touch. A future screen that violates either contract fails
-/// loudly at the moment it is added instead of silently reproducing the v1
-/// "world paints over UI" / "dead button" bugs with a green suite.
+/// are wired into `enforceSceneInvariants()`, which `GameScene` runs when a
+/// screen is mounted, when the ground plane mounts, when the scene is
+/// presented and on every dispatched touch. A future screen that violates
+/// either contract is reported at the moment it is added instead of silently
+/// reproducing the v1 "world paints over UI" / "dead button" bugs with a
+/// green suite.
+///
+/// **Every line below compiles into Release** (`CYBERPUN-17-4-t6`). The audits
+/// used to be reachable only through an `#if DEBUG` `assertSceneInvariants()`,
+/// which meant the one build configuration nobody could audit was the one the
+/// product actually ships and the runtime probe actually drives: a regression
+/// that only manifests in an optimized build would trip loudly in every
+/// Debug test run and then ship in silence. Now the audit *runs* in both
+/// configurations and only the *reaction* differs \u2014 `assert` in DEBUG (fail
+/// fast, at the offending mount), a non-fatal `os.Logger` fault plus the
+/// `GameScene.onSceneInvariantViolation` hook in Release. Crashing a shipped
+/// build over a caught invariant would be worse than the bug it catches.
+/// `SceneInvariantsTests` pins both halves, including a source scan that
+/// fails if any of this machinery is put back behind `#if DEBUG`.
 extension GameScene {
 
     private var auditedBands: [LayerBand] {
@@ -154,28 +169,74 @@ extension GameScene {
         node.name.map { "\($0) (\(type(of: node)))" } ?? "\(type(of: node))"
     }
 
-    // MARK: - DEBUG enforcement
+    // MARK: - Enforcement (every build configuration)
 
-    #if DEBUG
-    /// Trips in DEBUG the moment either invariant is violated: a node whose
-    /// cumulative zPosition escapes its layer band, or a node that steals
-    /// touch delivery from the scene.
-    func assertSceneInvariants(file: StaticString = #file, line: UInt = #line) {
-        assert(
-            nodesEscapingTheirLayerBand().isEmpty,
-            "Node(s) escaped their layer's zPosition band: "
-                + layerBandViolationReport().joined(separator: "; "),
-            file: file,
-            line: line
-        )
-        assert(
-            nodesBypassingSceneTouchDispatch().isEmpty,
-            "Node(s) set isUserInteractionEnabled and would bypass GameScene's UI-first touch "
-                + "dispatch: "
-                + nodesBypassingSceneTouchDispatch().map { describe($0) }.joined(separator: "; "),
-            file: file,
-            line: line
-        )
+    private static let invariantLog = Logger(
+        subsystem: "com.cyberpunkmonstercrawl.CyberpunkMonsterCrawl",
+        category: "SceneInvariants"
+    )
+
+    /// Both invariants' violations as one human-readable list, in the order
+    /// they are audited (layer bands, then touch dispatch). Empty means the
+    /// whole graph satisfies both contracts.
+    ///
+    /// The two audits are walked exactly once each, which is why this is the
+    /// single source both the DEBUG assertion message and the Release log
+    /// read from - the previous DEBUG-only assertion walked the
+    /// touch-dispatch subtree twice (once for the condition, once for the
+    /// message) and could not be shared with a non-fatal path at all.
+    func sceneInvariantViolations() -> [String] {
+        var violations = layerBandViolationReport().map { "layer band escaped: \($0)" }
+        violations += nodesBypassingSceneTouchDispatch().map {
+            "touch dispatch bypassed: \(describe($0)) sets isUserInteractionEnabled"
+        }
+        return violations
     }
-    #endif
+
+    /// Runs both audits and *reports* whatever they find - non-fatally, in
+    /// **every** build configuration: an `os.Logger` fault (so a Release
+    /// build on a real device surfaces the violation in the console instead
+    /// of hiding it) plus `GameScene.onSceneInvariantViolation`. Returns the
+    /// violations so a caller can react.
+    ///
+    /// This is the whole of the Release enforcement path, and it is
+    /// deliberately free of `#if DEBUG`: a shipped build audits the same
+    /// graph, by the same rule, as a Debug test run.
+    @discardableResult
+    func reportSceneInvariantViolations() -> [String] {
+        let violations = sceneInvariantViolations()
+        guard !violations.isEmpty else { return [] }
+
+        let summary = violations.joined(separator: "; ")
+        Self.invariantLog.fault("Scene invariant violated: \(summary, privacy: .public)")
+        onSceneInvariantViolation?(violations)
+        return violations
+    }
+
+    /// The audit entry point every `GameScene` call site uses: reports the
+    /// violations in all configurations (see
+    /// `reportSceneInvariantViolations()`) and, in DEBUG only, additionally
+    /// trips an `assert` so a violation fails the suite / breaks in the
+    /// debugger at the offending mount rather than scrolling past in a log.
+    ///
+    /// Called at the moments the scene graph *changes* - screen mounted,
+    /// ground plane mounted, scene presented - plus once per dispatched
+    /// touch, all of which are user-paced. It walks the whole world subtree
+    /// (thousands of ground nodes once a run is streaming), so it must never
+    /// be called from `update(_:)`: a future story that dispatches touches
+    /// per frame (a thumbstick drag, `CYBERPUN-17-7`) should route through
+    /// `routeTouch(at:)` directly instead of re-auditing every frame.
+    @discardableResult
+    func enforceSceneInvariants(file: StaticString = #file, line: UInt = #line) -> [String] {
+        let violations = reportSceneInvariantViolations()
+        #if DEBUG
+        assert(
+            violations.isEmpty,
+            "Scene invariant violated: " + violations.joined(separator: "; "),
+            file: file,
+            line: line
+        )
+        #endif
+        return violations
+    }
 }

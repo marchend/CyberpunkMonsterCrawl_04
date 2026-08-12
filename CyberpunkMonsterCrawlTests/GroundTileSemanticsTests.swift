@@ -158,6 +158,105 @@ final class GroundTileSemanticsTests: XCTestCase {
         XCTAssertEqual(alongY.alongTileY, 2, accuracy: 1e-9)
     }
 
+    // MARK: - TEMPORARY diagnostic (removed before the PR opens)
+
+    func test_TEMPORARY_dumpLanePairMeasurements() throws {
+        XCTFail(try temporaryDump(of: [.asphaltEastWest, .asphaltNorthSouth]))
+    }
+
+    func test_TEMPORARY_dumpOtherCropMeasurements() throws {
+        XCTFail(try temporaryDump(of: [.junctionStopLine, .kerbSidewalk, .lot, .buildingFootprint]))
+    }
+
+    private func temporaryDump(of kinds: [GroundTileKind]) throws -> String {
+        let pixels = try groundPixels()
+        var report = "\nTEMP DUMP\n"
+
+        for kind in kinds {
+            let crop = Crop(kind: kind, pixels: pixels)
+            let painted = crop.paintedPixels
+            guard !painted.isEmpty else {
+                report += "\(kind) \(crop.rect): NO OPAQUE PIXELS\n"
+                continue
+            }
+            let lums = painted.map(\.luminance).sorted()
+            let centreX = Double(painted.map(\.x).min()! + painted.map(\.x).max()!) / 2
+            let centreY = Double(painted.map(\.y).min()! + painted.map(\.y).max()!) / 2
+            report += "\(kind) rect=\(crop.rect) opaque=\(painted.count)"
+                + " lum[min=\(lums.first!) med=\(lums[lums.count / 2]) max=\(lums.last!)]\n"
+
+            for quantile in [0.5, 0.9, 0.98] {
+                let index = Swift.min(lums.count - 1, Int(Double(lums.count - 1) * quantile))
+                let threshold = lums[index]
+                var totalWeight = 0.0
+                var samples: [(u: Double, v: Double, weight: Double, x: Int, y: Int)] = []
+                for pixel in painted {
+                    let weight = Swift.max(0, pixel.luminance - threshold)
+                    guard weight > 0 else { continue }
+                    let axis = Crop.axisCoordinates(
+                        imageOffsetX: Double(pixel.x) - centreX,
+                        imageOffsetY: Double(pixel.y) - centreY
+                    )
+                    samples.append((u: axis.alongTileX, v: axis.alongTileY, weight: weight, x: pixel.x, y: pixel.y))
+                    totalWeight += weight
+                }
+                guard totalWeight > 0 else {
+                    report += "  q=\(quantile) thr=\(threshold): no paint above threshold\n"
+                    continue
+                }
+                let meanU = samples.reduce(0) { $0 + $1.u * $1.weight } / totalWeight
+                let meanV = samples.reduce(0) { $0 + $1.v * $1.weight } / totalWeight
+                let varU = samples.reduce(0) { $0 + $1.weight * ($1.u - meanU) * ($1.u - meanU) } / totalWeight
+                let varV = samples.reduce(0) { $0 + $1.weight * ($1.v - meanV) * ($1.v - meanV) } / totalWeight
+                let boxX = "\(samples.map(\.x).min()!)...\(samples.map(\.x).max()!)"
+                let boxY = "\(samples.map(\.y).min()!)...\(samples.map(\.y).max()!)"
+                report += "  q=\(quantile) thr=\(threshold) n=\(samples.count)"
+                    + " u=\(varU) v=\(varV) ratio=\(varU / varV) box x:\(boxX) y:\(boxY)\n"
+            }
+
+            // Same measurement keyed on chroma (max-min channel) instead of
+            // luminance, in case the lane markings are a saturated accent
+            // rather than the brightest thing on the crop.
+            var chromas: [(x: Int, y: Int, chroma: Double)] = []
+            for pixel in painted {
+                let base = (pixel.y * pixels.width + pixel.x) * 4
+                let red = Double(pixels.rgba[base])
+                let green = Double(pixels.rgba[base + 1])
+                let blue = Double(pixels.rgba[base + 2])
+                chromas.append((x: pixel.x, y: pixel.y, chroma: Swift.max(red, green, blue) - Swift.min(red, green, blue)))
+            }
+            let sortedChroma = chromas.map(\.chroma).sorted()
+            for quantile in [0.9] {
+                let index = Swift.min(sortedChroma.count - 1, Int(Double(sortedChroma.count - 1) * quantile))
+                let threshold = sortedChroma[index]
+                var totalWeight = 0.0
+                var samples: [(u: Double, v: Double, weight: Double)] = []
+                for pixel in chromas {
+                    let weight = Swift.max(0, pixel.chroma - threshold)
+                    guard weight > 0 else { continue }
+                    let axis = Crop.axisCoordinates(
+                        imageOffsetX: Double(pixel.x) - centreX,
+                        imageOffsetY: Double(pixel.y) - centreY
+                    )
+                    samples.append((u: axis.alongTileX, v: axis.alongTileY, weight: weight))
+                    totalWeight += weight
+                }
+                guard totalWeight > 0 else {
+                    report += "  chroma q=\(quantile) thr=\(threshold): none\n"
+                    continue
+                }
+                let meanU = samples.reduce(0) { $0 + $1.u * $1.weight } / totalWeight
+                let meanV = samples.reduce(0) { $0 + $1.v * $1.weight } / totalWeight
+                let varU = samples.reduce(0) { $0 + $1.weight * ($1.u - meanU) * ($1.u - meanU) } / totalWeight
+                let varV = samples.reduce(0) { $0 + $1.weight * ($1.v - meanV) * ($1.v - meanV) } / totalWeight
+                report += "  chroma q=\(quantile) thr=\(threshold) n=\(samples.count)"
+                    + " u=\(varU) v=\(varV) ratio=\(varU / varV)\n"
+            }
+        }
+
+        return report
+    }
+
     // MARK: - Measurement helpers
 
     /// One `GroundTileKind`'s crop of the decoded sheet, addressed in the

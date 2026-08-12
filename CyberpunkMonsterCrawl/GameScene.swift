@@ -71,6 +71,21 @@ final class GameScene: SKScene {
     /// The screen currently mounted in `uiLayer`, if any.
     private(set) var activeScreen: ScreenNode?
 
+    // MARK: - Structural invariants
+
+    /// Fired with the human-readable violations whenever the scene-invariant
+    /// audit (`enforceSceneInvariants()`) finds any - in **every** build
+    /// configuration, Release included (`CYBERPUN-17-4-t6`).
+    ///
+    /// `nil` in the shipped app, where the `os.Logger` fault
+    /// `reportSceneInvariantViolations()` emits is the whole report. It exists
+    /// so `SceneInvariantsTests` can prove the *non-fatal* reporting path -
+    /// the only one a Release build has, since `assert` is compiled out there
+    /// - actually runs and carries the right payload, rather than trusting
+    /// that a source file without `#if DEBUG` in it behaves the same in both
+    /// configurations.
+    var onSceneInvariantViolation: (([String]) -> Void)?
+
     // MARK: - World content
 
     /// The seed the run's city is generated from.
@@ -226,11 +241,14 @@ final class GameScene: SKScene {
         // any stale origin so RUN AGAIN starts the debug pan (if enabled)
         // from wherever the new run's camera actually sits.
         debugPanOrigin = nil
+        #endif
 
         // Ground nodes are the first world-space content in the graph, so
-        // audit the moment they land rather than at the next touch.
-        assertSceneInvariants()
-        #endif
+        // audit the moment they land rather than at the next touch. Runs in
+        // Release too (`CYBERPUN-17-4-t6`): see `enforceSceneInvariants()` for
+        // why the audit is no longer DEBUG-only and why only the *reaction*
+        // to a violation differs between configurations.
+        enforceSceneInvariants()
     }
 
     /// Drains `groundPlane`'s incremental-mount queue a few chunks at a time
@@ -345,12 +363,11 @@ final class GameScene: SKScene {
         next.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
         next.willEnter()
         activeScreen = next
-        #if DEBUG
         // A newly mounted screen is the most likely source of an out-of-band
         // zPosition or a node that steals touch delivery, so audit here
-        // rather than waiting for the first touch.
-        assertSceneInvariants()
-        #endif
+        // rather than waiting for the first touch - in Release as well as in
+        // DEBUG (`CYBERPUN-17-4-t6`).
+        enforceSceneInvariants()
     }
 
     // MARK: - Layout
@@ -363,9 +380,11 @@ final class GameScene: SKScene {
         // coordinate space instead of showing its bottom-left quadrant.
         centreCameraOnScene()
         activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
-        #if DEBUG
-        assertSceneInvariants()
-        #endif
+        // Presenting the scene is the first moment the real, composed graph
+        // exists (`GameViewController` has registered every screen by now), so
+        // it is the most valuable single audit point - and the one a Release
+        // build most needed and did not have before `CYBERPUN-17-4-t6`.
+        enforceSceneInvariants()
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -516,9 +535,12 @@ final class GameScene: SKScene {
     /// for a `ButtonNode` that is its label, not the button.
     @discardableResult
     func dispatchTouch(atScenePoint scenePoint: CGPoint) -> TouchResponder? {
-        #if DEBUG
-        assertSceneInvariants()
-        #endif
+        // Audited on the touch path too, in Release as well as DEBUG: "PLAY
+        // was tapped and the screen stayed on the menu" is exactly the report
+        // this audit exists to explain, and a touch is user-paced, so the
+        // graph walk costs nothing a player can feel. Never move this into
+        // `update(_:)` - see `enforceSceneInvariants()`.
+        enforceSceneInvariants()
         guard let hit = routeTouch(at: scenePoint) else { return nil }
         guard let responder = touchResponder(for: hit) else { return nil }
         responder.handleTouch()

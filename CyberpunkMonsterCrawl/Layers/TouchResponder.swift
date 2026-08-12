@@ -10,7 +10,9 @@ import SpriteKit
 /// this feature exists to guarantee. Conforming to `TouchResponder` is the
 /// only supported way to react to a touch;
 /// `GameScene.nodesBypassingSceneTouchDispatch()` audits the graph for
-/// violations and `GameScene.assertSceneInvariants()` trips on them in DEBUG.
+/// violations and `GameScene.enforceSceneInvariants()` reports them in every
+/// build configuration - `assert` in DEBUG, a non-fatal `os.Logger` fault in
+/// Release (`CYBERPUN-17-4-t6`).
 ///
 /// Because `SKNode.atPoint(_:)` returns the *deepest* descendant under a
 /// point (for a button, that is usually its label rather than the button

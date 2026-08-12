@@ -91,10 +91,31 @@ final class TouchRoutingTests: XCTestCase {
         // test scene, so scene coordinates map straight through to uiLayer.
         for worldPoint in [CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 400), CGPoint(x: 350, y: 700)] {
             let worldNode = makeHitTestableNode(at: worldPoint)
+            // Entering `.gameplay` also mounts the streamed ground plane into
+            // `worldLayer` (`GameScene.updateWorldContent(for:)` ->
+            // `startGroundPlane()`), and every ground node carries
+            // `DepthModel.worldLayerRelativeZ` - tens of thousands above this
+            // probe's default `zPosition` of 0. `atPoint(_:)` resolves to the
+            // front-most node under the point, so without this the probe would
+            // lose to whichever ground tile happens to cover the point and the
+            // assertion below would be measuring "which world node draws in
+            // front" instead of "did the touch escape `uiLayer` at all", which
+            // is the property this test exists to pin. Parking it at the top of
+            // the world band keeps it inside `LayerConstants.worldBand` (so the
+            // scene-invariant audit stays quiet) while guaranteeing it wins the
+            // hit test against ground.
+            worldNode.zPosition = LayerConstants.worldMaxZ - LayerConstants.worldMinZ
             scene.worldLayer.addChild(worldNode)
 
+            let hit = scene.routeTouch(at: worldPoint)
+
+            XCTAssertFalse(
+                hit?.inParentHierarchy(scene.uiLayer) ?? false,
+                "a mounted gameplay screen must not blanket the viewport: the touch at "
+                    + "\(worldPoint) was swallowed by uiLayer node \(String(describing: hit?.name))"
+            )
             XCTAssertTrue(
-                scene.routeTouch(at: worldPoint) === worldNode,
+                hit === worldNode,
                 "a mounted gameplay screen must not blanket the viewport: the touch at "
                     + "\(worldPoint) has to fall through to the world node"
             )

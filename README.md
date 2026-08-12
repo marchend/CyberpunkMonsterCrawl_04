@@ -41,3 +41,17 @@ Cmd+U in Xcode on the `CyberpunkMonsterCrawl` scheme, or:
 ```
 xcodebuild test -scheme CyberpunkMonsterCrawl
 ```
+
+That runs the unit tests and the UI tests against the **Debug**
+configuration. A second scheme runs the launch → PLAY → gameplay UI journey
+against **Release** — the configuration a shipped build actually uses, where
+every `assert`-based invariant is compiled out:
+
+```
+xcodebuild test -scheme CyberpunkMonsterCrawl-Release
+```
+
+Only the UI-test bundle is in that scheme: the unit tests use
+`@testable import`, which requires `SWIFT_ENABLE_TESTABILITY` and is
+Debug-only by design. Re-run `./setup.sh` (or `xcodegen generate`) after
+pulling, so the generated project picks up both schemes.
