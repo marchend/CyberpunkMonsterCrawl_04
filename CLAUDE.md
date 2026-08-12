@@ -46,15 +46,20 @@ CyberpunkMonsterCrawl/
   GameViewController.swift                 hosts the SKView
   BootScene.swift                          bootstrap SpriteKit scene
   PrivacyInfo.xcprivacy, *.entitlements
-  Atlas/AtlasContract.swift                atlas contract + measurement
   Assets.xcassets/                         the single asset catalog for the target
     Atlas/                                 10 atlas-sheet imagesets (1x only)
     AppIcon.appiconset/                    stub AppIcon slot (art not yet imported)
   Sources/Assets/TextureLoading.swift      centralized nearest-filtering texture factory
+  Sources/Assets/SpriteSheet.swift         measured-geometry contract: pixel/cell size, texture(col:row:)
+  Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
+  Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
-  AtlasContractTests.swift                 atlas contract rules + catalog gate
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
+  AtlasCatalogTests.swift                  catalog-existence gate for the 10 atlas sheets
+  AtlasDimensionsTests.swift               measured-vs-declared dims + cell-alignment gate
+  AtlasCellIndexTests.swift                bounds-checks every owned cell index (incl. ground diamonds)
+  AtlasContractConventionTests.swift       scans Sources/ for raw cell-rect construction outside the contract
 docs/bootstrap.md                          original spec (source of truth)
 ```
 
@@ -62,25 +67,28 @@ docs/bootstrap.md                          original spec (source of truth)
 
 - UIKit + single `SKView` host (implemented in this PR)
 - Bootstrap `BootScene` showing the project name (implemented in this PR)
-- Atlas contract type (`CyberpunkMonsterCrawl/Atlas/AtlasContract.swift`)
-  recording each sheet's measured pixel size, cell grid and owned cell
-  indices — measured programmatically from the imported image, never
-  inferred from filenames — plus the acceptance gate in
-  `AtlasContractTests` that fails when any referenced image id is missing
-  from the catalog (implemented)
+- Atlas contract type for the 10 sheet families
+  (`CyberpunkMonsterCrawl/Sources/Assets/SpriteSheet.swift` +
+  `AtlasSheet.swift` + `AtlasCellIndex.swift`) recording each sheet's declared
+  pixel size, cell grid and owned cell indices — checked at init time against
+  what the imported image actually measures
+  (`SpriteSheet.measuredPixelSize(forImageNamed:)`), never inferred from
+  filenames, with a hard `precondition` failure on any mismatch. One owning
+  cell-index list per family lives in `AtlasCellIndex`, including
+  `tileset_ground`'s six non-uniform diamond sub-rects (declared in
+  `AtlasSheet.swift` as `AtlasGroundDiamond`, with a comment recording how
+  they were measured). `AtlasContractConventionTests` greps `Sources/` and
+  fails if any file outside those three constructs a raw cell rect
+  (implemented)
 - Asset catalog: the 10 atlas sheets are imported as 1× imagesets under
-  `CyberpunkMonsterCrawl/Assets.xcassets/Atlas/`, and every one of those ids
-  is referenced by `AtlasContract.current` (via `undeclaredSheetImageIDs`),
-  so renaming or dropping an imageset — or shipping one without an alpha
-  channel — turns the suite red today, unmuted (implemented). There is one
-  asset catalog in the target; the AppIcon stub lives in it rather than in a
-  second same-named catalog. Still outstanding and owned by
-  **CYBERPUN-17-1-t3**: the 12 building sprites (`building_00` …
-  `building_11`), which are not in the repo, and each sheet family's cell size
-  and owned cell indices, which may only be written into
-  `AtlasContract.current.sheets` once checked against the measured art. The
-  contract reports that gap as `.sheetManifestIncomplete` rather than staying
-  silent about it
+  `CyberpunkMonsterCrawl/Assets.xcassets/Atlas/`, and every one is referenced
+  by `AtlasSheet.allCases`, so renaming or dropping an imageset turns
+  `AtlasCatalogTests` red today, unmuted (implemented). There is one asset
+  catalog in the target; the AppIcon stub lives in it rather than in a second
+  same-named catalog. Still outstanding and owned by **CYBERPUN-17-1-t4**: the
+  12 building sprites (`building_00` … `building_11`), which are not in the
+  repo yet, plus the whole-catalog "no stray `@2x`/`@3x`, no
+  `tileset_structure`" checks that depend on both asset families existing
 - Central texture loader (`CyberpunkMonsterCrawl/Sources/Assets/TextureLoading.swift`)
   enforcing `.nearest` filtering, no mipmaps (implemented — asset-import PR).
   No production consumer calls it yet; that lands with the sprites/tiles that
@@ -104,21 +112,14 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- **CYBERPUN-17-1-t3 — binary asset pack import (remainder):** the 12 building
-  PNGs (`building_00` … `building_11`) into `Assets.xcassets` as 1× imagesets,
-  plus filling `AtlasContract.current.sheets` with each atlas-sheet family's
-  measured cell size and owned cell index list. That task also deletes the two
-  remaining `XCTExpectFailure` scaffolds, which are tagged
-  `SCAFFOLDING(CYBERPUN-17-1-t3)` and scoped to exactly what is outstanding:
-  `test_shippedAssetCatalog_satisfiesAtlasContract_forEveryBuildingSprite`
-  (building ids only) and
-  `test_shippedAssetCatalog_declaresACellGridForEverySheetFamily` (the
-  manifest count). Both are strict, so they fail the moment the art lands and
-  cannot be left muting the gate — and neither can mute a regression in the 10
-  sheets already imported, which
-  `test_shippedAssetCatalog_satisfiesAtlasContract_forEveryImportedSheet`
-  asserts unmuted. `tileset_structure.png` and the HTML companion files were
-  not imported.
+- **CYBERPUN-17-1-t4 — the 12 building sprites:** import `building_00` …
+  `building_11` into `Assets.xcassets` as 1× imagesets, add a `BuildingSprite`
+  enum recording each one's pixel size/footprint/height class (loaded whole
+  via `TextureLoading`, never sliced), and add the whole-catalog scan that
+  fails if any imageset anywhere (atlas or building) declares a `2x`/`3x`
+  rendition, or if `tileset_structure`/the Asset-Scales-preview art was ever
+  imported. `tileset_structure.png` and the HTML companion files were not
+  imported by this PR.
 - Wiring every real texture consumer (player, raccoons, bullets, pickups,
   pulse, hit puff, signs, ground tiles) through
   `TextureLoading.texture(named:)` as each is built — the factory exists and
