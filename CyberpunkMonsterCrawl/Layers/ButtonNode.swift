@@ -11,26 +11,55 @@ import UIKit
 /// `GameScene.nodesBypassingSceneTouchDispatch()` trips the DEBUG assertions
 /// if any node in the graph ever does that.
 ///
-/// The button is an accessibility element with `.button` traits so XCUITest
-/// (and VoiceOver) can find and tap it by its title.
+/// The button is an accessibility element with `.button` traits and an
+/// explicit `accessibilityIdentifier` (falling back to `title` when none is
+/// supplied) so XCUITest (and VoiceOver) can find and tap it reliably by
+/// either identifier or its visible title.
 final class ButtonNode: SKNode, TouchResponder {
 
-    /// The label text, also the button's accessibility label.
+    /// The label text, also the button's default accessibility label /
+    /// identifier.
     let title: String
 
+    private let accentFrame: SKSpriteNode?
     private let plate: SKSpriteNode
     private let label: SKLabelNode
     private let action: () -> Void
 
-    init(title: String, size: CGSize, action: @escaping () -> Void) {
+    /// - Parameters:
+    ///   - accentColor: when supplied, draws a thin neon frame behind the
+    ///     plate and tints the label to match \u2014 the "Pixel Grit" direction's
+    ///     hot-neon-accent treatment reserved for primary actions (e.g. PLAY).
+    ///     `nil` (the default) keeps the plain dark-plate styling used by
+    ///     secondary buttons (RUN AGAIN, back-to-menu, HIGH SCORES).
+    ///   - accessibilityIdentifier: explicit identifier for UI tests; defaults
+    ///     to `title` when omitted.
+    init(
+        title: String,
+        size: CGSize,
+        accentColor: UIColor? = nil,
+        accessibilityIdentifier: String? = nil,
+        action: @escaping () -> Void
+    ) {
         self.title = title
         self.action = action
-        self.plate = SKSpriteNode(color: UIColor(white: 0.12, alpha: 1.0), size: size)
+        self.plate = SKSpriteNode(color: PixelGritPalette.plate, size: size)
+
+        if let accentColor = accentColor {
+            let frame = SKSpriteNode(
+                color: accentColor,
+                size: CGSize(width: size.width + 8, height: size.height + 8)
+            )
+            frame.name = "button.\(title).accentFrame"
+            self.accentFrame = frame
+        } else {
+            self.accentFrame = nil
+        }
 
         let label = SKLabelNode(text: title)
         label.fontName = "Menlo-Bold"
         label.fontSize = 26
-        label.fontColor = .white
+        label.fontColor = accentColor ?? .white
         label.verticalAlignmentMode = .center
         label.horizontalAlignmentMode = .center
         self.label = label
@@ -38,11 +67,15 @@ final class ButtonNode: SKNode, TouchResponder {
         super.init()
 
         name = "button.\(title)"
+        if let accentFrame = accentFrame {
+            addChild(accentFrame)
+        }
         addChild(plate)
         addChild(label)
 
         isAccessibilityElement = true
-        accessibilityLabel = title
+        self.accessibilityLabel = title
+        self.accessibilityIdentifier = accessibilityIdentifier ?? title
         accessibilityTraits = .button
     }
 

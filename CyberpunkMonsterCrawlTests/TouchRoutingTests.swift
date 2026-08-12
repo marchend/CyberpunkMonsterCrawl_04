@@ -63,6 +63,46 @@ final class TouchRoutingTests: XCTestCase {
         XCTAssertNil(hit)
     }
 
+    /// The inverse failure of `test_overlappingUIAndWorldNode_routesToUI_neverToWorld`,
+    /// and the one the story's AC4 words as "untouched events fall through
+    /// to the world": a *mounted screen* must not blanket the viewport with
+    /// an inert (non-`TouchResponder`) node. `routeTouch(at:)` returns any
+    /// non-`uiLayer` hit under `uiLayer` before it looks at `worldLayer`, so
+    /// a full-bleed backdrop on the gameplay screen would swallow every
+    /// touch on screen - `dispatchTouch` would then return `nil` because the
+    /// backdrop has no `TouchResponder` ancestor - and would paint over
+    /// `worldLayer` once CYBERPUN-17-3+ renders world content.
+    /// `test_uiNodeElsewhere_doesNotStealATouchOverWorldOnly` only covers a
+    /// UI node that does *not* cover the point, so this drives the real
+    /// screen instead of a stand-in.
+    func test_mountedGameplayScreen_doesNotBlockWorldTouches() {
+        let scene = makeScene()
+        let gameplay = GameplayScreenNode()
+        scene.register(gameplay, for: .gameplay)
+        scene.stateMachine.transition(to: .gameplay)
+
+        XCTAssertTrue(
+            scene.activeScreen === gameplay,
+            "precondition: the gameplay screen must actually be mounted and laid out"
+        )
+
+        // Points spread across the viewport, all clear of the small centred
+        // placeholder label. The camera stays at the origin in a view-less
+        // test scene, so scene coordinates map straight through to uiLayer.
+        for worldPoint in [CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 400), CGPoint(x: 350, y: 700)] {
+            let worldNode = makeHitTestableNode(at: worldPoint)
+            scene.worldLayer.addChild(worldNode)
+
+            XCTAssertTrue(
+                scene.routeTouch(at: worldPoint) === worldNode,
+                "a mounted gameplay screen must not blanket the viewport: the touch at "
+                    + "\(worldPoint) has to fall through to the world node"
+            )
+
+            worldNode.removeFromParent()
+        }
+    }
+
     func test_uiNodeElsewhere_doesNotStealATouchOverWorldOnly() {
         let scene = makeScene()
         let worldPoint = CGPoint(x: 100, y: 100)

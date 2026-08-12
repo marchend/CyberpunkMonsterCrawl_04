@@ -9,11 +9,11 @@ import UIKit
 /// `SKNode` subclass whose `node` is `self`, or a plain coordinating object
 /// that owns/builds its root node however it likes.
 ///
-/// `MenuScreen` is the first concrete conformer, registered for `.menu` by
-/// `GameViewController`. The remaining screens (gameplay HUD / death / high
-/// scores) land in CYBERPUN-17-2-t3 and register the same way;
-/// `PlaceholderScreenNode` below stands in for them in
-/// `GameSceneScreenSwitchingTests` until then.
+/// `MenuScreenNode`, `GameplayScreenNode`, `DeathScreenNode` and
+/// `HighScoresScreenNode` are the concrete conformers, registered by
+/// `GameViewController` for their respective `GameState`s.
+/// `PlaceholderScreenNode` below stands in for a screen in
+/// `GameSceneScreenSwitchingTests`, independent of the concrete screens.
 protocol ScreenNode: AnyObject {
     /// The root node `GameScene` mounts under `uiLayer` while this screen is
     /// active.
@@ -39,8 +39,8 @@ protocol ScreenNode: AnyObject {
 /// Test double used only by the tests (`GameSceneScreenSwitchingTests`,
 /// `LayerOrderingTests`) to prove the state-driven registry swap without any
 /// real screen content. Not referenced by production code - the concrete
-/// screens (`MenuScreen` today, the rest in CYBERPUN-17-2-t3) conform to
-/// `ScreenNode` in their own right.
+/// screens (`MenuScreenNode`, `GameplayScreenNode`, `DeathScreenNode`,
+/// `HighScoresScreenNode`) conform to `ScreenNode` in their own right.
 final class PlaceholderScreenNode: ScreenNode {
     /// Identifies which registered slot this double stands in for, purely
     /// to make test failure messages readable.
