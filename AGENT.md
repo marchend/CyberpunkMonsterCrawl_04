@@ -66,8 +66,10 @@ CyberpunkMonsterCrawl/
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
+  Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule; Double math with a CGFloat cast only at the boundary
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
+  IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile + off-centre and on-seam cases pinning tile(containing:)
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
   ImagePixelSampling.swift                 shared alpha/RGBA decode helper for the asset gates
   AtlasCatalogTests.swift                  catalog-existence + alpha-channel gate for the 10 atlas sheets
@@ -188,15 +190,34 @@ docs/bootstrap.md                          original spec (source of truth)
   paint over `worldLayer`. Menu/death/high-scores backdrops are full-bleed on
   purpose (they hide the world); the scene's own `backgroundColor` supplies
   the dark base behind gameplay
+- Isometric coordinate transform: `IsometricProjection.tileToScreen`/
+  `screenToTile` for 96×48 tile diamonds (`screenX = (tileX - tileY) * 48`,
+  `screenY = (tileX + tileY) * 24`, and its exact algebraic inverse), Double
+  arithmetic throughout with a single `CGFloat` cast at the boundary. Tile
+  space has its own `TilePoint` value type so a screen-space `CGPoint` can't
+  be fed to the forward transform, and `tile(containing:)` pins the
+  diamond-ownership rounding rule (`floor(coord + 0.5)` — a point exactly on
+  a seam belongs to the higher-index tile, identically on both sides of the
+  origin, which `round()` would not do)
+  (implemented — `Sources/World/IsometricProjection.swift`,
+  `IsometricProjectionTests`). No production consumer places a tile-space
+  node via it yet; that lands with the ground-plane/depth-model PR
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
   rounded tile (deferred — future PR)
 - Pure-function world generation `(tileX, tileY, seed) → chunk`, 8×8 chunk
-  streaming, no cross-chunk neighbour lookups (deferred — future PR)
+  streaming, no cross-chunk neighbour lookups (deferred — CYBERPUN-17-3-t2).
+  CYBERPUN-17-3 is deliberately split in two: `-t1` ships the isometric
+  coordinate transform above, `-t2` ships the seeded chunked city lattice
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid (deferred — future PR)
 - City lattice: 6-tile period per axis, 3×3 building block ringed by a
-  3-tile street corridor that doubles as the navmesh (deferred — future PR)
+  3-tile street corridor that doubles as the navmesh, `TileKind` +
+  walkability, ~1-in-4 empty lots, every intersection tile street under
+  every seed (deferred — CYBERPUN-17-3-t2). Chunk-boundary agreement with no
+  neighbour lookups and intersection-is-street are the load-bearing
+  guarantees of the story, so `-t2` proves them with seed-sweep tests rather
+  than assuming them
 - Local high-score persistence, no network/Game Center (deferred — future PR)
 - `// SCAFFOLDING:` marker convention + grep-based removal gate
   (deferred — future PR)
@@ -216,7 +237,9 @@ docs/bootstrap.md                          original spec (source of truth)
   floating-thumbstick story); the death/high-scores placeholders are tagged
   for CYBERPUN-17-16 (integration checkpoint #2)
 - Depth module
-- Procedural world generation + chunk streaming
+- Procedural world generation + chunk streaming, the city lattice and its
+  `TileKind` walkability model — tracked as CYBERPUN-17-3-t2 (the second
+  half of CYBERPUN-17-3; `-t1` shipped the coordinate transform only)
 - Tile-grid collision system
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
