@@ -91,6 +91,21 @@ final class TouchRoutingTests: XCTestCase {
         // test scene, so scene coordinates map straight through to uiLayer.
         for worldPoint in [CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 400), CGPoint(x: 350, y: 700)] {
             let worldNode = makeHitTestableNode(at: worldPoint)
+            // Entering `.gameplay` above also starts the real streamed ground
+            // plane (`GameScene.updateWorldContent(for:)`), so `worldLayer`
+            // already holds real ground tiles under these points by the time
+            // this loop runs. Ground's zPosition (`DepthModel.groundOffset`,
+            // always *below* its own band) is real world content and must
+            // stay reachable too - it is simply not what this assertion is
+            // about. Give this synthetic node a zPosition safely above the
+            // entire `worldBand` range any legitimate world content
+            // (ground/building/actor) can occupy as a *relative* offset off
+            // `worldLayer`, so the hit test is guaranteed to prefer this
+            // stand-in "on top of the ground" node - exactly like a real
+            // actor, which always draws in front of the ground beneath it -
+            // rather than depending on incidental z-order against whatever
+            // ground tile happens to share the point.
+            worldNode.zPosition = LayerConstants.worldMaxZ - LayerConstants.worldLayerZ + 1
             scene.worldLayer.addChild(worldNode)
 
             XCTAssertTrue(
