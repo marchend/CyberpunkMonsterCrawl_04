@@ -7,9 +7,12 @@ import XCTest
 /// The v1 failure this rebuild exists to prevent was an empty asset catalog
 /// shipping with a green suite. These tests attack that from two sides:
 ///
-/// 1. `test_shippedAssetCatalog_satisfiesAtlasContract` runs the contract
-///    against the real `Assets.xcassets` and must go red while any referenced
-///    image id is missing.
+/// 1. The `test_shippedAssetCatalog_satisfiesAtlasContract_*` gates run the
+///    contract against the real `Assets.xcassets` and must go red while any
+///    referenced image id is missing. The half covering the art that is
+///    already imported (the 10 atlas sheets) is unmuted; only the halves the
+///    named follow-up task still owes carry an expectation, so a regression in
+///    imported art can never hide behind a deferral.
 /// 2. The fixture-driven tests prove the validator actually detects each
 ///    violation class, so the gate above cannot be quietly hollowed out into
 ///    something that passes on an empty catalog.
@@ -130,6 +133,64 @@ final class AtlasContractTests: XCTestCase {
         )
     }
 
+    /// A sheet that is imported but not yet celled is still referenced, so
+    /// losing it from the catalog must still turn the suite red.
+    func test_validate_reportsMissingImage_whenAnImportedButUndeclaredSheetIsAbsent() {
+        let contract = AtlasContract(
+            requiredSheetCount: 1,
+            sheets: [],
+            undeclaredSheetImageIDs: ["sprite_pulse"],
+            buildingImageIDs: []
+        )
+
+        XCTAssertTrue(
+            contract.validate(using: StubMeasurer(measurements: [:]))
+                .contains(.missingImage(id: "sprite_pulse")),
+            "An imported sheet without a declared cell grid must still be gated on existence."
+        )
+    }
+
+    func test_validate_reportsMissingAlphaChannel_forAnImportedButUndeclaredSheet() {
+        let contract = AtlasContract(
+            requiredSheetCount: 1,
+            sheets: [],
+            undeclaredSheetImageIDs: ["sprite_pulse"],
+            buildingImageIDs: []
+        )
+        let measurer = StubMeasurer(measurements: [
+            "sprite_pulse": makeMeasurement(
+                width: 64,
+                height: 64,
+                hasAlpha: false,
+                content: 7_000,
+                mirrored: 7_001
+            )
+        ])
+
+        XCTAssertTrue(
+            contract.validate(using: measurer).contains(.missingAlphaChannel(id: "sprite_pulse"))
+        )
+    }
+
+    /// Once a family's cell grid is declared, its id must not be referenced
+    /// twice — the declaration supersedes the undeclared entry.
+    func test_referencedImageIDs_doesNotDuplicateASheetThatIsBothDeclaredAndImported() {
+        let contract = AtlasContract(
+            requiredSheetCount: 1,
+            sheets: [
+                AtlasSheetDeclaration(
+                    imageID: "sprite_pulse",
+                    cellSize: CGSize(width: 32, height: 32),
+                    ownedCellIndices: [0]
+                )
+            ],
+            undeclaredSheetImageIDs: ["sprite_pulse", "sprite_signs"],
+            buildingImageIDs: []
+        )
+
+        XCTAssertEqual(contract.referencedImageIDs, ["sprite_pulse", "sprite_signs"])
+    }
+
     func test_validate_reportsIncompleteManifest_whenFewerSheetsAreDeclaredThanRequired() {
         let contract = AtlasContract(requiredSheetCount: 10, sheets: [], buildingImageIDs: [])
 
@@ -245,26 +306,107 @@ final class AtlasContractTests: XCTestCase {
         )
     }
 
-    /// THE acceptance gate: the shipped catalog must satisfy the contract.
+    /// THE acceptance gate for the art this PR imports — deliberately
+    /// **unmuted**. Every one of the 10 atlas sheets must resolve in the real
+    /// `Assets.xcassets` and satisfy every contract rule that applies to it.
     ///
-    /// SCAFFOLDING(CYBERPUN-17-1): the Pixel Grit binary pack is not in the
-    /// repository yet, so this assertion genuinely fails today and that
-    /// failure is recorded as expected rather than hidden. The expectation is
-    /// strict: the moment the art lands and the contract passes, XCTest fails
-    /// this test for "expected failure not recorded", forcing the asset-import
-    /// PR to delete this `XCTExpectFailure` and leave a real, unmuted gate
-    /// behind. Hollowing the validator out so it reports nothing trips the
-    /// same wire.
-    func test_shippedAssetCatalog_satisfiesAtlasContract() {
+    /// Rename `sprite_pulse` in the catalog, drop an imageset, or ship one
+    /// without an alpha channel, and this goes red today — no expectation
+    /// wraps it.
+    func test_shippedAssetCatalog_satisfiesAtlasContract_forEveryImportedSheet() {
+        let sheetIDs = Set(AtlasContract.importedSheetImageIDs)
+        let violations = AtlasContract.current
+            .validate(using: AssetCatalogImageMeasurer())
+            .filter { $0.concerns(anyOf: sheetIDs) }
+
+        XCTAssertTrue(
+            violations.isEmpty,
+            "Imported atlas sheets violate the contract:\n"
+                + violations.map(\.description).joined(separator: "\n")
+        )
+    }
+
+    /// Records the measured facts about the imported art in an assertion
+    /// rather than in prose: every sheet decodes, has a non-zero pixel size,
+    /// and genuinely carries the alpha channel the pack is specified to have.
+    ///
+    /// Measured through the same `AssetCatalogImageMeasurer` the contract
+    /// uses, so "the bytes are fine" is an observation about the shipped
+    /// bytes, not an assumption about the filenames.
+    func test_assetCatalogMeasurer_measuresRealPixelsAndAlpha_forEveryImportedSheet() {
+        let measurer = AssetCatalogImageMeasurer()
+
+        for imageID in AtlasContract.importedSheetImageIDs {
+            guard let measurement = measurer.measure(imageID: imageID) else {
+                XCTFail("\(imageID) is referenced by the contract but is not in Assets.xcassets.")
+                continue
+            }
+
+            XCTAssertGreaterThan(measurement.pixelSize.width, 0, "\(imageID) measured zero width.")
+            XCTAssertGreaterThan(measurement.pixelSize.height, 0, "\(imageID) measured zero height.")
+            XCTAssertTrue(
+                measurement.hasAlphaChannel,
+                "\(imageID) decoded without an alpha channel; the pack is specified as PNG-32."
+            )
+        }
+    }
+
+    /// The contract must reference the imagesets that are actually in the
+    /// repository, otherwise the missing-image gate above walks an empty list
+    /// and passes vacuously.
+    func test_currentContract_referencesEveryImportedAtlasSheet() {
+        let referenced = Set(AtlasContract.current.referencedImageIDs)
+
+        XCTAssertEqual(AtlasContract.importedSheetImageIDs.count, 10)
+        for imageID in AtlasContract.importedSheetImageIDs {
+            XCTAssertTrue(referenced.contains(imageID), "\(imageID) is imported but unreferenced.")
+        }
+    }
+
+    /// The remaining half of the gate: the 12 building sprites.
+    ///
+    /// SCAFFOLDING(CYBERPUN-17-1-t3): the building PNGs are not in the
+    /// repository, so this genuinely fails today and the failure is recorded
+    /// rather than hidden. The expectation is scoped to the building ids only,
+    /// so it cannot mute a regression in the sheets that *are* imported, and
+    /// it is strict: the moment the buildings land, XCTest fails this test for
+    /// "expected failure not recorded", forcing CYBERPUN-17-1-t3 to delete it.
+    func test_shippedAssetCatalog_satisfiesAtlasContract_forEveryBuildingSprite() {
         XCTExpectFailure(
-            "CYBERPUN-17-1: Assets.xcassets is still the empty stub — the asset-import PR must "
-                + "land the 10 sheets + 12 buildings, fill AtlasContract.current.sheets, and delete "
-                + "this expectation."
+            "CYBERPUN-17-1-t3: the 12 building PNGs (building_00 … building_11) are not imported "
+                + "yet. That task adds the imagesets and deletes this expectation."
         ) {
-            let violations = AtlasContract.current.validate(using: AssetCatalogImageMeasurer())
+            let buildingIDs = Set(AtlasContract.current.buildingImageIDs)
+            let violations = AtlasContract.current
+                .validate(using: AssetCatalogImageMeasurer())
+                .filter { $0.concerns(anyOf: buildingIDs) }
+
             XCTAssertTrue(
                 violations.isEmpty,
-                "Atlas contract violations:\n"
+                "Building sprite contract violations:\n"
+                    + violations.map(\.description).joined(separator: "\n")
+            )
+        }
+    }
+
+    /// The last outstanding piece: a measured cell grid per sheet family.
+    ///
+    /// SCAFFOLDING(CYBERPUN-17-1-t3): cell sizes may only be written down once
+    /// they have been checked against the measured sheets, which needs the
+    /// art open in Xcode; until then `sheets` is empty and the contract says
+    /// so out loud. Strict, so filling `sheets` in forces this expectation's
+    /// deletion.
+    func test_shippedAssetCatalog_declaresACellGridForEverySheetFamily() {
+        XCTExpectFailure(
+            "CYBERPUN-17-1-t3: AtlasContract.current.sheets is not populated with measured cell "
+                + "sizes and owned cell indices yet. That task fills it in and deletes this "
+                + "expectation."
+        ) {
+            let violations = AtlasContract.current.validate(using: AssetCatalogImageMeasurer())
+
+            XCTAssertFalse(
+                violations.contains(.sheetManifestIncomplete(declared: 0, required: 10)),
+                "Sheet manifest is still incomplete:\n"
                     + violations.map(\.description).joined(separator: "\n")
             )
         }
