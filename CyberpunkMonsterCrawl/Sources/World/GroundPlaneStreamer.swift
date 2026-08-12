@@ -42,6 +42,28 @@ final class GroundPlaneStreamer {
     /// eviction is an O(tiles-per-chunk) removal rather than a full rescan.
     private var nodesByChunk: [ChunkCoordinate: [SKSpriteNode]] = [:]
 
+    /// Nodes given up by a chunk that just streamed out of the resident
+    /// window, held here for reuse rather than deallocated.
+    ///
+    /// `CYBERPUN-17-4-t3`: without this, every chunk that streams in would
+    /// allocate a fresh `SKSpriteNode` per tile, so panning far enough would
+    /// have allocated and discarded many multiples of the resident window's
+    /// worth of nodes even though only `mountedNodeCount` are ever on screen
+    /// at once. Because eviction always runs (in `synchroniseWithResidentChunks`)
+    /// *before* the mount pass in the same `updateCamera` call, and the
+    /// resident window is a fixed size, the number of nodes freed by
+    /// eviction on any call is exactly the number the mount pass needs that
+    /// same call \u2014 so after the very first `updateCamera` fills the window
+    /// from empty, no further `SKSpriteNode` is ever allocated; the pool
+    /// always has enough to recycle. Capped defensively at `maxPoolSize`
+    /// anyway, so a call pattern this reasoning doesn't cover still can't
+    /// grow memory without bound.
+    private var pool: [SKSpriteNode] = []
+
+    /// Defensive cap on `pool`'s size \u2014 see `pool`'s doc comment for why it
+    /// should never need to hold more than one resident window's worth.
+    private static var maxPoolSize: Int { ChunkStreamingManager.residentWindowSize * Chunk.size * Chunk.size }
+
     init(seed: WorldSeed, worldLayer: SKNode) {
         self.streaming = ChunkStreamingManager(seed: seed)
         self.worldLayer = worldLayer
@@ -80,8 +102,26 @@ final class GroundPlaneStreamer {
 
     /// Adds nodes for resident-but-unmounted chunks and removes nodes for
     /// mounted-but-evicted ones.
+    ///
+    /// Eviction runs **before** the mount pass so a chunk that streamed out
+    /// this call gives its nodes to `pool` in time for the mount pass below
+    /// to recycle them for a chunk streaming in this same call \u2014 that
+    /// ordering is what makes `pool` stay effectively empty in steady state
+    /// (see `pool`'s doc comment) instead of merely bounded by
+    /// `maxPoolSize`.
     private func synchroniseWithResidentChunks() {
         guard let worldLayer else { return }
+
+        // Snapshot the keys: the loop body mutates `nodesByChunk`.
+        for coordinate in Array(nodesByChunk.keys) where streaming.residentChunks[coordinate] == nil {
+            for node in nodesByChunk[coordinate] ?? [] {
+                node.removeFromParent()
+                if pool.count < Self.maxPoolSize {
+                    pool.append(node)
+                }
+            }
+            nodesByChunk.removeValue(forKey: coordinate)
+        }
 
         for (coordinate, chunk) in streaming.residentChunks where nodesByChunk[coordinate] == nil {
             var mounted: [SKSpriteNode] = []
@@ -90,22 +130,29 @@ final class GroundPlaneStreamer {
                 for localY in 0..<Chunk.size {
                     let tile = chunk.tile(localX: localX, localY: localY)
                     let coordinateOfTile = TileCoordinate(tileX: tile.tileX, tileY: tile.tileY)
-                    let node = GroundTileRenderer.node(for: tile.kind, at: coordinateOfTile)
-                    node.name = Self.nodeName
+                    let node = dequeueOrMakeNode(for: tile.kind, at: coordinateOfTile)
                     worldLayer.addChild(node)
                     mounted.append(node)
                 }
             }
             nodesByChunk[coordinate] = mounted
         }
+    }
 
-        // Snapshot the keys: the loop body mutates `nodesByChunk`.
-        for coordinate in Array(nodesByChunk.keys) where streaming.residentChunks[coordinate] == nil {
-            for node in nodesByChunk[coordinate] ?? [] {
-                node.removeFromParent()
-            }
-            nodesByChunk.removeValue(forKey: coordinate)
+    /// Reuses a pooled node (freed by a chunk that just streamed out) if one
+    /// is available, reconfiguring it via `GroundTileRenderer.configure` for
+    /// `tileKind`/`coordinateOfTile`; otherwise allocates a fresh node via
+    /// `GroundTileRenderer.node(for:at:)`. `pool` only ever holds nodes for
+    /// chunks that are no longer resident, so a dequeued node can never
+    /// collide with one still mounted for a different chunk.
+    private func dequeueOrMakeNode(for tileKind: TileKind, at coordinateOfTile: TileCoordinate) -> SKSpriteNode {
+        if let recycled = pool.popLast() {
+            GroundTileRenderer.configure(recycled, for: tileKind, at: coordinateOfTile)
+            return recycled
         }
+        let node = GroundTileRenderer.node(for: tileKind, at: coordinateOfTile)
+        node.name = Self.nodeName
+        return node
     }
 
     /// Name stamped on every mounted ground node, so the scene's audits and

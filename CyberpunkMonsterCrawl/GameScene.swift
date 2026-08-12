@@ -91,6 +91,38 @@ final class GameScene: SKScene {
     /// PLAY shows the generated city.
     private(set) var groundPlane: GroundPlaneStreamer?
 
+    // MARK: - SCAFFOLDING(CYBERPUN-17-7): debug camera pan
+    //
+    // `GameScene` has no real camera-follow behaviour yet \u2014 that lands with
+    // `CYBERPUN-17-7` ("Wire the floating thumbstick, player movement,
+    // building collision and camera"), which should delete this block. Until
+    // then, `GroundPlaneStreamer`/`ChunkStreamingManager` have no in-app way
+    // to be exercised across *many* chunk boundaries during a manual run or
+    // an on-device check, so this is a minimal, clearly-marked stand-in: a
+    // straight-line pan, off by default, that moves the camera far enough to
+    // cross several chunks so multi-chunk streaming is visible end-to-end.
+    // It is deliberately not physically based, not player-controlled and not
+    // camera-follow \u2014 just enough motion to drive the streaming system.
+
+    /// Tiles per second the scaffolding debug pan moves the camera once
+    /// `debugPanEnabled` is set. `Chunk.size` (8 tiles) at this rate crosses
+    /// a chunk boundary every 2 seconds \u2014 slow enough to inspect visually,
+    /// fast enough to sweep several boundaries in a short manual/test run.
+    static let debugPanTilesPerSecond: Double = 4
+
+    /// Turns the scaffolding debug pan on or off. Off by default, so normal
+    /// gameplay (and every other test in the suite) is unaffected; only a
+    /// caller that explicitly opts in (`ChunkStreamingGroundTests`, or a
+    /// manual on-device check) sees the camera move on its own.
+    var debugPanEnabled = false
+
+    /// Where in tile space, and at what `currentTime`, the debug pan most
+    /// recently (re)started \u2014 `nil` whenever it hasn't run yet this
+    /// `.gameplay` episode. Reset in `startGroundPlane()` so a fresh run
+    /// (including RUN AGAIN) starts its pan from the new camera position
+    /// rather than replaying stale timing from a previous run.
+    private var debugPanOrigin: (worldPosition: TilePoint, time: TimeInterval)?
+
     // MARK: - Init
 
     override init(size: CGSize) {
@@ -164,11 +196,55 @@ final class GameScene: SKScene {
         let plane = GroundPlaneStreamer(seed: worldSeed, worldLayer: worldLayer)
         plane.updateCamera(worldPosition: cameraWorldPosition)
         groundPlane = plane
+        // SCAFFOLDING(CYBERPUN-17-7): a fresh ground plane means a fresh pan
+        // \u2014 clear any stale origin so RUN AGAIN starts the debug pan (if
+        // enabled) from wherever the new run's camera actually sits.
+        debugPanOrigin = nil
         #if DEBUG
         // Ground nodes are the first world-space content in the graph, so
         // audit the moment they land rather than at the next touch.
         assertSceneInvariants()
         #endif
+    }
+
+    // SCAFFOLDING(CYBERPUN-17-7): see the block comment above `debugPanEnabled`.
+    // `CYBERPUN-17-7` should delete `advanceDebugPanIfNeeded(currentTime:)`
+    // and the `update(_:)` override below along with it once real
+    // player/camera movement exists to exercise streaming instead.
+    override func update(_ currentTime: TimeInterval) {
+        super.update(currentTime)
+        advanceDebugPanIfNeeded(currentTime: currentTime)
+    }
+
+    /// Moves the camera in a straight line (+x in tile space) at
+    /// `debugPanTilesPerSecond`, driving `groundPlane`'s streaming as it
+    /// goes, while `debugPanEnabled` is set and a run is in progress.
+    /// No-ops otherwise, so it is safe to call unconditionally from
+    /// `update(_:)`.
+    private func advanceDebugPanIfNeeded(currentTime: TimeInterval) {
+        guard debugPanEnabled, stateMachine.currentState == .gameplay, let plane = groundPlane else { return }
+
+        let origin: (worldPosition: TilePoint, time: TimeInterval)
+        if let existing = debugPanOrigin {
+            origin = existing
+        } else {
+            origin = (worldPosition: cameraWorldPosition, time: currentTime)
+            debugPanOrigin = origin
+        }
+
+        let elapsed = currentTime - origin.time
+        let travelled = elapsed * Self.debugPanTilesPerSecond
+        let newWorldPosition = TilePoint(x: origin.worldPosition.x + travelled, y: origin.worldPosition.y)
+
+        plane.updateCamera(worldPosition: newWorldPosition)
+
+        // Move the actual SpriteKit camera to match, converting the new
+        // tile-space position through the same projection ground nodes use,
+        // from worldLayer's coordinate space (where `tileToScreen` output
+        // lives) into the scene's own \u2014 the space `cameraNode.position` is
+        // expressed in.
+        let screenPoint = IsometricProjection.tileToScreen(tileX: newWorldPosition.x, tileY: newWorldPosition.y)
+        cameraNode.position = worldLayer.convert(screenPoint, to: self)
     }
 
     /// Where the camera sits in **tile space**, derived through the same

@@ -48,7 +48,12 @@ enum GroundTileKind: CaseIterable {
 /// index" (what the sheet measurement is keyed by) — so `AtlasSheet.swift`
 /// stays the single source of truth for the pixel arithmetic.
 ///
-/// The six-way mapping itself, from the story's asset contract:
+/// The six-way mapping itself, from the story's asset contract. Note the
+/// lane pair is mapped by measured paint orientation, not by the
+/// `AtlasGroundDiamond` case names' sheet order — `GroundTileSemanticsTests`
+/// re-measures the shipped pixels and pins `.asphaltEastWest`'s crop as the
+/// one whose paint is elongated along tile X, which is the diamond at x:96,
+/// not x:0:
 /// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
 /// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
 /// - `.lot`               -> `AtlasGroundDiamond.plainLot`       (x:192, 96x60)
