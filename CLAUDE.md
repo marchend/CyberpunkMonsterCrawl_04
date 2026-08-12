@@ -66,22 +66,24 @@ CyberpunkMonsterCrawl/
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
-  Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule; Double math with a CGFloat cast only at the boundary
+  Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule floor(coord + 0.5) with both a screen-space and a tile-space overload so no call site re-derives it; Double math with a CGFloat cast only at the boundary
+  Sources/World/DepthModel.swift           single source of truth for painter's-algorithm zPosition: band(forTile:) = -(tileX+tileY)*10, groundZPosition = band - 5000, buildingContentRange (<+3) / actorOffsetRange (6.5-9.9) in-band slots, band(forActorAt:) rounds a fractional TilePoint to its owning tile (discontinuous by design) via IsometricProjection.tile(containing:)
   Sources/World/SeedMixer.swift            explicit splitmix64-style bit mixer over (seed, tileX, tileY), wrapping arithmetic only - never Hasher/.hashValue, which is randomized per process
   Sources/World/WorldSeed.swift            thin UInt64-wrapping per-run seed type: "a run is fully described by its seed"
-  Sources/World/TileKind.swift             asphalt/junctionStopLine/kerbSidewalk/lot/buildingFootprint + isWalkable (asphalt, sidewalk, stop-line and empty lot walkable; building footprint solid)
+  Sources/World/TileKind.swift             asphalt/junctionStopLine/kerbSidewalk/lot/buildingFootprint + isWalkable (asphalt, sidewalk, stop-line and empty lot walkable; building footprint solid). An empty .lot never turns solid - buildings are placed on the already-solid .buildingFootprint interiors (Chunk.placementSurface)
   Sources/World/CityLatticeGenerator.swift pure classify(tileX:tileY:seed:) -> TileInfo: 6-tile period, 3x3 block + 3-tile street corridor, intersections structurally always street (seed never reaches street tiles), ~1-in-4 empty-lot decision made once per block via SeedMixer
-  Sources/World/Chunk.swift                 8x8 tile data container (ChunkCoordinate origin, tiles[[TileInfo]]) plus per-chunk lot-reservation state: reservableFootprints(in:)/reserve(footprint:at:) refuse overlapping 1x1/2x2 footprints and only ever offer .lot tiles
-  Sources/World/ChunkGenerator.swift        generate(chunkCoordinate:seed:) -> Chunk, calling classify once per tile in the chunk's own 8x8 world-tile footprint, no cross-chunk lookups
-  Sources/World/ChunkStreamingManager.swift camera-driven resident-chunk window: updateCamera(worldPosition:) loads/evicts chunks within a fixed Chebyshev radius of the camera's chunk; SpriteKit-free (plain TilePoint input) so it's unit-testable without a scene
+  Sources/World/Chunk.swift                 8x8 tile data container (ChunkCoordinate origin, tiles[[TileInfo]]) + building-footprint reservation: placementSurface pins .buildingFootprint (never the deliberately empty .lot) as the surface, reservableFootprints(in:)/reserve(footprint:at:) refuse overlapping 1x1/2x2 footprints; LotReservationStore holds the state above the chunk cache so it survives eviction
+  Sources/World/ChunkGenerator.swift        generate(chunkCoordinate:seed:reservations:) -> Chunk, calling classify once per tile in the chunk's own 8x8 world-tile footprint, no cross-chunk lookups
+  Sources/World/ChunkStreamingManager.swift camera-driven resident-chunk window: updateCamera(worldPosition:) loads/evicts chunks within a fixed Chebyshev radius (3, sized from the worst-case 24-tile margin via coversViewport) of the camera's chunk, using IsometricProjection.tile(containing:) for camera tile ownership; owns the world's LotReservationStore; SpriteKit-free (plain TilePoint input) so it's unit-testable without a scene
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
-  IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile + off-centre and on-seam cases pinning tile(containing:)
+  IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile + off-centre and on-seam cases pinning tile(containing:), plus the tile-space overload agreeing with the screen-space one across an off-centre sweep (7.6 -> tile 8, not 7)
   CityLatticeGeneratorTests.swift          6-tile period test, intersection-always-street test, ~1-in-4 empty-lot-ratio test, per-block decision consistency, determinism
   ConnectivityTests.swift                  flood-fill over classify's walkable output across >=20 seeds and a 12x12-block region, reaching every intersection tile; private BFS helper over a Set<Coord>
   ConcurrencyDeterminismTests.swift        dispatches classify for the same and for many distinct (tileX, tileY, seed) inputs across DispatchQueue.concurrentPerform and asserts every result matches a single-threaded reference
-  ChunkGeneratorTests.swift                chunk-boundary agreement vs standalone classify at chunk edges across multiple chunk pairs (AC2), lot-reservation no-overlap tests (2x2 blocks overlaps, disjoint reservations still allowed)
-  ChunkStreamingManagerTests.swift         resident-chunk count stays within the fixed window across a long straight sweep and a diagonal sweep (AC8); an evicted-then-revisited chunk regenerates identically to pure ChunkGenerator/classify output
+  ChunkGeneratorTests.swift                chunk-boundary agreement vs standalone classify at chunk edges across multiple chunk pairs (AC2), footprint-reservation no-overlap tests (2x2 overlaps refused, disjoint reservations still allowed), placement-surface polarity in both directions (street and empty .lot refused, building-block interior offered) and reserved footprints solid with no TileKind transition
+  ChunkStreamingManagerTests.swift         resident-chunk count stays within the fixed window across a long straight sweep and a diagonal sweep (AC8); an evicted-then-revisited chunk regenerates identically to pure ChunkGenerator/classify output; a reservation survives eviction/revisit and is still refused a second time; worst-case viewport coverage in both orientations (with an anti-vacuity guard); camera tile ownership follows IsometricProjection's pinned rule, not floor
+  DepthModelTests.swift                    ground == band - 5000 swept across a wide band range (AC2); band formula + buildingContentRange/actorOffsetRange bounds (AC3); rounded (not continuous) actor band resolution incl. the rounding seam and cross-reference with LayerConstants.worldMaxZ (AC4)
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
   ImagePixelSampling.swift                 shared alpha/RGBA decode helper for the asset gates
   AtlasCatalogTests.swift                  catalog-existence + alpha-channel gate for the 10 atlas sheets
@@ -215,8 +217,17 @@ docs/bootstrap.md                          original spec (source of truth)
   `IsometricProjectionTests`). No production consumer places a tile-space
   node via it yet; that lands with the ground-plane/depth-model PR
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
-  5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
-  rounded tile (deferred — future PR)
+  5000 below every band, building content <+3 in-band, actor offsets
+  6.5–9.9 sampling a rounded tile (implemented — `Sources/World/DepthModel.swift`,
+  `DepthModelTests`; pure Swift, no rendering dependency — `CYBERPUN-17-4-t1`).
+  Actor band resolution rounds a fractional `TilePoint` to its owning whole
+  tile via the same `IsometricProjection.tile(containing:)` seam rule
+  buildings use for their base tile, and is deliberately discontinuous (a
+  step function of the rounded tile, never interpolated) — see the doc
+  comment on `DepthModel.band(forActorAt:)` for why continuous depth would
+  desync from building placement. No production consumer sets a node's
+  `zPosition` from this yet; that lands with the ground-plane/building-
+  placement PRs (`CYBERPUN-17-5` onward)
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,
@@ -317,7 +328,6 @@ docs/bootstrap.md                          original spec (source of truth)
   not. `GameplayScreenNode`'s placeholder is tagged for CYBERPUN-17-7 (the
   floating-thumbstick story); the death/high-scores placeholders are tagged
   for CYBERPUN-17-16 (integration checkpoint #2)
-- Depth module
 - Tile-grid collision system
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
