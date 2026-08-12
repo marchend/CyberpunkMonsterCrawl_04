@@ -48,12 +48,13 @@ CyberpunkMonsterCrawl/
   PrivacyInfo.xcprivacy, *.entitlements
   Assets.xcassets/                         the single asset catalog for the target
     Atlas/                                 10 atlas-sheet imagesets (1x only)
+    Buildings/                             12 building-sprite imagesets, building_00...building_11 (1x only)
     AppIcon.appiconset/                    stub AppIcon slot (art not yet imported)
   Sources/Assets/TextureLoading.swift      centralized nearest-filtering texture factory
   Sources/Assets/SpriteSheet.swift         measured-geometry contract: pixel/cell size, texture(col:row:)
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
-  Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids (art import owned by t4)
+  Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
@@ -62,8 +63,10 @@ CyberpunkMonsterCrawlTests/
   AtlasDimensionsTests.swift               measured-vs-declared dims + cell-alignment gate
   AtlasCellIndexTests.swift                bounds-checks every owned cell index (incl. ground diamonds)
   AtlasGroundDiamondTests.swift            derives tileset_ground's 6 seams from pixel alpha (5x96+112)
-  BuildingCatalogTests.swift               building catalog + distinctness gate, strict SCAFFOLDING(t4)
+  BuildingCatalogTests.swift               building catalog existence + distinctness gate (12 buildings)
+  BuildingSpriteTests.swift                per-building table contract: measured size, footprint, height class
   AtlasContractConventionTests.swift       scans the app target for raw texture-crop rects outside the contract
+  AtlasCatalogNoExtraneousAssetsTests.swift whole-catalog scan: no stray @2x/@3x, no tileset_structure/preview art
   DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
 docs/bootstrap.md                          original spec (source of truth)
 ```
@@ -103,15 +106,17 @@ docs/bootstrap.md                          original spec (source of truth)
   `CGImage.alphaInfo` because the pack is specified as PNG-32 — turns the
   suite red today, unmuted (implemented). There is one asset catalog in the
   target; the AppIcon stub lives in it rather than in a second same-named
-  catalog. The 12 building sprites (`building_00` … `building_11`) are not in
-  the repo yet, but they are still referenced in code: `BuildingSprite` is
-  their owning manifest and `BuildingCatalogTests` gates both catalog presence
-  and building distinctness (no duplicate or horizontally-mirrored art) behind
-  a *strict* `XCTExpectFailure` tagged `SCAFFOLDING(CYBERPUN-17-1-t4)`, scoped
-  to building ids only so it cannot mute the 10 sheets, and strict so it flips
-  red the moment the art lands. The art import and the whole-catalog "no stray
-  `@2x`/`@3x`, no `tileset_structure`" checks are owned by
-  **CYBERPUN-17-1-t4**
+  catalog. The 12 building sprites (`building_00` … `building_11`) are
+  imported as 1× imagesets under `Assets.xcassets/Buildings/`, loaded whole
+  (never sliced) via `TextureLoading`; `BuildingSprite` records each one's
+  measured pixel size, world-grid footprint and height class from the
+  story's table, `BuildingCatalogTests` gates catalog presence and building
+  distinctness (no duplicate or horizontally-mirrored art), and
+  `BuildingSpriteTests` pins the per-building table contract (implemented).
+  `AtlasCatalogNoExtraneousAssetsTests` scans the whole catalog (atlas +
+  buildings) and fails if any imageset declares a `2x`/`3x` rendition or if
+  `tileset_structure`/the Asset-Scales-preview art was ever imported
+  (implemented)
 - Central texture loader (`CyberpunkMonsterCrawl/Sources/Assets/TextureLoading.swift`)
   enforcing `.nearest` filtering, no mipmaps (implemented — asset-import PR).
   No production consumer calls it yet; that lands with the sprites/tiles that
@@ -135,27 +140,10 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- **CYBERPUN-17-1-t4 — the 12 building sprites (art import only; the gate is
-  already in the repo):** import `building_00` … `building_11` into
-  `Assets.xcassets` as 1× imagesets. The `BuildingSprite` manifest and both
-  gates (`BuildingCatalogTests`: catalog presence, plus content and
-  horizontally-mirrored fingerprint distinctness) already exist and are held
-  behind a strict `XCTExpectFailure` tagged `SCAFFOLDING(CYBERPUN-17-1-t4)` —
-  the import consists of adding the art, extending `BuildingSprite` with each
-  one's measured pixel size/footprint/height class (loaded whole via
-  `TextureLoading`, never sliced), and deleting those two scaffolds, which the
-  strict option forces the moment the art lands. Also add the whole-catalog
-  scan that fails if any imageset anywhere (atlas or building) declares a
-  `2x`/`3x` rendition, or if `tileset_structure`/the Asset-Scales-preview art
-  was ever imported. `tileset_structure.png` and the HTML companion files were
-  not imported by this PR. **This deferral is only valid while
-  `CYBERPUN-17-1-t4` exists as a filed ticket** — a scaffold tag pointing at
-  an unfiled ticket points nowhere, which is how "green suite, empty catalog"
-  happens again; if it is not filed, file it or import the art here.
 - Wiring every real texture consumer (player, raccoons, bullets, pickups,
-  pulse, hit puff, signs, ground tiles) through
-  `TextureLoading.texture(named:)` as each is built — the factory exists and
-  is tested, but nothing in the render path calls it yet
+  pulse, hit puff, signs, ground tiles, buildings) into an actual on-screen
+  scene — `TextureLoading.texture(named:)` / `BuildingSprite.texture` exist
+  and are tested, but no scene places any sprite yet (later PRs)
 - Menu/gameplay/death/highScores state machine
 - Scene z-layering enforcement + ordering test
 - Depth module
