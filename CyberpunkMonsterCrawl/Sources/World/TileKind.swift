@@ -23,16 +23,27 @@ enum TileKind: Equatable {
     /// asphalt; it exists as a separate case purely so the ground-plane
     /// renderer can draw a kerb/sidewalk texture instead of asphalt there.
     case kerbSidewalk
-    /// A block interior left empty by the seed's ~1-in-4 decision. Walkable
-    /// ground until the building-placement story (`CYBERPUN-17-5`)
-    /// reserves it for a placed building \u2014 at that point the *placed
-    /// building's* footprint tiles become `.buildingFootprint`; an empty
-    /// `.lot` does not turn solid on its own.
+    /// A block interior left empty by the seed's ~1-in-4 decision: bare,
+    /// permanently walkable ground.
+    ///
+    /// A `.lot` tile never turns solid and never hosts a building. The brief
+    /// leaves these blocks empty on purpose, so building placement
+    /// (`CYBERPUN-17-5`) reserves footprints on `.buildingFootprint` tiles
+    /// instead — see `Chunk.placementSurface`, which pins that polarity.
+    /// (An earlier version of this doc said a reserved lot's tiles "become
+    /// `.buildingFootprint`"; nothing performs that transition, and it is
+    /// not needed now that the placement surface is the already-solid kind.)
     case lot
-    /// A block interior tile consumed by a building. Solid collision \u2014
-    /// not walkable \u2014 regardless of the building's drawn height, per the
-    /// brief: "a building blocks movement by its footprint regardless of
-    /// drawn height."
+    /// A block interior tile consumed by a building: the ~3-in-4 blocks the
+    /// lattice fills, and the surface building placement reserves against
+    /// (`Chunk.placementSurface`). Solid collision — not walkable —
+    /// regardless of the building's drawn height, per the brief: "a building
+    /// blocks movement by its footprint regardless of drawn height."
+    ///
+    /// Because this kind is already impassable straight out of `classify`, a
+    /// reserved-and-built footprint is solid by construction: collision
+    /// consumers read `isWalkable` and never need to consult
+    /// `Chunk.reservedTiles`.
     case buildingFootprint
 
     /// Whether the player / raccoon swarm can occupy this tile.
@@ -48,10 +59,11 @@ enum TileKind: Equatable {
     ///   impassable would put a hole in the middle of every intersection,
     ///   which contradicts "every intersection tile is street" being the
     ///   swarm's guaranteed path.
-    /// - `.lot` \u2014 walkable. The brief: "Buildings fill the 3x3 block
-    ///   interior; ~1-in-4 blocks are left as empty lots" \u2014 an empty lot is
-    ///   bare ground, not a hole, until a building is actually placed on
-    ///   it.
+    /// - `.lot` — walkable, permanently. The brief: "Buildings fill the 3x3
+    ///   block interior; ~1-in-4 blocks are left as empty lots" — an empty
+    ///   lot is bare ground, not a hole, and stays walkable because no
+    ///   building is ever placed on one (buildings occupy the
+    ///   `.buildingFootprint` blocks; see `Chunk.placementSurface`).
     /// - `.buildingFootprint` \u2014 not walkable (explicitly named in the
     ///   brief).
     var isWalkable: Bool {

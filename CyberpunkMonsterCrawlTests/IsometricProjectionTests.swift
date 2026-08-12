@@ -156,4 +156,39 @@ final class IsometricProjectionTests: XCTestCase {
         XCTAssertEqual(owner.tileX, -3)
         XCTAssertEqual(owner.tileY, -2)
     }
+
+    // MARK: - tile(containing:) — the tile-space overload
+
+    /// The tile-space overload must answer with the *same* pinned rule as the
+    /// screen-space one, so a caller holding a world position (e.g. the
+    /// streaming camera) cannot end up on a different tile than a caller
+    /// holding the equivalent screen point.
+    func test_tileContainingTilePoint_agreesWithScreenSpaceOverload_acrossOffCentreSweep() {
+        for xTenths in stride(from: -75, through: 75, by: 1) {
+            for yTenths in stride(from: -30, through: 30, by: 3) {
+                let tilePoint = TilePoint(x: Double(xTenths) / 10, y: Double(yTenths) / 10)
+                let fromTileSpace = IsometricProjection.tile(containing: tilePoint)
+                let fromScreenSpace = IsometricProjection.tile(
+                    containing: IsometricProjection.tileToScreen(tilePoint)
+                )
+
+                XCTAssertEqual(fromTileSpace.tileX, fromScreenSpace.tileX, "Disagreement on x at \(tilePoint)")
+                XCTAssertEqual(fromTileSpace.tileY, fromScreenSpace.tileY, "Disagreement on y at \(tilePoint)")
+            }
+        }
+    }
+
+    /// The specific disagreement that motivated exposing this overload: a
+    /// call site rolling its own `rounded(.down)` puts tile-space `7.6` in
+    /// tile 7, while the pinned `floor(coord + 0.5)` rule says tile 8.
+    func test_tileContainingTilePoint_upperHalfOfTile_belongsToTheNextTile_notFloor() {
+        XCTAssertEqual(IsometricProjection.tile(containing: TilePoint(x: 7.6, y: 0)).tileX, 8)
+        XCTAssertEqual(IsometricProjection.tile(containing: TilePoint(x: 7.4, y: 0)).tileX, 7)
+
+        // Seam and negative-axis behaviour matches the screen-space rule:
+        // the seam belongs to the higher-index tile on both sides of zero.
+        XCTAssertEqual(IsometricProjection.tile(containing: TilePoint(x: 0.5, y: 0)).tileX, 1)
+        XCTAssertEqual(IsometricProjection.tile(containing: TilePoint(x: -0.5, y: 0)).tileX, 0)
+        XCTAssertEqual(IsometricProjection.tile(containing: TilePoint(x: -0.6, y: 0)).tileX, -1)
+    }
 }

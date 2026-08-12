@@ -109,6 +109,24 @@ enum IsometricProjection {
         )
     }
 
+    /// The integer tile that owns a **tile-space** point.
+    ///
+    /// The same pinned rule as `tile(containing screen:)`, exposed for
+    /// callers that already hold tile space (a camera world position, an
+    /// interpolated actor position) rather than a screen point. Without this
+    /// entry point such a caller has to re-derive the rule, and the obvious
+    /// guess — `rounded(.down)` — disagrees with the pinned rule for every
+    /// position in the upper half of a tile (tile-space `7.6` is owned by
+    /// tile `8`, not tile `7`). One rounding rule per codebase: that is the
+    /// whole reason `tile(containing:)` exists, so it must cover the
+    /// tile-space question too and not just the screen-space one.
+    static func tile(containing tile: TilePoint) -> (tileX: Int, tileY: Int) {
+        (
+            tileX: owningTileIndex(forTileSpaceCoordinate: tile.x),
+            tileY: owningTileIndex(forTileSpaceCoordinate: tile.y)
+        )
+    }
+
     /// `floor(coordinate + 0.5)` — see `tile(containing:)` for why this
     /// rounding rule and not `round()`.
     private static func owningTileIndex(forTileSpaceCoordinate coordinate: Double) -> Int {
