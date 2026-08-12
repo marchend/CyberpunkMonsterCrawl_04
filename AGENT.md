@@ -283,7 +283,31 @@ docs/bootstrap.md                          original spec (source of truth)
   entry to `.gameplay` from `worldSeed` centred on `cameraWorldPosition`. So
   tapping PLAY in a real build shows the generated city rather than an empty
   scene, and the mounted node count stays bounded by the resident window
-  however far the camera roams. Which crop *is* the east-west lane is pinned
+  however far the camera roams. **Every `updateCamera` call
+  (`CYBERPUN-17-4-t4`) mounts only the
+  `ChunkStreamingManager.quickstartRadius` ring synchronously** and queues
+  everything beyond it in `pendingMountQueue`, drained a few chunks per
+  call by `advanceIncrementalMount()` — which `GameScene.update(_:)` calls
+  every frame, in Release builds too, not just DEBUG. This exists because the
+  old code mounted the *entire* resident window (up to 3,136 `SKSpriteNode`s)
+  synchronously inside the PLAY tap's own call stack, a stall long enough for
+  a scripted runtime probe to catch the app before the first `.gameplay`
+  frame had presented. The split is applied **per call, not just to the
+  first**: `CYBERPUN-17-7`'s camera-follow calls `updateCamera` every frame,
+  and an earlier revision that folded the whole deferred remainder into the
+  second call would have reinstated the same single-frame mount one frame
+  later. `quickstartRadius` is sized by the same measured
+  `coversViewport(widthPoints:heightPoints:radius:)` arithmetic as
+  `residentRadius` — radius 2 covers `phoneViewportPoints` (393×852pt
+  portrait, the binding case since iso tiles are 2:1) and radius 1 does not,
+  both pinned in `ChunkStreamingManagerTests` — so the ring that is *not*
+  deferred is the part that may already be on screen. **What is deferred is
+  mounting, not generation:** `ChunkStreamingManager.updateCamera` still
+  generates the whole resident window (49 chunks and their
+  `LotReservationStore` decisions) synchronously in the same call, so this
+  removes the scene-graph half of the PLAY-tap stall only; anyone chasing a
+  residual stall on entry to `.gameplay` should look at generation next.
+  Which crop *is* the east-west lane is pinned
   by `GroundTileSemanticsTests`, which re-measures the shipped pixels (crop
   fingerprints must all differ; each lane crop's paint must be elongated
   along the tile axis its case name claims) - a swapped lane pair fails
@@ -300,12 +324,17 @@ docs/bootstrap.md                          original spec (source of truth)
   (`ChunkStreamingGroundTests` pins both sequences)
 - `GameScene` carries one `SCAFFOLDING(CYBERPUN-17-7)` artifact in
   production code: a debug camera pan (`debugPanEnabled`,
-  `debugPanTilesPerSecond`, `advanceDebugPanIfNeeded` and the `update(_:)`
-  override, all `#if DEBUG` and off by default) that exists only so
-  multi-chunk streaming can be watched end-to-end during a manual run, since
-  there is no camera-follow yet. `CYBERPUN-17-7` deletes the block when real
-  player/camera movement lands. Deliberately **not** covered by any test, so
-  removing it cannot mean deleting a green test
+  `debugPanTilesPerSecond` and `advanceDebugPanIfNeeded`, all `#if DEBUG`
+  and off by default) that exists only so multi-chunk streaming can be
+  watched end-to-end during a manual run, since there is no camera-follow
+  yet. `CYBERPUN-17-7` deletes the block when real player/camera movement
+  lands. Deliberately **not** covered by any test, so removing it cannot
+  mean deleting a green test. The `update(_:)` override that calls it is
+  **not** part of that scaffolding (`CYBERPUN-17-4-t4`): it also drains
+  `groundPlane`'s incremental-mount queue every frame, unconditionally, in
+  Release builds too — that half is a correctness fix (see
+  `GroundPlaneStreamer` above), so `CYBERPUN-17-7` must keep the override and
+  delete only the `#if DEBUG` call inside it
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,
