@@ -12,11 +12,15 @@ import UIKit
 /// (`LayerOrderingTests`) and a checked routing function
 /// (`TouchRoutingTests`), not an unenforced convention.
 ///
-/// This PR ships the architecture only \u2014 `screens` starts empty and no
-/// concrete screen is registered here. Concrete real screens
-/// (menu/gameplay/death/highScores) land in PR 3 and call
-/// `register(_:for:)`; `GameSceneScreenSwitchingTests` exercises the swap
-/// logic in the meantime with `PlaceholderScreenNode` doubles.
+/// `GameViewController` presents this scene and registers `MenuScreen` for
+/// `.menu`, so the layer bands, camera pinning, screen registry and touch
+/// dispatch below are reachable from the running app rather than from unit
+/// tests only: launching the app shows the menu, and tapping PLAY drives
+/// `stateMachine.transition(to: .gameplay)` through `ButtonNode`.
+/// The remaining concrete screens (gameplay HUD / death / high scores) land
+/// in CYBERPUN-17-2-t3 and register the same way;
+/// `GameSceneScreenSwitchingTests` exercises the swap logic for those slots
+/// with `PlaceholderScreenNode` doubles in the meantime.
 final class GameScene: SKScene {
 
     // MARK: - Layers
@@ -29,8 +33,16 @@ final class GameScene: SKScene {
     /// strictly between `worldLayer` and `uiLayer`.
     let effectsLayer = SKNode()
 
-    /// Camera-pinned UI (HUD, menus, buttons). Highest zPosition band and
-    /// first refusal on every touch \u2014 see `routeTouch(at:)`.
+    /// Camera-pinned UI (HUD, menus, buttons). Highest zPosition band, and
+    /// first refusal on every touch the scene dispatches - see
+    /// `routeTouch(at:)` / `dispatchTouch(atScenePoint:)`.
+    ///
+    /// "First refusal" holds only because the scene is the *sole* touch
+    /// dispatcher: UIKit hands a touch to any node with
+    /// `isUserInteractionEnabled == true` before `touchesBegan(_:with:)`
+    /// runs here, so that flag is banned graph-wide and audited by
+    /// `nodesBypassingSceneTouchDispatch()`. See `TouchResponder` for the
+    /// full contract.
     let uiLayer = SKNode()
 
     /// The scene's camera. `uiLayer` is parented to this node (not to the
@@ -44,8 +56,9 @@ final class GameScene: SKScene {
     /// machine (PR 1). `GameScene` is its first production caller.
     let stateMachine = GameStateMachine()
 
-    /// State -> screen registry. Empty by default: no concrete screens
-    /// exist yet (PR 3 registers the real ones via `register(_:for:)`).
+    /// State -> screen registry. Empty by default; the composition root
+    /// (`GameViewController`) registers `MenuScreen` for `.menu`, and
+    /// CYBERPUN-17-2-t3 registers the remaining screens the same way.
     private(set) var screens: [GameState: ScreenNode] = [:]
 
     /// The screen currently mounted in `uiLayer`, if any.
@@ -85,24 +98,35 @@ final class GameScene: SKScene {
 
     // MARK: - Screen registry
 
-    /// Registers (or replaces) the screen node for `state`. If `state` is
-    /// already the state machine's current state and no screen is active
-    /// yet, the new screen is activated immediately \u2014 this lets a caller
-    /// register the initial (`.menu`) screen right after construction
-    /// without needing a separate "activate now" call.
+    /// Registers (or replaces) the screen node for `state`.
+    ///
+    /// If `state` is the state machine's current state, the newly registered
+    /// screen becomes the active screen immediately: with nothing active
+    /// this is the first mount (which lets a caller register the initial
+    /// `.menu` screen right after construction without a separate "activate
+    /// now" call), and with a *different* screen already mounted for that
+    /// state it is a full swap through `transitionScreens(to:)` -
+    /// `willExit()` + removal of the outgoing screen, then mount, layout and
+    /// `willEnter()` on the replacement. Registering the screen that is
+    /// already active is a no-op, so a repeat registration cannot double up
+    /// `willExit()`/`willEnter()` on the same instance.
+    ///
+    /// Without the swap, `screens[state]` and the scene graph would disagree
+    /// until some transition away and back happened - and for `.menu` at
+    /// startup that may be never.
     func register(_ screen: ScreenNode, for state: GameState) {
         screens[state] = screen
-        if activeScreen == nil, stateMachine.currentState == state {
-            transitionScreens(to: state)
-        }
+        guard stateMachine.currentState == state else { return }
+        guard activeScreen !== screen else { return }
+        transitionScreens(to: state)
     }
 
     /// Swaps the active screen in `uiLayer` for `state`: `willExit()` then
     /// removal of the outgoing screen (if any), followed by mounting,
     /// layout and `willEnter()` on the incoming screen (if one is
-    /// registered for `state`). A state with no registered screen \u2014 the
-    /// expected case in this PR, since no concrete screens exist yet \u2014
-    /// simply clears `activeScreen`.
+    /// registered for `state`). A state with no registered screen - the
+    /// case for `.gameplay`/`.death`/`.highScores` until CYBERPUN-17-2-t3
+    /// ships them - simply clears `activeScreen`.
     func transitionScreens(to state: GameState) {
         if let current = activeScreen {
             current.willExit()
@@ -114,13 +138,42 @@ final class GameScene: SKScene {
         next.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
         next.willEnter()
         activeScreen = next
+        #if DEBUG
+        // A newly mounted screen is the most likely source of an out-of-band
+        // zPosition or a node that steals touch delivery, so audit here
+        // rather than waiting for the first touch.
+        assertSceneInvariants()
+        #endif
     }
 
     // MARK: - Layout
 
+    override func didMove(to view: SKView) {
+        super.didMove(to: view)
+        // `uiLayer` is camera-pinned, so it is centred whatever the camera
+        // does; the camera is centred on the scene so world-space content
+        // (future PRs) lines up with the scene's 0..width / 0..height
+        // coordinate space instead of showing its bottom-left quadrant.
+        centreCameraOnScene()
+        activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+        #if DEBUG
+        assertSceneInvariants()
+        #endif
+    }
+
     override func didChangeSize(_ oldSize: CGSize) {
         super.didChangeSize(oldSize)
+        centreCameraOnScene()
         activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+    }
+
+    /// Only applied once the scene is presented (and on every size change,
+    /// i.e. rotation). Unit-test scenes are built without an `SKView`, so
+    /// they keep the camera at the origin and their scene-space coordinates
+    /// map straight through to `uiLayer`.
+    private func centreCameraOnScene() {
+        guard view != nil else { return }
+        cameraNode.position = CGPoint(x: size.width / 2, y: size.height / 2)
     }
 
     private var currentSafeAreaInsets: UIEdgeInsets {
@@ -132,7 +185,48 @@ final class GameScene: SKScene {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
         guard let touch = touches.first else { return }
-        _ = routeTouch(at: touch.location(in: self))
+        dispatchTouch(atScenePoint: touch.location(in: self))
+    }
+
+    /// Routes `scenePoint` UI-first and *delivers* the touch to the nearest
+    /// `TouchResponder` at or above the hit node, returning the responder
+    /// that consumed it (or `nil` if nothing responded).
+    ///
+    /// This is the whole of `touchesBegan(_:with:)`'s body apart from
+    /// unwrapping the `UITouch`, and it is the seam the tests drive:
+    /// `UITouch` cannot be constructed with a location in a unit test, so
+    /// `TouchDispatchTests` exercises this method rather than reimplementing
+    /// routing against the pure `routeTouch(at:)` helper.
+    ///
+    /// The touch is delivered to the nearest `TouchResponder` *ancestor* of
+    /// the hit node rather than to the hit node itself because
+    /// `SKNode.atPoint(_:)` returns the deepest descendant under the point -
+    /// for a `ButtonNode` that is its label, not the button.
+    @discardableResult
+    func dispatchTouch(atScenePoint scenePoint: CGPoint) -> TouchResponder? {
+        #if DEBUG
+        assertSceneInvariants()
+        #endif
+        guard let hit = routeTouch(at: scenePoint) else { return nil }
+        guard let responder = touchResponder(for: hit) else { return nil }
+        responder.handleTouch()
+        return responder
+    }
+
+    /// Walks up from `node` to the nearest `TouchResponder`, stopping at the
+    /// layer containers (a responder must live *inside* a layer, so the
+    /// walk never escapes into the scene itself).
+    func touchResponder(for node: SKNode) -> TouchResponder? {
+        var candidate: SKNode? = node
+        while let current = candidate {
+            if let responder = current as? TouchResponder { return responder }
+            if current === uiLayer || current === effectsLayer
+                || current === worldLayer || current === self {
+                return nil
+            }
+            candidate = current.parent
+        }
+        return nil
     }
 
     /// UI-first touch routing: returns the node hit under `uiLayer` at

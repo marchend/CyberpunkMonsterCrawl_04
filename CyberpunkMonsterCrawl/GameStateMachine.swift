@@ -8,7 +8,7 @@ import os
 /// `GKStateMachine` implementation detail behind it.
 ///
 /// `Hashable` (which implies `Equatable`) so `GameScene`
-/// (CYBERPUN-17-2-t2, PR 2) can key its `[GameState: ScreenNode]` screen
+/// (CYBERPUN-17-2-t2) can key its `[GameState: ScreenNode]` screen
 /// registry directly off this enum.
 enum GameState: CaseIterable, Hashable {
     case menu
@@ -89,7 +89,7 @@ final class HighScoresState: GKState {
 /// polling `currentState`, and rejected transitions are reported through
 /// `onIllegalTransition` (DEBUG default: an `os.Logger` warning) so a
 /// mis-wired button that silently does nothing is visible at the moment it
-/// misbehaves. `GameScene` (CYBERPUN-17-2-t2, PR 2) is the scene/UI consumer
+/// misbehaves. `GameScene` (CYBERPUN-17-2-t2) is the scene/UI consumer
 /// that uses `onChange` to drive its screen registry.
 final class GameStateMachine {
     /// Fired on every *successful* entry into a state, with the state just

@@ -4,8 +4,11 @@ import UIKit
 @testable import CyberpunkMonsterCrawl
 
 /// Exercises `GameScene`'s state-driven screen registry using
-/// `PlaceholderScreenNode` doubles \u2014 no concrete screens exist yet (they
-/// land in PR 3). Proves a `GameStateMachine` transition correctly calls
+/// `PlaceholderScreenNode` doubles for the slots that have no concrete
+/// screen yet (gameplay / death / high scores, which land in
+/// CYBERPUN-17-2-t3; `.menu` is a real `MenuScreen` in the composed app -
+/// see `GameViewControllerCompositionTests`). Proves a `GameStateMachine`
+/// transition correctly calls
 /// `willExit()` on the outgoing screen and `willEnter()` on the incoming
 /// one, and that the registry's active screen swaps accordingly.
 final class GameSceneScreenSwitchingTests: XCTestCase {
@@ -55,6 +58,53 @@ final class GameSceneScreenSwitchingTests: XCTestCase {
         XCTAssertEqual(gameplay.enterCount, 0)
         XCTAssertNil(gameplay.node.parent)
         XCTAssertNil(scene.activeScreen)
+    }
+
+    func test_registeringAReplacementForTheActiveState_swapsTheMountedScreen() {
+        let scene = makeScene() // .menu is current
+        let original = PlaceholderScreenNode(label: "menu")
+        let replacement = PlaceholderScreenNode(label: "menu-v2")
+        scene.register(original, for: .menu) // activates immediately
+
+        scene.register(replacement, for: .menu)
+
+        XCTAssertEqual(original.exitCount, 1, "the outgoing screen must receive willExit()")
+        XCTAssertNil(original.node.parent, "the outgoing screen must be removed from uiLayer")
+        XCTAssertEqual(replacement.enterCount, 1, "the replacement must receive willEnter()")
+        XCTAssertTrue(replacement.node.parent === scene.uiLayer, "the replacement must be mounted in uiLayer")
+        XCTAssertTrue(
+            scene.activeScreen === replacement,
+            "registry and scene graph must not disagree after a replace-while-active"
+        )
+        XCTAssertTrue(scene.screens[.menu] === replacement)
+    }
+
+    func test_reRegisteringTheAlreadyActiveScreen_isANoOp() {
+        let scene = makeScene()
+        let menu = PlaceholderScreenNode(label: "menu")
+        scene.register(menu, for: .menu)
+
+        scene.register(menu, for: .menu)
+
+        XCTAssertEqual(menu.enterCount, 1, "a repeat registration must not re-enter the same instance")
+        XCTAssertEqual(menu.exitCount, 0, "a repeat registration must not exit the same instance")
+        XCTAssertTrue(scene.activeScreen === menu)
+        XCTAssertTrue(menu.node.parent === scene.uiLayer)
+    }
+
+    func test_registeringAReplacementForANonCurrentState_doesNotMountIt() {
+        let scene = makeScene() // .menu is current
+        let original = PlaceholderScreenNode(label: "gameplay")
+        let replacement = PlaceholderScreenNode(label: "gameplay-v2")
+        scene.register(original, for: .gameplay)
+
+        scene.register(replacement, for: .gameplay)
+
+        XCTAssertEqual(original.enterCount, 0)
+        XCTAssertEqual(original.exitCount, 0)
+        XCTAssertEqual(replacement.enterCount, 0)
+        XCTAssertNil(scene.activeScreen)
+        XCTAssertTrue(scene.screens[.gameplay] === replacement)
     }
 
     // MARK: - Legal transition swaps the active screen

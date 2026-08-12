@@ -9,11 +9,11 @@ import UIKit
 /// `SKNode` subclass whose `node` is `self`, or a plain coordinating object
 /// that owns/builds its root node however it likes.
 ///
-/// Concrete real screens (menu / gameplay HUD / death / high scores) land in
-/// PR 3, which registers them with `GameScene.register(_:for:)`. This PR
-/// ships only the contract and `PlaceholderScreenNode`, the test double
-/// `GameSceneScreenSwitchingTests` uses to exercise the registry swap logic
-/// without any real screen content.
+/// `MenuScreen` is the first concrete conformer, registered for `.menu` by
+/// `GameViewController`. The remaining screens (gameplay HUD / death / high
+/// scores) land in CYBERPUN-17-2-t3 and register the same way;
+/// `PlaceholderScreenNode` below stands in for them in
+/// `GameSceneScreenSwitchingTests` until then.
 protocol ScreenNode: AnyObject {
     /// The root node `GameScene` mounts under `uiLayer` while this screen is
     /// active.
@@ -36,11 +36,11 @@ protocol ScreenNode: AnyObject {
     func layout(for size: CGSize, safeAreaInsets: UIEdgeInsets)
 }
 
-/// Test double used only by this PR's tests
-/// (`GameSceneScreenSwitchingTests`, `LayerOrderingTests`) to prove the
-/// state-driven registry swap without any real screen content. Not
-/// referenced by production code \u2014 concrete screens (PR 3) are their own
-/// `SKNode` subclasses conforming to `ScreenNode` in their own right.
+/// Test double used only by the tests (`GameSceneScreenSwitchingTests`,
+/// `LayerOrderingTests`) to prove the state-driven registry swap without any
+/// real screen content. Not referenced by production code - the concrete
+/// screens (`MenuScreen` today, the rest in CYBERPUN-17-2-t3) conform to
+/// `ScreenNode` in their own right.
 final class PlaceholderScreenNode: ScreenNode {
     /// Identifies which registered slot this double stands in for, purely
     /// to make test failure messages readable.

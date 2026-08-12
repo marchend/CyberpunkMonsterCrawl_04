@@ -74,20 +74,109 @@ final class LayerOrderingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(cumulativeUIZ, LayerConstants.uiMinZ)
     }
 
-    func test_uiLayerChildren_neverFallBelowUIMinZ() {
-        let scene = makeScene()
-        let placeholder = PlaceholderScreenNode(label: "menu")
-        // .menu is the state machine's initial state, so registering here
-        // mounts `placeholder` under `uiLayer` immediately.
-        scene.register(placeholder, for: .menu)
-
-        let cumulativeChildZ =
-            scene.cameraNode.zPosition + scene.uiLayer.zPosition + placeholder.node.zPosition
-        XCTAssertGreaterThanOrEqual(cumulativeChildZ, LayerConstants.uiMinZ)
-    }
-
     func test_worldLayer_zPosition_neverExceedsWorldMaxZ() {
         let scene = makeScene()
         XCTAssertLessThanOrEqual(scene.worldLayer.zPosition, LayerConstants.worldMaxZ)
+    }
+
+    // MARK: - Hostile cases: descendants escaping their band (AC3)
+    //
+    // SpriteKit accumulates `zPosition` down the tree, so a UI child with a
+    // large negative offset (or a world child with a large positive one)
+    // escapes its band and reproduces the v1 "world paints over UI" bug.
+    // Checking the three container nodes cannot catch that, so
+    // `GameScene.nodesEscapingTheirLayerBand()` walks every descendant and
+    // `assertSceneInvariants()` trips on it in DEBUG. These tests drive that
+    // mechanism with the violations it exists to catch.
+
+    func test_bandAudit_isClean_forAFreshScene_andForAMountedScreen() {
+        let scene = makeScene()
+        XCTAssertTrue(
+            scene.nodesEscapingTheirLayerBand().isEmpty,
+            "a freshly constructed scene must satisfy the band invariant"
+        )
+
+        scene.register(PlaceholderScreenNode(label: "menu"), for: .menu)
+
+        XCTAssertTrue(
+            scene.nodesEscapingTheirLayerBand().isEmpty,
+            "mounting a screen must not break the band invariant"
+        )
+        XCTAssertTrue(scene.layerBandViolationReport().isEmpty)
+    }
+
+    func test_uiChildWithLargeNegativeZ_escapesUIBand_andIsCaught() {
+        let scene = makeScene()
+        let sinker = SKNode()
+        sinker.name = "uiSinker"
+        // Cumulative: uiLayerZ (1_000) + (-5_000) = -4_000, i.e. below the
+        // world layer's maximum - exactly the v1 failure.
+        sinker.zPosition = -5_000
+        scene.uiLayer.addChild(sinker)
+
+        let offenders = scene.nodesEscapingTheirLayerBand()
+
+        XCTAssertTrue(
+            offenders.contains { $0 === sinker },
+            "a UI child whose cumulative z drops below uiMinZ must be reported"
+        )
+        XCTAssertFalse(
+            scene.layerBandViolationReport().isEmpty,
+            "the violation must also be reported in human-readable form for the assertion message"
+        )
+    }
+
+    func test_deepUIDescendantWithOutOfBandZ_isCaught() {
+        let scene = makeScene()
+        let container = SKNode()
+        scene.uiLayer.addChild(container)
+        let sinker = SKNode()
+        sinker.name = "deepUISinker"
+        sinker.zPosition = -3_000 // cumulative: 1_000 + 0 + (-3_000) = -2_000
+        container.addChild(sinker)
+
+        let offenders = scene.nodesEscapingTheirLayerBand()
+
+        XCTAssertTrue(
+            offenders.contains { $0 === sinker },
+            "the audit must accumulate z down the whole subtree, not just direct children"
+        )
+        XCTAssertFalse(
+            offenders.contains { $0 === container },
+            "an in-band intermediate node must not be reported"
+        )
+    }
+
+    func test_worldChildWithLargePositiveZ_escapesWorldBand_andIsCaught() {
+        let scene = makeScene()
+        let riser = SKNode()
+        riser.name = "worldRiser"
+        // Cumulative: worldLayerZ (-100_000) + 200_000 = 100_000, above uiMinZ.
+        riser.zPosition = 200_000
+        scene.worldLayer.addChild(riser)
+
+        let offenders = scene.nodesEscapingTheirLayerBand()
+
+        XCTAssertTrue(
+            offenders.contains { $0 === riser },
+            "a world child that climbs past worldMaxZ must be reported"
+        )
+    }
+
+    func test_inBandChildren_areNotFlagged() {
+        let scene = makeScene()
+
+        let worldChild = SKNode()
+        worldChild.zPosition = 50_000 // cumulative -50_000, inside the world band
+        scene.worldLayer.addChild(worldChild)
+
+        let uiChild = SKNode()
+        uiChild.zPosition = 500 // cumulative 1_500, inside the UI band
+        scene.uiLayer.addChild(uiChild)
+
+        XCTAssertTrue(
+            scene.nodesEscapingTheirLayerBand().isEmpty,
+            "legal in-band offsets must not be reported as violations"
+        )
     }
 }

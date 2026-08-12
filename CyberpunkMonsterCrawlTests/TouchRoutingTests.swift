@@ -3,10 +3,15 @@ import SpriteKit
 import UIKit
 @testable import CyberpunkMonsterCrawl
 
-/// Proves `GameScene`'s UI-first touch routing (AC4): a UI node must win
-/// over an overlapping world node at the same point, never the reverse.
-/// `routeTouch(at:)` is exercised directly \u2014 it is the pure, testable
-/// function `touchesBegan(_:with:)` delegates to.
+/// Proves `GameScene`'s UI-first touch routing decision (AC4): a UI node
+/// must win over an overlapping world node at the same point, never the
+/// reverse. `routeTouch(at:)` is exercised directly - it is the pure
+/// function that decides *which* node a touch belongs to.
+///
+/// Routing is only half the story: `TouchDispatchTests` covers the other
+/// half (the routed touch is actually delivered to a `TouchResponder`, and
+/// no node bypasses the scene's dispatch), so deleting the delivery call in
+/// `touchesBegan(_:with:)` cannot leave the suite green.
 final class TouchRoutingTests: XCTestCase {
 
     private func makeScene() -> GameScene {
