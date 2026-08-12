@@ -67,6 +67,7 @@ CyberpunkMonsterCrawl/
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
   Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule floor(coord + 0.5) with both a screen-space and a tile-space overload so no call site re-derives it; Double math with a CGFloat cast only at the boundary
+  Sources/World/DepthModel.swift           single source of truth for painter's-algorithm zPosition: band(forTile:) = -(tileX+tileY)*10, groundZPosition = band - 5000, buildingContentRange (<+3) / actorOffsetRange (6.5-9.9) in-band slots, band(forActorAt:) rounds a fractional TilePoint to its owning tile (discontinuous by design) via IsometricProjection.tile(containing:)
   Sources/World/SeedMixer.swift            explicit splitmix64-style bit mixer over (seed, tileX, tileY), wrapping arithmetic only - never Hasher/.hashValue, which is randomized per process
   Sources/World/WorldSeed.swift            thin UInt64-wrapping per-run seed type: "a run is fully described by its seed"
   Sources/World/TileKind.swift             asphalt/junctionStopLine/kerbSidewalk/lot/buildingFootprint + isWalkable (asphalt, sidewalk, stop-line and empty lot walkable; building footprint solid). An empty .lot never turns solid - buildings are placed on the already-solid .buildingFootprint interiors (Chunk.placementSurface)
@@ -82,6 +83,7 @@ CyberpunkMonsterCrawlTests/
   ConcurrencyDeterminismTests.swift        dispatches classify for the same and for many distinct (tileX, tileY, seed) inputs across DispatchQueue.concurrentPerform and asserts every result matches a single-threaded reference
   ChunkGeneratorTests.swift                chunk-boundary agreement vs standalone classify at chunk edges across multiple chunk pairs (AC2), footprint-reservation no-overlap tests (2x2 overlaps refused, disjoint reservations still allowed), placement-surface polarity in both directions (street and empty .lot refused, building-block interior offered) and reserved footprints solid with no TileKind transition
   ChunkStreamingManagerTests.swift         resident-chunk count stays within the fixed window across a long straight sweep and a diagonal sweep (AC8); an evicted-then-revisited chunk regenerates identically to pure ChunkGenerator/classify output; a reservation survives eviction/revisit and is still refused a second time; worst-case viewport coverage in both orientations (with an anti-vacuity guard); camera tile ownership follows IsometricProjection's pinned rule, not floor
+  DepthModelTests.swift                    ground == band - 5000 swept across a wide band range (AC2); band formula + buildingContentRange/actorOffsetRange bounds (AC3); rounded (not continuous) actor band resolution incl. the rounding seam and cross-reference with LayerConstants.worldMaxZ (AC4)
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
   ImagePixelSampling.swift                 shared alpha/RGBA decode helper for the asset gates
   AtlasCatalogTests.swift                  catalog-existence + alpha-channel gate for the 10 atlas sheets
@@ -215,8 +217,45 @@ docs/bootstrap.md                          original spec (source of truth)
   `IsometricProjectionTests`). No production consumer places a tile-space
   node via it yet; that lands with the ground-plane/depth-model PR
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
-  5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
-  rounded tile (deferred — future PR)
+  5000 below its own band, building content <+3 in-band, actor offsets
+  6.5–9.9 sampling a rounded tile (implemented — `Sources/World/DepthModel.swift`,
+  `DepthModelTests`; pure Swift, no rendering dependency — `CYBERPUN-17-4-t1`).
+  The band formula is an *ordering* rule, not a zPosition on its own, so
+  every value the module returns is anchored at `DepthModel.worldBaseZ` (the
+  midpoint of `LayerConstants.worldBand`) and is an **absolute cumulative**
+  zPosition — the value the layer-band audit sees after SpriteKit
+  accumulates `zPosition` down the tree. A node parented directly under
+  `worldLayer` therefore takes
+  `DepthModel.worldLayerRelativeZ(forAbsoluteZ:)`, not the absolute value.
+  Unanchored, `band((0,0))` would be `0` — above `worldMaxZ`, and at tile
+  sums past `-100` above `uiMinZ` too, i.e. world content out-painting the
+  UI. `DepthModel.maxSupportedTileSumMagnitude` is the derived
+  `|tileX+tileY|` bound whose whole band (ground floor through actor
+  ceiling) still fits inside `LayerConstants.worldBand`, and
+  `DepthModelTests` sweeps that whole range, asserting containment through
+  `DepthModel.isWithinWorldBand(_:)` — which delegates to the same inclusive
+  `LayerConstants.worldBand` range `GameScene.nodesEscapingTheirLayerBand()`
+  audits, so the unit test and the runtime audit cannot disagree. Ground
+  clearance (`bandsClearedByGroundOffset`, 500 bands) is likewise asserted
+  against the resident window's widest tile-sum spread, derived from
+  `ChunkStreamingManager.residentRadius * Chunk.size`, rather than claimed
+  in prose.
+  Actor band resolution rounds a fractional `TilePoint` to its owning whole
+  tile via the same `IsometricProjection.tile(containing:)` seam rule
+  buildings use for their base tile, and is deliberately discontinuous (a
+  step function of the rounded tile, never interpolated) — see the doc
+  comment on `DepthModel.band(forActorAt:)` for why continuous depth would
+  desync from building placement. No production consumer sets a node's
+  `zPosition` from this yet; that lands with the ground-plane/building-
+  placement PRs (`CYBERPUN-17-5` onward)
+- Ground-plane rendering + pixel crispness (the other half of
+  `CYBERPUN-17-4`, *not* yet built): ground cells drawn from the six
+  `tileset_ground` diamonds, the "asphalt between sidewalks" street look,
+  and `.nearest` texture filtering / whole-integer camera scale /
+  device-pixel snapping (deferred — owned by `CYBERPUN-17-4-t2`, the
+  follow-up task to this PR's `-t1`; `CYBERPUN-17-5` is the
+  building-placement story and does *not* own these ACs, so they are tracked
+  here rather than falling through the crack between the two)
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,
@@ -317,7 +356,9 @@ docs/bootstrap.md                          original spec (source of truth)
   not. `GameplayScreenNode`'s placeholder is tagged for CYBERPUN-17-7 (the
   floating-thumbstick story); the death/high-scores placeholders are tagged
   for CYBERPUN-17-16 (integration checkpoint #2)
-- Depth module
+- Ground-plane rendering and pixel crispness, the remaining half of
+  `CYBERPUN-17-4` (`CYBERPUN-17-4-t2`) — `CYBERPUN-17-4-t1` shipped only the
+  depth model
 - Tile-grid collision system
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
