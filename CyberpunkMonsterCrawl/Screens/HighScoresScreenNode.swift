@@ -23,7 +23,7 @@ final class HighScoresScreenNode: ScreenNode {
 
     private let background: SKSpriteNode
     // SCAFFOLDING(CYBERPUN-17-16): placeholder label; no real scores list yet.
-    private let placeholderLabel = SKLabelNode(text: "HIGH SCORES \u2014 COMING SOON")
+    private let placeholderLabel = SKLabelNode(text: "HIGH SCORES \u{2014} COMING SOON")
 
     /// - Parameter onBackToMenu: run when the back-to-menu entry is tapped.
     ///   `GameViewController` passes `stateMachine.transition(to: .menu)`.
