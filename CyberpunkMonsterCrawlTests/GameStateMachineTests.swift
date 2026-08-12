@@ -149,4 +149,77 @@ final class GameStateMachineTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Change observation (`onChange`)
+
+    func test_init_onChange_receivesInitialMenuEntry() {
+        var observed: [GameState] = []
+        _ = GameStateMachine(onChange: { observed.append($0) })
+        XCTAssertEqual(observed, [.menu], "a hook supplied to init must see the initial .menu entry")
+    }
+
+    func test_onChange_firesOncePerLegalTransition() {
+        let machine = GameStateMachine()
+        var observed: [GameState] = []
+        machine.onChange = { observed.append($0) }
+
+        XCTAssertTrue(machine.transition(to: .gameplay))
+        XCTAssertTrue(machine.transition(to: .death))
+        XCTAssertTrue(machine.transition(to: .gameplay))
+
+        XCTAssertEqual(observed, [.gameplay, .death, .gameplay],
+                       "consumers must be pushed each entry rather than polling currentState")
+    }
+
+    func test_onChange_doesNotFire_forIllegalTransition() {
+        let machine = GameStateMachine()
+        var observed: [GameState] = []
+        machine.onChange = { observed.append($0) }
+
+        XCTAssertFalse(machine.transition(to: .death))
+
+        XCTAssertTrue(observed.isEmpty, "a rejected transition must not notify observers")
+        XCTAssertEqual(machine.currentState, .menu)
+    }
+
+    // MARK: - Illegal-transition reporting (no silent no-ops)
+
+    func test_illegalTransition_reportsFromAndTo() {
+        let machine = GameStateMachine()
+        var reported: [String] = []
+        machine.onIllegalTransition = { from, to in reported.append("\(from)->\(to)") }
+
+        XCTAssertFalse(machine.transition(to: .death))
+
+        XCTAssertEqual(reported, ["menu->death"])
+        XCTAssertEqual(machine.currentState, .menu, "reporting must not change state")
+    }
+
+    func test_legalTransition_reportsNothing() {
+        let machine = GameStateMachine()
+        var reported: [String] = []
+        machine.onIllegalTransition = { from, to in reported.append("\(from)->\(to)") }
+
+        XCTAssertTrue(machine.transition(to: .gameplay))
+
+        XCTAssertTrue(reported.isEmpty)
+    }
+
+    /// The mis-wired-button case from review: every rejected pair must be
+    /// observable by the consumer, not a silent no-op.
+    func test_everyIllegalPair_isReportedExactlyOnce() {
+        for from in GameState.allCases {
+            for to in GameState.allCases where !Self.legalPairs.contains(key(from, to)) {
+                let machine = makeMachine(at: from)
+                var reported: [String] = []
+                machine.onIllegalTransition = { f, t in reported.append("\(f)->\(t)") }
+
+                XCTAssertFalse(machine.transition(to: to))
+
+                XCTAssertEqual(reported, [key(from, to)],
+                               "\(from) -> \(to) rejection must be reported, not silent")
+                XCTAssertEqual(machine.currentState, from)
+            }
+        }
+    }
 }

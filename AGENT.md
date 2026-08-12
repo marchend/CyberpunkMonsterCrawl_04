@@ -71,7 +71,7 @@ CyberpunkMonsterCrawlTests/
   DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
   GameStateMachineTests.swift              exhaustive legal/illegal transition matrix for GameStateMachine
 CyberpunkMonsterCrawlUITests/
-  CyberpunkMonsterCrawlUITests.swift       proof-of-life (app launches); real flow coverage lands in a future PR
+  CyberpunkMonsterCrawlUITests.swift       proof-of-life (app launches), tagged SCAFFOLDING(CYBERPUN-17-2-t2); real flow coverage lands there
 docs/bootstrap.md                          original spec (source of truth)
 ```
 
@@ -130,11 +130,16 @@ docs/bootstrap.md                          original spec (source of truth)
   `HighScoresState` `GKState` subclasses encoding the legal transition table
   (menu→gameplay, menu→highScores, gameplay→death, death→gameplay [RUN
   AGAIN], death→menu, highScores→menu) and rejecting every other pair,
-  exhaustively covered by `GameStateMachineTests` (implemented — scene/UI
-  wiring lands in a future PR)
+  exhaustively covered by `GameStateMachineTests`. The wrapper pushes every
+  successful entry to an `onChange: ((GameState) -> Void)` hook (so a scene
+  observes instead of polling `currentState`) and routes every rejected pair
+  to `onIllegalTransition`, which defaults to an `os.Logger` warning in DEBUG
+  so a mis-wired button that silently does nothing is visible in the
+  simulator rather than at QA time (implemented — the scene/UI wiring that
+  gives it a production caller lands in CYBERPUN-17-2-t2)
 - Scene graph z-layering: `worldLayer < effectsLayer < uiLayer`, `uiLayer`
   pinned to camera with first touch refusal, plus an ordering test
-  (deferred — future PR)
+  (deferred — CYBERPUN-17-2-t2)
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
   rounded tile (deferred — future PR)
@@ -154,16 +159,21 @@ docs/bootstrap.md                          original spec (source of truth)
   pulse, hit puff, signs, ground tiles, buildings) into an actual on-screen
   scene — `TextureLoading.texture(named:)` / `BuildingSprite.texture` exist
   and are tested, but no scene places any sprite yet (later PRs)
-- Wiring `GameStateMachine` into the boot scene / a menu-gameplay-death-
-  highScores scene graph (the state machine core itself is implemented and
-  unit-tested — see above)
-- Scene z-layering enforcement + ordering test
+- CYBERPUN-17-2-t2 — the app shell that consumes `GameStateMachine`: wiring
+  it into the boot scene / a menu-gameplay-death-highScores scene graph, the
+  menu screen with a working PLAY button, and UI-first touch routing. Until
+  that ticket lands, `GameStateMachine` has no production caller —
+  `GameViewController` still presents `BootScene` (the state machine core
+  itself is implemented and unit-tested — see above)
+- Scene z-layering enforcement + ordering test — CYBERPUN-17-2-t2
 - Depth module
 - Procedural world generation + chunk streaming
 - Tile-grid collision system
-- Real XCUITest flow coverage (the `CyberpunkMonsterCrawlUITests` target
-  exists with a proof-of-life launch test; scenario coverage lands with the
-  scenes it exercises)
+- Real XCUITest flow coverage — CYBERPUN-17-2-t2 (the
+  `CyberpunkMonsterCrawlUITests` target exists with a proof-of-life launch
+  test carrying a `// SCAFFOLDING(CYBERPUN-17-2-t2)` marker; the acceptance
+  assertions — menu screen present, PLAY button hittable, tapping it enters
+  gameplay — land with the scenes they exercise)
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
 - Audio, app icon art, launch screen polish, App Store metadata/submission
