@@ -30,6 +30,16 @@ enum LayerConstants {
     /// `LayerOrderingTests.test_orderingInvariant_worldBelowEffectsBelowUI`.
     static let worldMaxZ: CGFloat = -1_000
 
+    /// The world layer's band as one inclusive range.
+    ///
+    /// `SceneInvariants`' runtime audit
+    /// (`GameScene.nodesEscapingTheirLayerBand()`) and
+    /// `DepthModel.isWithinWorldBand(_:)` both answer "is this cumulative
+    /// zPosition inside the world band?" against *this* range, so a unit
+    /// test and the runtime audit can never disagree about where the band
+    /// ends (inclusive on both bounds).
+    static let worldBand: ClosedRange<CGFloat> = worldMinZ...worldMaxZ
+
     // MARK: - Effects layer
 
     /// Lower bound of the effects layer's zPosition band (particles, muzzle
@@ -38,6 +48,10 @@ enum LayerConstants {
 
     /// Upper bound of the effects layer's zPosition band.
     static let effectsMaxZ: CGFloat = 999
+
+    /// The effects layer's band as one inclusive range \u2014 same shared-rule
+    /// reasoning as `worldBand`.
+    static let effectsBand: ClosedRange<CGFloat> = effectsMinZ...effectsMaxZ
 
     // MARK: - UI layer
 
@@ -49,6 +63,10 @@ enum LayerConstants {
 
     /// Upper bound of the UI layer's zPosition band.
     static let uiMaxZ: CGFloat = 100_000
+
+    /// The UI layer's band as one inclusive range \u2014 same shared-rule
+    /// reasoning as `worldBand`.
+    static let uiBand: ClosedRange<CGFloat> = uiMinZ...uiMaxZ
 
     // MARK: - Container zPositions
 

@@ -9,11 +9,13 @@ private struct LayerBand {
     let name: String
     let root: SKNode
     let baseZ: CGFloat
-    let minZ: CGFloat
-    let maxZ: CGFloat
+    /// The layer's inclusive band, taken straight from `LayerConstants` so
+    /// this audit and `DepthModel.isWithinWorldBand(_:)` share one
+    /// containment rule instead of each spelling out its own comparison.
+    let zRange: ClosedRange<CGFloat>
 
     func contains(_ cumulativeZ: CGFloat) -> Bool {
-        cumulativeZ >= minZ && cumulativeZ <= maxZ
+        zRange.contains(cumulativeZ)
     }
 }
 
@@ -37,22 +39,19 @@ extension GameScene {
                 name: "worldLayer",
                 root: worldLayer,
                 baseZ: worldLayer.zPosition,
-                minZ: LayerConstants.worldMinZ,
-                maxZ: LayerConstants.worldMaxZ
+                zRange: LayerConstants.worldBand
             ),
             LayerBand(
                 name: "effectsLayer",
                 root: effectsLayer,
                 baseZ: effectsLayer.zPosition,
-                minZ: LayerConstants.effectsMinZ,
-                maxZ: LayerConstants.effectsMaxZ
+                zRange: LayerConstants.effectsBand
             ),
             LayerBand(
                 name: "uiLayer",
                 root: uiLayer,
                 baseZ: cameraNode.zPosition + uiLayer.zPosition,
-                minZ: LayerConstants.uiMinZ,
-                maxZ: LayerConstants.uiMaxZ
+                zRange: LayerConstants.uiBand
             ),
         ]
     }
@@ -95,7 +94,10 @@ extension GameScene {
         var report: [String] = []
         for band in auditedBands {
             if !band.contains(band.baseZ) {
-                report.append("\(band.name) itself at cumulative z \(band.baseZ), band \(band.minZ)...\(band.maxZ)")
+                report.append(
+                    "\(band.name) itself at cumulative z \(band.baseZ), "
+                        + "band \(band.zRange.lowerBound)...\(band.zRange.upperBound)"
+                )
             }
             collectBandViolationDescriptions(in: band, under: band.root, cumulativeZ: band.baseZ, into: &report)
         }
@@ -113,7 +115,7 @@ extension GameScene {
             if !band.contains(childZ) {
                 report.append(
                     "\(describe(child)) under \(band.name) at cumulative z \(childZ), "
-                        + "band \(band.minZ)...\(band.maxZ)"
+                        + "band \(band.zRange.lowerBound)...\(band.zRange.upperBound)"
                 )
             }
             collectBandViolationDescriptions(in: band, under: child, cumulativeZ: childZ, into: &report)
