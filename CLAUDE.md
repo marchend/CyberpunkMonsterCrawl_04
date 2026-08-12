@@ -47,9 +47,10 @@ CyberpunkMonsterCrawl/
   BootScene.swift                          bootstrap SpriteKit scene
   PrivacyInfo.xcprivacy, *.entitlements
   Atlas/AtlasContract.swift                atlas contract + measurement
-  Assets.xcassets/Atlas/                   10 atlas-sheet imagesets (1x only)
+  Assets.xcassets/                         the single asset catalog for the target
+    Atlas/                                 10 atlas-sheet imagesets (1x only)
+    AppIcon.appiconset/                    stub AppIcon slot (art not yet imported)
   Sources/Assets/TextureLoading.swift      centralized nearest-filtering texture factory
-  Resources/Assets.xcassets/               stub AppIcon slot (art not yet imported)
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
   AtlasContractTests.swift                 atlas contract rules + catalog gate
@@ -68,12 +69,18 @@ docs/bootstrap.md                          original spec (source of truth)
   `AtlasContractTests` that fails when any referenced image id is missing
   from the catalog (implemented)
 - Asset catalog: the 10 atlas sheets are imported as 1× imagesets under
-  `CyberpunkMonsterCrawl/Assets.xcassets/Atlas/` (implemented — asset-import
-  PR). The 12 building sprites (`building_00` … `building_11`) are still not
-  in the repo, so `AtlasContract.current.sheets` stays empty for now, which
-  the contract still reports as a violation — filling in the sheet
-  declarations (cell sizes, owned cell indices) and the building imagesets is
-  a later PR's job, not this one's
+  `CyberpunkMonsterCrawl/Assets.xcassets/Atlas/`, and every one of those ids
+  is referenced by `AtlasContract.current` (via `undeclaredSheetImageIDs`),
+  so renaming or dropping an imageset — or shipping one without an alpha
+  channel — turns the suite red today, unmuted (implemented). There is one
+  asset catalog in the target; the AppIcon stub lives in it rather than in a
+  second same-named catalog. Still outstanding and owned by
+  **CYBERPUN-17-1-t3**: the 12 building sprites (`building_00` …
+  `building_11`), which are not in the repo, and each sheet family's cell size
+  and owned cell indices, which may only be written into
+  `AtlasContract.current.sheets` once checked against the measured art. The
+  contract reports that gap as `.sheetManifestIncomplete` rather than staying
+  silent about it
 - Central texture loader (`CyberpunkMonsterCrawl/Sources/Assets/TextureLoading.swift`)
   enforcing `.nearest` filtering, no mipmaps (implemented — asset-import PR).
   No production consumer calls it yet; that lands with the sprites/tiles that
@@ -97,15 +104,21 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- Binary asset pack import (remainder): the 12 building PNGs
-  (`building_00` … `building_11`) into `Assets.xcassets` as 1× imagesets, plus
-  filling `AtlasContract.current.sheets` with each atlas-sheet family's cell
-  size and owned cell index list, and deleting the `XCTExpectFailure`
-  scaffolding in `AtlasContractTests.test_shippedAssetCatalog_satisfiesAtlasContract`
-  — that expectation is strict, so it fails once the full catalog satisfies
-  the contract and cannot be left muting the gate. The 10 atlas sheets
-  themselves are already imported (this PR); `tileset_structure.png` and the
-  HTML companion files were not imported.
+- **CYBERPUN-17-1-t3 — binary asset pack import (remainder):** the 12 building
+  PNGs (`building_00` … `building_11`) into `Assets.xcassets` as 1× imagesets,
+  plus filling `AtlasContract.current.sheets` with each atlas-sheet family's
+  measured cell size and owned cell index list. That task also deletes the two
+  remaining `XCTExpectFailure` scaffolds, which are tagged
+  `SCAFFOLDING(CYBERPUN-17-1-t3)` and scoped to exactly what is outstanding:
+  `test_shippedAssetCatalog_satisfiesAtlasContract_forEveryBuildingSprite`
+  (building ids only) and
+  `test_shippedAssetCatalog_declaresACellGridForEverySheetFamily` (the
+  manifest count). Both are strict, so they fail the moment the art lands and
+  cannot be left muting the gate — and neither can mute a regression in the 10
+  sheets already imported, which
+  `test_shippedAssetCatalog_satisfiesAtlasContract_forEveryImportedSheet`
+  asserts unmuted. `tileset_structure.png` and the HTML companion files were
+  not imported.
 - Wiring every real texture consumer (player, raccoons, bullets, pickups,
   pulse, hit puff, signs, ground tiles) through
   `TextureLoading.texture(named:)` as each is built — the factory exists and

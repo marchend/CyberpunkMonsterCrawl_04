@@ -96,6 +96,33 @@ enum AtlasContractViolation: Equatable, CustomStringConvertible {
     /// One building imageset is a horizontal mirror of another.
     case mirroredBuildingArt(ids: [String])
 
+    /// The image ids this violation is about (empty for manifest-level
+    /// violations, which are about the declaration list rather than any one
+    /// image).
+    ///
+    /// Lets the acceptance gate be split by subject — "the art that is in the
+    /// repository today" versus "the art a named follow-up still owes" —
+    /// instead of muting the whole catalog behind one expectation.
+    var imageIDs: [String] {
+        switch self {
+        case .sheetManifestIncomplete:
+            return []
+        case let .missingImage(id), let .missingAlphaChannel(id):
+            return [id]
+        case let .sheetNotCellAligned(id, _, _):
+            return [id]
+        case let .cellIndexOutOfRange(id, _, _):
+            return [id]
+        case let .duplicateBuildingArt(ids), let .mirroredBuildingArt(ids):
+            return ids
+        }
+    }
+
+    /// `true` when this violation is about any of the given image ids.
+    func concerns(anyOf ids: Set<String>) -> Bool {
+        imageIDs.contains { ids.contains($0) }
+    }
+
     var description: String {
         switch self {
         case let .sheetManifestIncomplete(declared, required):
@@ -130,19 +157,50 @@ struct AtlasContract: Equatable {
     /// and are deliberately absent from this count.
     let requiredSheetCount: Int
 
-    /// Declared sheet families. Populated by the asset-import PR, which is the
-    /// only place that can supply real cell sizes — they have to be checked
-    /// against measured sheets, not copied out of filenames.
+    /// Sheet families whose cell grid is declared. A declaration may only be
+    /// added once its cell size has been checked against the measured sheet —
+    /// cell sizes are never copied out of filenames.
     let sheets: [AtlasSheetDeclaration]
+
+    /// Atlas sheets that are imported into `Assets.xcassets` but whose cell
+    /// grid is not declared in `sheets` yet.
+    ///
+    /// These ids are still *referenced*, so every rule that does not need a
+    /// cell size — the image resolves at all, and it carries a real alpha
+    /// channel — is enforced against them today. Without this list an imported
+    /// sheet would be invisible to the contract until someone got around to
+    /// measuring its cells, which is exactly the "assets present, contract
+    /// silent" gap the rebuild exists to close.
+    let undeclaredSheetImageIDs: [String]
 
     /// The 12 whole pre-rendered building sprites. These ids are fixed by the
     /// story (`building_00` … `building_11`).
     let buildingImageIDs: [String]
 
+    init(
+        requiredSheetCount: Int,
+        sheets: [AtlasSheetDeclaration],
+        undeclaredSheetImageIDs: [String] = [],
+        buildingImageIDs: [String]
+    ) {
+        self.requiredSheetCount = requiredSheetCount
+        self.sheets = sheets
+        self.undeclaredSheetImageIDs = undeclaredSheetImageIDs
+        self.buildingImageIDs = buildingImageIDs
+    }
+
+    /// Every atlas-sheet id the contract references: the declared families
+    /// first, then the imported-but-not-yet-celled ones. Declared ids win, so
+    /// an id that appears in both lists is referenced once.
+    var atlasSheetImageIDs: [String] {
+        let declared = sheets.map(\.imageID)
+        return declared + undeclaredSheetImageIDs.filter { !declared.contains($0) }
+    }
+
     /// Every image id the game references. This is the list the acceptance
     /// test walks; if any entry fails to resolve, the suite must go red.
     var referencedImageIDs: [String] {
-        sheets.map(\.imageID) + buildingImageIDs
+        atlasSheetImageIDs + buildingImageIDs
     }
 
     static let buildingCount = 12
@@ -150,18 +208,49 @@ struct AtlasContract: Equatable {
     static let requiredBuildingImageIDs: [String] = (0..<AtlasContract.buildingCount)
         .map { String(format: "building_%02d", $0) }
 
+    /// The 10 atlas-sheet imagesets this repository has imported, one per
+    /// family, under `Assets.xcassets/Atlas/`.
+    ///
+    /// This is the single manifest of those ids — tests read it rather than
+    /// re-listing the names, so a renamed or dropped imageset cannot leave a
+    /// stale copy of the list agreeing with itself somewhere else.
+    /// `tileset_structure.png` and the HTML companion files are deliberately
+    /// not imported and deliberately absent here.
+    static let importedSheetImageIDs: [String] = [
+        "sprite_player_walk",
+        "sprite_player_weapons",
+        "sprite_bullets",
+        "sprite_raccoon_walk",
+        "sprite_raccoon_attack",
+        "tileset_ground",
+        "sprite_pickups",
+        "sprite_pulse",
+        "sprite_hit_puff",
+        "sprite_signs",
+    ]
+
     /// The contract as it stands in the repository today.
     ///
-    /// `sheets` is intentionally empty: the binary art pack has not been
-    /// imported yet, and inventing sheet names or cell sizes here would be
-    /// exactly the "filenames as evidence" mistake the spec forbids. The
-    /// empty manifest is not silent — `validate(using:)` reports
-    /// `.sheetManifestIncomplete`, and the catalog gate test in
-    /// `AtlasContractTests` asserts on that failure, so the import PR cannot
-    /// land the art without also filling this list in.
+    /// The 10 atlas sheets are in the repository, so their ids are referenced
+    /// here via `undeclaredSheetImageIDs`: rename or drop one of those
+    /// imagesets and `validate(using:)` reports `.missingImage`, and ship one
+    /// without an alpha channel and it reports `.missingAlphaChannel`. Both
+    /// are measured facts read out of the shipped bytes by
+    /// `AssetCatalogImageMeasurer`, and both are asserted unmuted by
+    /// `AtlasContractTests`.
+    ///
+    /// `sheets` stays empty because a declaration additionally needs a *cell
+    /// size*, and a cell size may only be written down once it has been
+    /// checked against the measured sheet — guessing 32×32 from a sprite
+    /// sheet's name is precisely the "filenames as evidence" mistake the spec
+    /// forbids, and it would then be rubber-stamped by the cell-alignment rule
+    /// it is supposed to be tested by. The gap is not silent:
+    /// `validate(using:)` reports `.sheetManifestIncomplete(declared: 0,
+    /// required: 10)` until every family is celled.
     static let current = AtlasContract(
         requiredSheetCount: 10,
         sheets: [],
+        undeclaredSheetImageIDs: AtlasContract.importedSheetImageIDs,
         buildingImageIDs: AtlasContract.requiredBuildingImageIDs
     )
 
@@ -222,6 +311,20 @@ struct AtlasContract: Equatable {
                         cellCount: measured.cellCount
                     )
                 )
+            }
+        }
+
+        // Imported sheets without a declared cell grid still have to resolve
+        // and still have to carry alpha; only the cell-grid rules are held
+        // back until a measured cell size exists for them.
+        let declaredSheetIDs = Set(sheets.map(\.imageID))
+        for imageID in undeclaredSheetImageIDs where !declaredSheetIDs.contains(imageID) {
+            guard let measurement = measurer.measure(imageID: imageID) else {
+                violations.append(.missingImage(id: imageID))
+                continue
+            }
+            if !measurement.hasAlphaChannel {
+                violations.append(.missingAlphaChannel(id: imageID))
             }
         }
 
