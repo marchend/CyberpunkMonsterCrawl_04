@@ -52,6 +52,8 @@ CyberpunkMonsterCrawl/
   Layers/ButtonNode.swift                  minimal tappable button (plate + label, optional neon accent frame) delivered to via TouchResponder
   Layers/SceneInvariants.swift             runtime audits: cumulative-z band escapes, nodes bypassing scene touch dispatch
   Layers/PixelGritPalette.swift            shared dark-background / neon-accent colors for every screen
+  Layers/SKNodeAccessibilityIdentifier.swift  Swift-side accessibilityIdentifier storage for SKNode (SKNode never adopts UIAccessibilityIdentification); AccessibleSKView is what carries the value into a real accessibility element
+  Layers/AccessibleSKView.swift            the hosted SKView subclass: publishes one UIAccessibilityElement per accessible uiLayer node, with a screen-space accessibilityFrame derived from the same coordinate path routeTouch(at:) hit-tests, so identifier/element-driven taps (XCUITest, the runtime probe, VoiceOver) land on the button instead of missing it
   Screens/MenuScreenNode.swift             the menu: title + neon PLAY button + placeholder HIGH SCORES entry, registered for .menu
   Screens/GameplayScreenNode.swift         skeleton .gameplay screen; no full-bleed backdrop so world touches fall through; SCAFFOLDING(CYBERPUN-17-7) placeholder content
   Screens/DeathScreenNode.swift            skeleton .death screen; real RUN AGAIN / back-to-menu buttons, SCAFFOLDING(CYBERPUN-17-16) placeholder run-summary content
@@ -103,11 +105,13 @@ CyberpunkMonsterCrawlTests/
   TouchRoutingTests.swift                  UI-first touch routing: an overlapping UI node always wins over a world node
   TouchDispatchTests.swift                 the routed touch is delivered to a TouchResponder; no node bypasses scene dispatch
   GameSceneScreenSwitchingTests.swift      state-machine-driven screen registry swap incl. replace-while-active, using PlaceholderScreenNode doubles
-  GameViewControllerCompositionTests.swift composition root builds GameScene, mounts MenuScreenNode + the three skeleton screens, wires PLAY to the state machine
+  GameViewControllerCompositionTests.swift composition root builds GameScene, mounts MenuScreenNode + the three skeleton screens, wires PLAY to the state machine, and hosts the scene in an AccessibleSKView (asserted against the view actually installed in the hierarchy)
+  AccessibleSKViewTests.swift              the accessibility-frame regression guard: the uiLayer accessible-node walk, and the published frame's centre being the exact scene point routeTouch(at:)/dispatchTouch(atScenePoint:) resolves to the PLAY button
 CyberpunkMonsterCrawlUITests/
   CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run and lands on the gameplay screen
   AppLaunchAndRotationUITests.swift        launch shows the menu in portrait, rotation re-lays it out in landscape with nothing off-screen, PLAY dismisses the menu
 docs/bootstrap.md                          original spec (source of truth)
+.mothership/journeys/menu-to-gameplay.json product-verification journey: launch -> tap PLAY by accessibility element -> screenshot the streamed ground plane
 ```
 
 > `AGENT.md` and `CLAUDE.md` are the same document under two names. Every edit
@@ -207,6 +211,37 @@ docs/bootstrap.md                          original spec (source of truth)
   paint over `worldLayer`. Menu/death/high-scores backdrops are full-bleed on
   purpose (they hide the world); the scene's own `backgroundColor` supplies
   the dark base behind gameplay
+- Accessibility-driven touch targeting (implemented - `CYBERPUN-17-4-t5`):
+  the app hosts `GameScene` in `AccessibleSKView`
+  (`Layers/AccessibleSKView.swift`), which publishes one
+  `UIAccessibilityElement` per accessible `uiLayer` node with an explicit
+  screen-space `accessibilityFrame`. This exists because a *finger* tap always
+  worked while an *element-driven* tap - XCUITest, the scripted runtime probe,
+  VoiceOver - did not: such a driver resolves its touch point from
+  `accessibilityFrame`, and SpriteKit's implicit `SKNode` accessibility support
+  does not resolve a correct screen-space frame for a node under a camera
+  transform, which every button is (`uiLayer` hangs off `cameraNode` so the UI
+  stays camera-locked). The synthesized tap therefore missed PLAY,
+  `touchesBegan(_:with:)` never ran, `transition(to: .gameplay)` never fired,
+  and the runtime probe reported "tapped PLAY, screen stayed on the menu"
+  while every unit test stayed green - the tests call
+  `dispatchTouch(atScenePoint:)` directly and never go near a frame. The frame
+  is derived through `GameScene.accessibilityFrameInScene(for:)`, the
+  algebraic inverse of the `uiLayer.convert(_:from: self)` + `atPoint(_:)`
+  walk `routeTouch(at:)` performs, then scene -> view
+  (`SKView.convert(_:from:)`) -> window (`convert(_:to: nil)`), so the frame a
+  driver aims at and the point the scene hit-tests cannot disagree.
+  `AccessibleSKViewTests` asserts that agreement directly (the published
+  frame's centre, routed back through `routeTouch(at:)`, resolves to the PLAY
+  button and starts a run) and `GameViewControllerCompositionTests` pins the
+  entry-point wiring - reverting `viewDidLoad()` to a plain `SKView` would
+  leave this class fully tested and completely dead. `accessibilityElements`
+  plus the older `accessibilityElementCount()` / `accessibilityElement(at:)` /
+  `index(ofAccessibilityElement:)` triplet are all overridden from one source,
+  because UIKit may reach for either container API and `SKView` ships its own.
+  Elements are rebuilt on every query rather than cached, so a screen swap, a
+  rotation or a camera move can never leave a stale frame behind - a stale
+  frame is the same defect wearing a different hat
 - Isometric coordinate transform: `IsometricProjection.tileToScreen`/
   `screenToTile` for 96×48 tile diamonds (`screenX = (tileX - tileY) * 48`,
   `screenY = (tileX + tileY) * 24`, and its exact algebraic inverse), Double

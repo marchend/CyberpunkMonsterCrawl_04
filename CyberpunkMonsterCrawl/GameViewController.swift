@@ -1,8 +1,10 @@
 import SpriteKit
 import UIKit
 
-/// Hosts the single SKView for the app and is the composition root: it
-/// builds `GameScene`, registers every concrete screen, and presents it.
+/// Hosts the single SKView for the app (an `AccessibleSKView`, so
+/// accessibility-driven taps land where the scene actually hit-tests) and is
+/// the composition root: it builds `GameScene`, registers every concrete
+/// screen, and presents it.
 ///
 /// `GameStateMachine` (menu -> gameplay -> death -> highScores) drives
 /// `GameScene`'s layered scene graph (worldLayer < effectsLayer < uiLayer,
@@ -19,13 +21,28 @@ import UIKit
 /// explicitly out of scope for CYBERPUN-17-2 (see docs/bootstrap.md and the
 /// story's "Out of scope" section).
 final class GameViewController: UIViewController {
-    private var skView: SKView!
+
+    /// The single hosted view.
+    ///
+    /// An `AccessibleSKView` rather than a plain `SKView`: without that swap
+    /// every accessible UI node reports a wrong screen-space
+    /// `accessibilityFrame`, so a tap driven by accessibility element
+    /// (XCUITest, the scripted runtime probe, VoiceOver) misses the button
+    /// entirely and PLAY appears to do nothing - see `AccessibleSKView` for
+    /// the full failure. This line *is* the entry-point wiring: nothing else
+    /// in the app instantiates that class.
+    ///
+    /// `private(set)` rather than `private` so
+    /// `GameViewControllerCompositionTests` can pin the wiring and catch a
+    /// silent regression back to a plain `SKView`; nothing outside this class
+    /// writes it.
+    private(set) var skView: AccessibleSKView!
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
 
-        let skView = SKView(frame: view.bounds)
+        let skView = AccessibleSKView(frame: view.bounds)
         skView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         skView.ignoresSiblingOrder = true
         view.addSubview(skView)
