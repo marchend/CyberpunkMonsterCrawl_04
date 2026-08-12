@@ -1,0 +1,211 @@
+name: CI — Tests
+
+# Generic, stack-aware test runner. Detects the project's stack AT RUNTIME and
+# runs the SAME command the pre-PR verify gate does (the strings come from
+# app.agents.tools.code_tools.TEST_COMMANDS — one source of truth, no drift).
+#
+# Deliberately NON-BLOCKING and never a required check: a freshly-connected or
+# empty repo may have no tests yet, so "no test command / no tests collected"
+# exits 0 rather than failing the check for the ABSENCE of tests. Broken tests
+# (or broken deps) still go red — that is a real, informational signal, but it
+# never blocks a merge because this check is never added to branch protection.
+#
+# Detection is runtime (not baked at commit time) so the workflow adapts as the
+# repo gains code — an empty repo at connect time gets a live-detecting workflow
+# instead of a stale no-op. iOS/Android are intentionally NOT run here: their
+# tests need Xcode + macOS / the Android SDK, not this Linux runner. iOS is
+# covered by the dedicated ios-build.yml workflow (xcodebuild build + test);
+# committing both never double-runs iOS because this workflow never tests it.
+#
+# Trigger policy mirrors ios-build.yml: PRs into develop and
+# pushes to develop.
+
+on:
+  pull_request:
+    branches: ['develop']
+  push:
+    branches: ['develop']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect stack + test command
+        id: detect
+        # Mirrors app.agents.tools.code_tools.detect_test_command: root-level
+        # markers, first match wins, same ordering (python → node → rust → go →
+        # ruby → jvm). The JVM branch is suppressed on an Android repo exactly as
+        # the resolver suppresses it (Android's Gradle build needs the Android
+        # SDK, not just a JDK). Command strings are rendered from TEST_COMMANDS.
+        run: |
+          set -euo pipefail
+
+          is_android=false
+          for m in AndroidManifest.xml app/src/main/AndroidManifest.xml src/main/AndroidManifest.xml; do
+            if [ -f "$m" ]; then
+              is_android=true
+            fi
+          done
+
+          STACK=""
+          CMD=""
+          if [ -f pytest.ini ] || [ -f pyproject.toml ] || [ -f setup.py ]; then
+            STACK=python
+            CMD='pytest'
+          elif [ -f package.json ]; then
+            STACK=node
+            CMD='npm test'
+          elif [ -f Cargo.toml ]; then
+            STACK=rust
+            CMD='cargo test'
+          elif [ -f go.mod ]; then
+            STACK=go
+            CMD='go test ./...'
+          elif [ -f Gemfile ]; then
+            STACK=ruby
+            CMD='bundle exec rspec'
+          elif [ "$is_android" = "false" ] && { [ -f build.gradle ] || [ -f build.gradle.kts ] || [ -f settings.gradle ] || [ -f settings.gradle.kts ]; }; then
+            STACK=jvm
+            if [ -f gradlew ]; then
+              CMD='./gradlew test'
+            else
+              CMD='gradle test'
+            fi
+          elif [ "$is_android" = "false" ] && [ -f pom.xml ]; then
+            STACK=jvm
+            if [ -f mvnw ]; then
+              CMD='./mvnw test'
+            else
+              CMD='mvn test'
+            fi
+          fi
+
+          echo "Detected stack: ${STACK:-none}"
+          echo "Test command:   ${CMD:-<none>}"
+          echo "stack=${STACK}" >> "$GITHUB_OUTPUT"
+          echo "test_cmd=${CMD}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.detect.outputs.stack == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Set up Node
+        if: steps.detect.outputs.stack == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Set up Go
+        if: steps.detect.outputs.stack == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Set up Java
+        if: steps.detect.outputs.stack == 'jvm'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies (best-effort)
+        if: steps.detect.outputs.test_cmd != ''
+        env:
+          STACK: ${{ steps.detect.outputs.stack }}
+        run: |
+          # Best-effort: a failed install lets tests fail loudly (a real, if
+          # non-blocking, signal). It must never crash the workflow, so each
+          # install tolerates its own absence.
+          set -uo pipefail
+          case "$STACK" in
+            python)
+              python -m pip install --upgrade pip || true
+              if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
+              if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt || true; fi
+              if [ -f pyproject.toml ] || [ -f setup.py ]; then pip install -e . || true; fi
+              pip install pytest || true
+              ;;
+            node)
+              if [ -f package-lock.json ]; then
+                npm ci || npm install || true
+              else
+                npm install || true
+              fi
+              ;;
+            ruby)
+              bundle install || true
+              ;;
+            go)
+              go mod download || true
+              ;;
+            *)
+              : # rust / jvm: cargo / gradle / maven resolve deps as they build
+              ;;
+          esac
+
+      - name: Run tests (non-blocking — passes when no tests exist)
+        if: steps.detect.outputs.test_cmd != ''
+        env:
+          STACK: ${{ steps.detect.outputs.stack }}
+          TEST_CMD: ${{ steps.detect.outputs.test_cmd }}
+        run: |
+          set -uo pipefail
+          echo "::notice::Running tests via: ${TEST_CMD} (stack=${STACK})"
+
+          # ── No-op guards: the ABSENCE of tests must PASS (exit 0). ──────────
+          # node: the npm default is `echo "Error: no test specified" && exit 1`,
+          # so a package.json without a real test script would fail the check for
+          # having no tests. Skip cleanly in that case.
+          if [ "$STACK" = "node" ]; then
+            has_test="$(node -e 'try{const s=(require("./package.json").scripts)||{};const t=s.test||"";process.stdout.write((t && !/no test specified/.test(t))?"1":"0")}catch(e){process.stdout.write("0")}')"
+            if [ "$has_test" != "1" ]; then
+              echo "::notice::No real \"test\" script in package.json — nothing to run; passing (non-blocking)."
+              exit 0
+            fi
+          fi
+          # ruby: detect_test_command returns `bundle exec rspec` for ANY Gemfile,
+          # but a Gemfile without rspec (e.g. an iOS/CocoaPods/fastlane Gemfile)
+          # has no rspec suite to run. Skip cleanly rather than error on a missing
+          # rspec binary.
+          if [ "$STACK" = "ruby" ]; then
+            if ! grep -q "rspec" Gemfile 2>/dev/null; then
+              echo "::notice::Gemfile does not declare rspec — no runnable Ruby suite; passing (non-blocking)."
+              exit 0
+            fi
+          fi
+
+          # Run the detected command. Word-splitting is intentional (e.g.
+          # `go test ./...`, `./gradlew test`).
+          set +e
+          ${TEST_CMD}
+          code=$?
+          set -e
+
+          # pytest exit code 5 == "no tests collected" — a fresh repo with no
+          # tests yet. Treat as pass (non-blocking); every other non-zero is a
+          # real failure and stays red.
+          if [ "$STACK" = "python" ] && [ "$code" -eq 5 ]; then
+            echo "::notice::pytest collected no tests (exit 5) — nothing to run; passing (non-blocking)."
+            exit 0
+          fi
+
+          exit "$code"
+
+      - name: No test command detected
+        if: steps.detect.outputs.test_cmd == ''
+        run: |
+          echo "::notice::No supported test command detected for this repo yet (or a mobile-only stack handled by ios-build.yml) — passing. This check is non-blocking and never required."
