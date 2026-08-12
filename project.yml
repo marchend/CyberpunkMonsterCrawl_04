@@ -42,10 +42,22 @@ targets:
         BUNDLE_LOADER: $(TEST_HOST)
     dependencies:
       - target: CyberpunkMonsterCrawl
+  CyberpunkMonsterCrawlUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [CyberpunkMonsterCrawlUITests]
+    settings:
+      base:
+        PRODUCT_NAME: $(TARGET_NAME)
+        TEST_TARGET_NAME: CyberpunkMonsterCrawl
+    dependencies:
+      - target: CyberpunkMonsterCrawl
 schemes:
   CyberpunkMonsterCrawl:
     build:
       targets: { CyberpunkMonsterCrawl: all }
     test:
-      targets: [CyberpunkMonsterCrawlTests]
+      targets:
+        - name: CyberpunkMonsterCrawlTests
+        - name: CyberpunkMonsterCrawlUITests
       parallelizable: false
