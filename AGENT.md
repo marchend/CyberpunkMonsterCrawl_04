@@ -47,10 +47,13 @@ CyberpunkMonsterCrawl/
   BootScene.swift                          bootstrap SpriteKit scene
   PrivacyInfo.xcprivacy, *.entitlements
   Atlas/AtlasContract.swift                atlas contract + measurement
+  Assets.xcassets/Atlas/                   10 atlas-sheet imagesets (1x only)
+  Sources/Assets/TextureLoading.swift      centralized nearest-filtering texture factory
   Resources/Assets.xcassets/               stub AppIcon slot (art not yet imported)
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
   AtlasContractTests.swift                 atlas contract rules + catalog gate
+  TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
 docs/bootstrap.md                          original spec (source of truth)
 ```
 
@@ -64,11 +67,17 @@ docs/bootstrap.md                          original spec (source of truth)
   inferred from filenames — plus the acceptance gate in
   `AtlasContractTests` that fails when any referenced image id is missing
   from the catalog (implemented)
-- Asset catalog with the 10 atlas sheets + 12 building sprites (`building_00`
-  … `building_11`) imported as 1× imagesets (deferred — asset-import PR; the
-  binary art pack is not in the repo yet). `AtlasContract.current.sheets` is
-  empty until then, which the contract reports as a violation, so the
-  catalog cannot stay empty behind a green suite
+- Asset catalog: the 10 atlas sheets are imported as 1× imagesets under
+  `CyberpunkMonsterCrawl/Assets.xcassets/Atlas/` (implemented — asset-import
+  PR). The 12 building sprites (`building_00` … `building_11`) are still not
+  in the repo, so `AtlasContract.current.sheets` stays empty for now, which
+  the contract still reports as a violation — filling in the sheet
+  declarations (cell sizes, owned cell indices) and the building imagesets is
+  a later PR's job, not this one's
+- Central texture loader (`CyberpunkMonsterCrawl/Sources/Assets/TextureLoading.swift`)
+  enforcing `.nearest` filtering, no mipmaps (implemented — asset-import PR).
+  No production consumer calls it yet; that lands with the sprites/tiles that
+  actually render (future PRs)
 - `menu → gameplay → death → highScores` state machine (deferred — future PR)
 - Scene graph z-layering: `worldLayer < effectsLayer < uiLayer`, `uiLayer`
   pinned to camera with first touch refusal, plus an ordering test
@@ -76,8 +85,6 @@ docs/bootstrap.md                          original spec (source of truth)
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
   rounded tile (deferred — future PR)
-- Central texture loader enforcing `.nearest` filtering, no mipmaps, for
-  every consumer (deferred — future PR; convention started in `BootScene`)
 - Pure-function world generation `(tileX, tileY, seed) → chunk`, 8×8 chunk
   streaming, no cross-chunk neighbour lookups (deferred — future PR)
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
@@ -90,19 +97,22 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- Binary asset pack import: the 10 atlas sheets and 12 building PNGs into
-  `Assets.xcassets` as 1× imagesets. The contract type and its missing-asset
-  gate have landed, so the import PR only has to add the files, fill
-  `AtlasContract.current.sheets` with each family's cell size and owned cell
-  index list, and delete the `XCTExpectFailure` scaffolding in
-  `AtlasContractTests.test_shippedAssetCatalog_satisfiesAtlasContract` —
-  that expectation is strict, so it fails once the art is present and cannot
-  be left muting the gate. `tileset_structure.png` and the HTML companion
-  files are not imported.
+- Binary asset pack import (remainder): the 12 building PNGs
+  (`building_00` … `building_11`) into `Assets.xcassets` as 1× imagesets, plus
+  filling `AtlasContract.current.sheets` with each atlas-sheet family's cell
+  size and owned cell index list, and deleting the `XCTExpectFailure`
+  scaffolding in `AtlasContractTests.test_shippedAssetCatalog_satisfiesAtlasContract`
+  — that expectation is strict, so it fails once the full catalog satisfies
+  the contract and cannot be left muting the gate. The 10 atlas sheets
+  themselves are already imported (this PR); `tileset_structure.png` and the
+  HTML companion files were not imported.
+- Wiring every real texture consumer (player, raccoons, bullets, pickups,
+  pulse, hit puff, signs, ground tiles) through
+  `TextureLoading.texture(named:)` as each is built — the factory exists and
+  is tested, but nothing in the render path calls it yet
 - Menu/gameplay/death/highScores state machine
 - Scene z-layering enforcement + ordering test
 - Depth module
-- Central texture loader enforcement across all consumers
 - Procedural world generation + chunk streaming
 - Tile-grid collision system
 - UI-test target with real XCUITest coverage
