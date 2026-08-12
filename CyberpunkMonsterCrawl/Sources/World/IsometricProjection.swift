@@ -1,7 +1,32 @@
 import CoreGraphics
 
-/// Forward/inverse coordinate transform between integer tile space and
-/// on-screen point space for the game's 2:1 isometric diamonds.
+/// A point in **tile space** — the lattice the world is authored on, where
+/// whole numbers are tile centers and the axes run along the diamond's two
+/// edges (not along the screen's x/y).
+///
+/// This exists so tile space and screen space are not the same type. An
+/// untyped `CGPoint -> CGPoint` transform lets a caller feed a touch
+/// location (screen space) straight into the forward transform and get back
+/// a silently-plausible position; with `TilePoint` that mistake is a compile
+/// error instead. Same discipline as the atlas-crop convention gate and the
+/// layer-band audits elsewhere in this repo: make the bad call structurally
+/// impossible rather than documented-against.
+struct TilePoint: Equatable {
+    /// Tile-space x. Whole values are tile centers; fractional values are
+    /// legal so callers can interpolate between tiles.
+    var x: Double
+    /// Tile-space y. Whole values are tile centers; fractional values are
+    /// legal so callers can interpolate between tiles.
+    var y: Double
+
+    init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+}
+
+/// Forward/inverse coordinate transform between tile space and on-screen
+/// point space for the game's 2:1 isometric diamonds.
 ///
 /// World constants (`docs/bootstrap.md` §4): isometric 2:1 diamonds at
 /// **96×48px** (supersedes the earlier 128×64px value referenced in older
@@ -35,21 +60,58 @@ enum IsometricProjection {
     ///
     /// ⇒ `tileX = screenX / 96 + screenY / 48`
     ///   `tileY = screenY / 48 - screenX / 96`
+    ///
+    /// The result is *fractional* tile space: an arbitrary screen point
+    /// (a touch, a camera center) generally lands somewhere inside a
+    /// diamond, not on its center. Use `tile(containing:)` when the question
+    /// is "which tile owns this point" — that entry point pins the rounding
+    /// rule instead of leaving it to each call site.
     static func screenToTile(screenX: Double, screenY: Double) -> (tileX: Double, tileY: Double) {
         let tileX = screenX / (2 * tileHalfWidth) + screenY / (2 * tileHalfHeight)
         let tileY = screenY / (2 * tileHalfHeight) - screenX / (2 * tileHalfWidth)
         return (tileX: tileX, tileY: tileY)
     }
 
-    /// Convenience overload taking/returning `CGPoint` at the boundary, for
-    /// callers that already have screen-space points (e.g. touch locations).
-    static func tileToScreen(tile: CGPoint) -> CGPoint {
-        tileToScreen(tileX: Double(tile.x), tileY: Double(tile.y))
+    /// Forward transform for callers that already hold a **tile-space**
+    /// point (a world position), returning its on-screen point.
+    static func tileToScreen(_ tile: TilePoint) -> CGPoint {
+        tileToScreen(tileX: tile.x, tileY: tile.y)
     }
 
-    /// Convenience overload taking/returning `CGPoint` at the boundary.
-    static func screenToTile(screen: CGPoint) -> CGPoint {
+    /// Inverse transform for callers that hold a **screen-space** point
+    /// (e.g. a touch location), returning fractional tile space.
+    ///
+    /// See `tile(containing:)` for the integer "which tile is this?" answer.
+    static func screenToTile(_ screen: CGPoint) -> TilePoint {
         let (tileX, tileY) = screenToTile(screenX: Double(screen.x), screenY: Double(screen.y))
-        return CGPoint(x: CGFloat(tileX), y: CGFloat(tileY))
+        return TilePoint(x: tileX, y: tileY)
+    }
+
+    /// The integer tile whose diamond contains `screen`.
+    ///
+    /// This is the contract `screenToTile` deliberately does *not* make:
+    /// `round()` and `floor()` disagree about who owns a point, and on a 2:1
+    /// diamond the disagreement lands exactly on the diamond edges — i.e. on
+    /// the street/building seam the lattice work cares about. The rule
+    /// pinned here is `floor(coordinate + 0.5)`, which gives each tile the
+    /// half-open ownership region `[center - 0.5, center + 0.5)` on both
+    /// axes: a point exactly on a seam belongs to the **higher-index** tile,
+    /// uniformly on both sides of the origin.
+    ///
+    /// (`rounded(.toNearestOrAwayFromZero)` would break that uniformity —
+    /// it hands tile-space `-0.5` to tile `-1` while handing `+0.5` to tile
+    /// `+1`, so the seam rule would flip sign across the origin.)
+    static func tile(containing screen: CGPoint) -> (tileX: Int, tileY: Int) {
+        let fractional = screenToTile(screenX: Double(screen.x), screenY: Double(screen.y))
+        return (
+            tileX: owningTileIndex(forTileSpaceCoordinate: fractional.tileX),
+            tileY: owningTileIndex(forTileSpaceCoordinate: fractional.tileY)
+        )
+    }
+
+    /// `floor(coordinate + 0.5)` — see `tile(containing:)` for why this
+    /// rounding rule and not `round()`.
+    private static func owningTileIndex(forTileSpaceCoordinate coordinate: Double) -> Int {
+        Int((coordinate + 0.5).rounded(.down))
     }
 }
