@@ -119,9 +119,9 @@ enum GroundTileCatalog {
     static func diamond(for kind: GroundTileKind) -> AtlasGroundDiamond {
         switch kind {
         case .asphaltEastWest:
-            return .laneNorthSouth
-        case .asphaltNorthSouth:
             return .laneEastWest
+        case .asphaltNorthSouth:
+            return .laneNorthSouth
         case .junctionStopLine:
             return .intersection
         case .kerbSidewalk:

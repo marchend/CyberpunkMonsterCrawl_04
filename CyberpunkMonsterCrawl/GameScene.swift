@@ -234,16 +234,19 @@ final class GameScene: SKScene {
     }
 
     /// Drains `groundPlane`'s incremental-mount queue a few chunks at a time
-    /// (`GroundPlaneStreamer.advanceIncrementalMount()`), and \u2014 DEBUG builds
-    /// only \u2014 advances the scaffolding debug pan.
+    /// (`GroundPlaneStreamer.advanceIncrementalMount()`), and — DEBUG builds
+    /// only — advances the scaffolding debug pan.
     ///
     /// `CYBERPUN-17-4-t4`: the incremental-mount drain runs in Release too,
-    /// deliberately. It exists to fix a real stall (the first `.gameplay`
-    /// entry used to mount the entire resident chunk window synchronously,
-    /// inside the PLAY tap's own call stack, which a runtime probe caught
-    /// mid-stall), so it is production behaviour, not a debug aid \u2014 unlike
-    /// the pan below, gating it behind `#if DEBUG` would ship the bug it
-    /// fixes.
+    /// deliberately. It exists to fix a real stall (entering `.gameplay` used
+    /// to mount the entire resident chunk window synchronously, inside the
+    /// PLAY tap's own call stack, which a runtime probe caught mid-stall), so
+    /// it is production behaviour, not a debug aid — unlike the pan below,
+    /// gating it behind `#if DEBUG` would ship the bug it fixes. It is also
+    /// what keeps the deferred remainder moving once `CYBERPUN-17-7` drives
+    /// `updateCamera` from camera-follow every frame: `updateCamera` only ever
+    /// mounts the quickstart ring, so this drain is the only thing that brings
+    /// the rest of the window in.
     override func update(_ currentTime: TimeInterval) {
         super.update(currentTime)
         groundPlane?.advanceIncrementalMount()
@@ -257,7 +260,7 @@ final class GameScene: SKScene {
     // `CYBERPUN-17-7` should delete `advanceDebugPanIfNeeded(currentTime:)`
     // once real player/camera movement exists to exercise streaming instead.
     // It is DEBUG-only, so a Release build has no per-frame work from it at
-    // all (the incremental-mount drain above runs unconditionally though \u2014
+    // all (the incremental-mount drain above runs unconditionally though —
     // see its own doc comment for why that one is not scaffolding).
 
     /// Moves the camera in a straight line (+x in tile space) at

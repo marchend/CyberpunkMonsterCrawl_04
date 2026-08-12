@@ -34,6 +34,30 @@ final class ChunkStreamingGroundTests: XCTestCase {
     private var tilesPerChunk: Int { Chunk.size * Chunk.size }
     private var boundedNodeCount: Int { ChunkStreamingManager.residentWindowSize * tilesPerChunk }
 
+    /// Brings `streamer` to the fully-mounted steady state the way the
+    /// shipped code does: repeated `advanceIncrementalMount()` ticks, which
+    /// is exactly what `GameScene.update(_:)` drives once per frame.
+    ///
+    /// CYBERPUN-17-4-t4: `updateCamera` mounts only the quickstart ring and
+    /// defers the rest, so the residency, reuse and no-gap invariants below
+    /// have to reach the full window somehow — going through the production
+    /// drain means they stay pinned on the path the app actually takes rather
+    /// than on a test-only entry point.
+    private func drainIncrementalMount(
+        _ streamer: GroundPlaneStreamer?,
+        tickBound: Int = 200,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let streamer else { return XCTFail("No streamer to drain.", file: file, line: line) }
+        var ticks = 0
+        while streamer.advanceIncrementalMount() > 0, ticks < tickBound {
+            ticks += 1
+        }
+        XCTAssertLessThan(ticks, tickBound, "Incremental mount did not converge.", file: file, line: line)
+        XCTAssertEqual(streamer.pendingMountCount, 0, "Drain finished with chunks still queued.", file: file, line: line)
+    }
+
     // MARK: - Bounded resident node count across a long pan
 
     /// Pans the camera far beyond any single chunk (hundreds of tiles, both
@@ -48,11 +72,11 @@ final class ChunkStreamingGroundTests: XCTestCase {
 
         for step in stride(from: 0, through: 600, by: 9) {
             streamer.updateCamera(worldPosition: TilePoint(x: Double(step), y: Double(step) * 0.5))
-            // CYBERPUN-17-4-t4: the very first call only mounts the
-            // quickstart ring synchronously; flush so every step (including
-            // the first) asserts the steady-state bounded count this test is
-            // about, rather than the deliberately-partial first-mount state.
-            streamer.flushPendingMounts()
+            // CYBERPUN-17-4-t4: each call only mounts the quickstart ring
+            // synchronously; drain through the production per-frame path so
+            // every step asserts the steady-state bounded count this test is
+            // about, rather than the deliberately-partial mid-mount state.
+            drainIncrementalMount(streamer)
 
             XCTAssertEqual(
                 streamer.mountedNodeCount, boundedNodeCount,
@@ -83,10 +107,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
         let streamer = GroundPlaneStreamer(seed: seed, worldLayer: worldLayer)
 
         streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
-        // CYBERPUN-17-4-t4: the first call defers most of the window; flush
-        // to reach the full initial mount this test's identity-reuse claim
-        // is built on.
-        streamer.flushPendingMounts()
+        // CYBERPUN-17-4-t4: the call defers most of the window; drain to
+        // reach the full initial mount this test's identity-reuse claim is
+        // built on.
+        drainIncrementalMount(streamer)
         var everSeenIdentities = Set(worldLayer.children.map(ObjectIdentifier.init))
         XCTAssertEqual(everSeenIdentities.count, boundedNodeCount, "The initial full mount must fill the window.")
 
@@ -126,10 +150,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
         let waypoints: [Double] = [0, 120, -80, 200, -150, 40, 0]
         for x in waypoints {
             streamer.updateCamera(worldPosition: TilePoint(x: x, y: 0))
-            // CYBERPUN-17-4-t4: flush every step so the identity-reuse claim
-            // is checked against the steady state, not a mid-mount snapshot
-            // of the very first (deliberately partial) call.
-            streamer.flushPendingMounts()
+            // CYBERPUN-17-4-t4: drain every step so the identity-reuse claim
+            // is checked against the steady state, not a deliberately partial
+            // mid-mount snapshot.
+            drainIncrementalMount(streamer)
             everSeenIdentities.formUnion(worldLayer.children.map(ObjectIdentifier.init))
         }
 
@@ -154,10 +178,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
 
         for step in stride(from: -160, through: 160, by: 5) {
             streamer.updateCamera(worldPosition: TilePoint(x: Double(step), y: Double(-step) * 0.75))
-            // CYBERPUN-17-4-t4: flush so every step's "mounted tiles must
+            // CYBERPUN-17-4-t4: drain so every step's "mounted tiles must
             // equal resident tiles" check runs against the fully-mounted
-            // window, not the deliberately-partial first-mount state.
-            streamer.flushPendingMounts()
+            // window, not the deliberately-partial mid-mount state.
+            drainIncrementalMount(streamer)
 
             let expectedTiles = expectedResidentTiles(for: streamer.streaming)
 
@@ -230,6 +254,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
         for step in stride(from: 0.0, through: Double(Chunk.size * 6), by: 3) {
             let position = TilePoint(x: step, y: step * 0.5)
             plane.updateCamera(worldPosition: position)
+            // CYBERPUN-17-4-t4: mounting is deferred past the quickstart
+            // ring, so drain through the production per-frame path before
+            // asserting the full-window count.
+            drainIncrementalMount(plane)
             endingChunk = chunk(containing: position)
 
             XCTAssertTrue(
@@ -266,10 +294,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
         let streamer = GroundPlaneStreamer(seed: seed, worldLayer: worldLayer)
 
         streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
-        // CYBERPUN-17-4-t4: flush so `firstMount` is the full window this
+        // CYBERPUN-17-4-t4: drain so `firstMount` is the full window this
         // test's recycling claim is about, not the quickstart-only partial
-        // state the first call now leaves mid-mount.
-        streamer.flushPendingMounts()
+        // state the call now leaves mid-mount.
+        drainIncrementalMount(streamer)
         let firstMount = Set(worldLayer.children.map(ObjectIdentifier.init))
         XCTAssertEqual(firstMount.count, boundedNodeCount)
 
@@ -283,6 +311,9 @@ final class ChunkStreamingGroundTests: XCTestCase {
         )
 
         streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        // CYBERPUN-17-4-t4: the re-mount is incremental too, so let the
+        // per-frame drain finish before comparing node identities.
+        drainIncrementalMount(streamer)
         let secondMount = Set(worldLayer.children.map(ObjectIdentifier.init))
 
         XCTAssertEqual(secondMount.count, boundedNodeCount)
@@ -301,10 +332,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
     func test_restartingARunWithTheSameSeed_keepsTheStreamer_soNoWindowIsReallocated() {
         let scene = GameScene(size: CGSize(width: 400, height: 800))
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
-        // CYBERPUN-17-4-t4: flush so `firstNodes` is the steady state RUN
+        // CYBERPUN-17-4-t4: drain so `firstNodes` is the steady state RUN
         // AGAIN is being compared against, not a mid-mount snapshot from the
         // deliberately-partial first entry.
-        scene.groundPlane?.flushPendingMounts()
+        drainIncrementalMount(scene.groundPlane)
         let firstPlane = scene.groundPlane
         let firstNodes = Set(scene.worldLayer.children.map(ObjectIdentifier.init))
         XCTAssertNotNil(firstPlane)
@@ -334,11 +365,11 @@ final class ChunkStreamingGroundTests: XCTestCase {
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
         scene.worldSeed = WorldSeed(rawValue: seed.rawValue &+ 1)
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
-        // CYBERPUN-17-4-t4: the replacement streamer's first mount is also
-        // only the quickstart ring; flush so the assertions below check the
-        // steady state ("no stale ground, and the new city is fully there"),
+        // CYBERPUN-17-4-t4: the replacement streamer's mount is also only the
+        // quickstart ring; drain so the assertions below check the steady
+        // state ("no stale ground, and the new city is fully there"),
         // matching what this test asserted before the incremental-mount fix.
-        scene.groundPlane?.flushPendingMounts()
+        drainIncrementalMount(scene.groundPlane)
 
         XCTAssertFalse(
             scene.groundPlane === firstPlane,
@@ -356,7 +387,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
     /// Draining the incremental-mount queue tick by tick (the stand-in for
     /// `GameScene.update(_:)` calling `advanceIncrementalMount()` once per
     /// frame) must never mount the same tile twice, checked at *every* tick
-    /// of the drain rather than only once it finishes \u2014 the "no node ever
+    /// of the drain rather than only once it finishes — the "no node ever
     /// double-mounted or dropped" half of this story's fix.
     func test_incrementalMountDrain_neverDoubleMountsATile_atAnyTickOfTheDrain() {
         let worldLayer = SKNode()

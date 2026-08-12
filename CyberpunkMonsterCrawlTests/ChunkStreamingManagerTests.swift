@@ -108,6 +108,66 @@ final class ChunkStreamingManagerTests: XCTestCase {
         XCTAssertFalse(ChunkStreamingManager.coversViewport(widthPoints: 10_000, heightPoints: 10_000))
     }
 
+    // MARK: - The quickstart ring's coverage claim is checked, not prose (CYBERPUN-17-4-t4)
+
+    func test_quickstartRing_coversAPortraitPhoneViewport() {
+        // `GroundPlaneStreamer` mounts only this ring synchronously and defers
+        // everything beyond it, so the ring is what may already be on screen.
+        // If it did not cover the viewport, the frames the drain takes would
+        // show unpainted bands rather than a street. Portrait is the binding
+        // case: iso tiles are 2:1, so the vertical axis dominates.
+        let phone = ChunkStreamingManager.phoneViewportPoints
+
+        XCTAssertTrue(
+            ChunkStreamingManager.coversViewport(
+                widthPoints: phone.width,
+                heightPoints: phone.height,
+                radius: ChunkStreamingManager.quickstartRadius
+            ),
+            "The quickstart ring must cover a portrait phone viewport in the worst case"
+        )
+        XCTAssertTrue(
+            ChunkStreamingManager.coversViewport(
+                widthPoints: phone.height,
+                heightPoints: phone.width,
+                radius: ChunkStreamingManager.quickstartRadius
+            ),
+            "The quickstart ring must cover the same phone viewport in landscape too"
+        )
+    }
+
+    func test_quickstartRadius_isTheSmallestRadiusThatCoversAPortraitPhone() {
+        // The other half of the claim on `quickstartRadius`: radius 1 (an
+        // 8-tile guaranteed margin) does *not* cover a portrait phone
+        // (196.5/768 + 426/384 = 1.37 > 1), which is why the constant is 2 and
+        // not 1. Without this, "radius 2 covers" would be satisfiable by any
+        // larger radius and the constant would drift upward unchecked.
+        let phone = ChunkStreamingManager.phoneViewportPoints
+
+        XCTAssertFalse(
+            ChunkStreamingManager.coversViewport(
+                widthPoints: phone.width,
+                heightPoints: phone.height,
+                radius: ChunkStreamingManager.quickstartRadius - 1
+            ),
+            "A radius one smaller than quickstartRadius should not cover the phone viewport"
+        )
+        XCTAssertEqual(
+            ChunkStreamingManager.quickstartRadius, 2,
+            "quickstartRadius is the smallest radius covering phoneViewportPoints"
+        )
+    }
+
+    func test_quickstartRing_isStrictlySmallerThanTheResidentWindow() {
+        // The ring only exists to bound the synchronous mount, so it must stay
+        // well inside the resident window; if the two ever coincided, nothing
+        // would be deferred and the PLAY-tap stall would be back.
+        XCTAssertLessThan(ChunkStreamingManager.quickstartRadius, ChunkStreamingManager.residentRadius)
+
+        let quickstartSide = ChunkStreamingManager.quickstartRadius * 2 + 1
+        XCTAssertLessThan(quickstartSide * quickstartSide, ChunkStreamingManager.residentWindowSize)
+    }
+
     // MARK: - Evicted chunks regenerate identically to pure generation
 
     func test_evictedChunk_whenRevisited_regeneratesIdenticallyToPureChunkGeneration() {

@@ -6,8 +6,8 @@ import SpriteKit
 /// resident chunk window.
 ///
 /// `GroundTileRenderer.node(for:at:)` is a factory, and a factory with no
-/// caller renders nothing in a real build \u2014 the story's headline AC (\"render
-/// every generated ground cell\", product gate 4: *the city has to read as a
+/// caller renders nothing in a real build — the story's headline AC ("render
+/// every generated ground cell", product gate 4: *the city has to read as a
 /// city*) is only observable once something parents those nodes into the
 /// scene. This is that something, and it is deliberately the *smallest* thing
 /// that makes the ground observable on device rather than a full world
@@ -19,7 +19,7 @@ import SpriteKit
 /// resident chunk; when `ChunkStreamingManager` evicts a chunk, this drops
 /// that chunk's nodes in the same pass. The resident window is a fixed size
 /// (`ChunkStreamingManager.residentWindowSize`), so the mounted node count is
-/// bounded however far the camera roams \u2014 the scene-graph counterpart of AC8,
+/// bounded however far the camera roams — the scene-graph counterpart of AC8,
 /// and pinned by `GroundPlaneStreamerTests`.
 ///
 /// Nodes are parented **directly** under `worldLayer` (no intermediate
@@ -28,38 +28,57 @@ import SpriteKit
 /// intermediate node with any non-zero `zPosition` would silently shift every
 /// ground tile out of the depth scheme `DepthModel` computed.
 ///
-/// **`CYBERPUN-17-4-t4`: the very first mount is incremental, not one giant
-/// synchronous pass.** A runtime probe reported "PLAY tapped, screen never
-/// visibly left the menu"; the cause was that the *first* `updateCamera` call
-/// on a brand-new streamer used to build/mount every tile of the entire
-/// resident window (up to `ChunkStreamingManager.residentWindowSize *
-/// Chunk.size * Chunk.size` = 3,136 `SKSpriteNode`s) inside the same call
-/// stack as the PLAY tap \u2014 real, uninterrupted main-thread work with no
-/// yield point. Now that very first call mounts only the
-/// `ChunkStreamingManager.quickstartRadius` ring around the camera
-/// synchronously (enough to fill a typical viewport, so the next rendered
-/// frame already shows a street) and queues the remainder of the window in
-/// `pendingMountQueue`, drained a few chunks at a time by
-/// `advanceIncrementalMount()` \u2014 which `GameScene.update(_:)` calls every
-/// frame. Every call *after* the first behaves exactly as before: any newly
-/// resident chunk (from ordinary panning) is mounted immediately, and it also
-/// folds in anything still sitting in `pendingMountQueue` from an earlier
-/// deferred first mount (the RUN AGAIN path: the same streamer instance is
-/// kept across a restart, so its second-ever `updateCamera` call drains
-/// whatever the first one queued). `flushPendingMounts()` mounts the queue's
-/// remainder synchronously on demand for a caller (or a test) that needs the
-/// full window to exist right now rather than waiting for further ticks.
+/// ## `CYBERPUN-17-4-t4`: mounting is incremental, on every call
+///
+/// A runtime probe reported "PLAY tapped, screen never visibly left the
+/// menu"; the cause was that `updateCamera` used to build/mount every tile of
+/// the entire resident window (up to
+/// `ChunkStreamingManager.residentWindowSize * Chunk.size * Chunk.size` =
+/// 3,136 `SKSpriteNode`s) inside the same call stack as the PLAY tap — real,
+/// uninterrupted main-thread work with no yield point.
+///
+/// The rule now is uniform and has no "first call" special case:
+/// - Chunks within `ChunkStreamingManager.quickstartRadius` of the camera
+///   **mount synchronously**. That ring is sized (and test-pinned) to cover
+///   the viewport, so it is the part that may already be on screen and
+///   therefore the part that cannot be deferred without a visible hole.
+/// - Everything beyond it — off-screen by construction — is appended to
+///   `pendingMountQueue` and mounted a few chunks at a time by
+///   `advanceIncrementalMount()`, which `GameScene.update(_:)` calls every
+///   frame.
+///
+/// Applying the same split to *every* call, rather than only the first, is
+/// deliberate. An earlier revision of this fix mounted the whole window
+/// synchronously on every call after the first, which was harmless only
+/// because nothing in Release calls `updateCamera` a second time today —
+/// `CYBERPUN-17-7` ("wire the thumbstick, player movement and camera") makes
+/// camera-follow call it *every frame*, and the very next frame after the
+/// quickstart mount would have folded the entire deferred remainder into one
+/// frame, reinstating exactly the stall this type exists to avoid. The
+/// bounded-synchronous-work property has to hold for the frame-driven camera
+/// too, so it is stated per call rather than per instance.
+///
+/// **What is deferred is mounting, not generation.** `updateCamera` calls
+/// `ChunkStreamingManager.updateCamera` first, and that generates every chunk
+/// of the resident window (49 chunks x `Chunk.size`^2 tiles, plus their
+/// `LotReservationStore` decisions) synchronously, in this call. Only
+/// `SKSpriteNode` creation/`addChild` for the chunks outside the quickstart
+/// ring is deferred. So this fix removes the scene-graph half of the PLAY-tap
+/// stall and not the world-generation half; anyone debugging a residual stall
+/// on entry to `.gameplay` should look at generation next (deferring
+/// residency itself — widening from the quickstart ring to `residentRadius`
+/// as the queue drains — is the shape that would cover both halves).
 final class GroundPlaneStreamer {
 
     /// Streams the chunk window this mount follows. Owned here (rather than
     /// injected from the scene) so the ground plane has exactly one source of
-    /// truth for \"which tiles exist right now\".
+    /// truth for "which tiles exist right now".
     let streaming: ChunkStreamingManager
 
     /// The world seed `streaming` generates from. Exposed so a caller
     /// restarting a run (`GameScene.startGroundPlane()`) can tell whether the
-    /// mounted city is still the right one and keep this streamer \u2014 along
-    /// with its `pool` and its already-generated chunks \u2014 instead of building
+    /// mounted city is still the right one and keep this streamer — along
+    /// with its `pool` and its already-generated chunks — instead of building
     /// a replacement whose pool starts empty.
     let seed: WorldSeed
 
@@ -72,33 +91,30 @@ final class GroundPlaneStreamer {
     private var nodesByChunk: [ChunkCoordinate: [SKSpriteNode]] = [:]
 
     /// Chunks that are currently resident (`streaming.residentChunks`) but
-    /// not yet mounted, in the order they should be mounted \u2014 populated by
-    /// the very first `updateCamera` call's quickstart split, and drained by
-    /// `advanceIncrementalMount()` / `flushPendingMounts()`. Empty once the
-    /// deferred remainder has fully landed, and for the entire lifetime of a
-    /// streamer whose first call never needed to defer anything (there is
-    /// nothing to defer once a full mount has already happened once).
+    /// not yet mounted, nearest-to-the-camera first — everything outside the
+    /// quickstart ring, queued by `updateCamera` and drained by
+    /// `advanceIncrementalMount()`. Empty once the deferred remainder has
+    /// fully landed, which in steady state is the normal condition.
     private var pendingMountQueue: [ChunkCoordinate] = []
 
-    /// Whether `updateCamera` has ever been called on this instance. The
-    /// quickstart/incremental split only applies to that very first call \u2014
-    /// every later call (ordinary panning, or a RUN AGAIN that reuses this
-    /// same streamer) mounts immediately, exactly as before `CYBERPUN-17-4-t4`.
-    private var hasPerformedInitialMount = false
+    /// Chunks currently waiting for the incremental mount. Exposed so tests
+    /// can assert the deferral itself (and its drain) rather than only its
+    /// visible consequences.
+    var pendingMountCount: Int { pendingMountQueue.count }
 
     /// How many queued chunks `advanceIncrementalMount()` mounts per call.
-    /// `GameScene.update(_:)` calls it once per frame, so this is also \"how
-    /// many chunks stream in per frame\" while the deferred remainder drains.
+    /// `GameScene.update(_:)` calls it once per frame, so this is also "how
+    /// many chunks stream in per frame" while a deferred remainder drains.
     /// Small enough that a single tick's mounting work cannot itself become a
     /// visible stall (each chunk is `Chunk.size * Chunk.size` = 64 sprite
-    /// configurations \u2014 a small fraction of the ~3,136-node pass this exists
+    /// configurations — a small fraction of the ~3,136-node pass this exists
     /// to avoid), large enough that the full window still lands within a
     /// handful of frames.
     static let defaultChunksPerIncrementalMountTick = 6
 
-    /// Nodes this mount has given up \u2014 because their chunk streamed out of
+    /// Nodes this mount has given up — because their chunk streamed out of
     /// the resident window, or because `unmountAll()` tore the whole window
-    /// down \u2014 held here for reuse rather than deallocated.
+    /// down — held here for reuse rather than deallocated.
     ///
     /// `CYBERPUN-17-4-t3`: without this, every chunk that streams in would
     /// allocate a fresh `SKSpriteNode` per tile, so panning far enough would
@@ -107,19 +123,26 @@ final class GroundPlaneStreamer {
     /// at once.
     ///
     /// **The invariant, scoped to what actually holds.** For a given
-    /// `GroundPlaneStreamer` instance, after the first `updateCamera` fills
-    /// the window from empty (whether that happens in one call or is spread
-    /// across the incremental mount this file adds in `CYBERPUN-17-4-t4`), no
-    /// further `SKSpriteNode` is allocated by either supported call sequence:
+    /// `GroundPlaneStreamer` instance, after the window has been filled from
+    /// empty once (which, since `CYBERPUN-17-4-t4`, is spread across the
+    /// incremental mount rather than done in a single call), no further
+    /// `SKSpriteNode` is allocated by either supported call sequence:
     /// - *Panning.* Eviction runs (in `synchroniseWithResidentChunks`)
-    ///   *before* the mount pass of the same `updateCamera` call, and the
-    ///   resident window is a fixed size, so the nodes freed by eviction on
-    ///   any call are exactly what the mount pass needs that same call.
+    ///   *before* anything is mounted or queued in the same `updateCamera`
+    ///   call, and the resident window is a fixed size, so the nodes freed by
+    ///   eviction on any call are exactly what that call's mount — and the
+    ///   drain of what it queued — needs.
     /// - *`unmountAll()` then `updateCamera`* (what a restarted run does).
     ///   `unmountAll()` returns every node it detaches to this pool rather
     ///   than dropping it, and it leaves `streaming.residentChunks` alone, so
     ///   the re-mount asks for exactly the window's worth the pool is now
     ///   holding. Both paths are pinned by `ChunkStreamingGroundTests`.
+    ///
+    /// Because mounting is deferred but eviction is not, the pool now holds a
+    /// chunk's nodes for the few frames between "streamed out" and "the drain
+    /// reaches the chunk that reuses them" instead of handing them over
+    /// within the same call. That is still bounded by one resident window's
+    /// worth, which is what the invariant claims.
     ///
     /// The invariant is per instance and cannot be otherwise: a brand-new
     /// `GroundPlaneStreamer` starts with an empty pool by construction, so a
@@ -138,7 +161,7 @@ final class GroundPlaneStreamer {
     /// allocations).
     var pooledNodeCount: Int { pool.count }
 
-    /// Defensive cap on `pool`'s size \u2014 see `pool`'s doc comment for why it
+    /// Defensive cap on `pool`'s size — see `pool`'s doc comment for why it
     /// should never need to hold more than one resident window's worth.
     private static var maxPoolSize: Int { ChunkStreamingManager.residentWindowSize * Chunk.size * Chunk.size }
 
@@ -156,33 +179,31 @@ final class GroundPlaneStreamer {
     var mountedNodeCount: Int { nodesByChunk.values.reduce(0) { $0 + $1.count } }
 
     /// Moves the camera to `worldPosition` (tile space) and brings the scene
-    /// graph back in step with chunk residency: mounts a node per tile of
-    /// every newly resident chunk, and removes the nodes of every chunk that
-    /// was just evicted.
+    /// graph back in step with chunk residency: removes the nodes of every
+    /// chunk that was just evicted, mounts every newly resident chunk inside
+    /// the `ChunkStreamingManager.quickstartRadius` ring, and queues the rest
+    /// for `advanceIncrementalMount()`.
     ///
-    /// Idempotent for a camera that hasn't left its chunk \u2014 the streaming
+    /// Idempotent for a camera that hasn't left its chunk — the streaming
     /// manager's resident set is unchanged, so no node is rebuilt.
     ///
-    /// The very first call on a given instance mounts only the
-    /// `ChunkStreamingManager.quickstartRadius` ring synchronously and queues
-    /// the rest for `advanceIncrementalMount()` \u2014 see the type doc comment
-    /// for why. Every later call mounts immediately, exactly as before
-    /// `CYBERPUN-17-4-t4`.
+    /// The synchronous work this call can do is bounded by the quickstart
+    /// ring, on *every* call and not just the first, so a per-frame
+    /// camera-follow (`CYBERPUN-17-7`) cannot turn one frame into a
+    /// full-window mount. Note that `streaming.updateCamera` below still
+    /// *generates* the whole resident window synchronously; only mounting is
+    /// deferred (see this type's doc comment).
     func updateCamera(worldPosition: TilePoint) {
-        let isFirstEverCall = !hasPerformedInitialMount
-        hasPerformedInitialMount = true
-
         streaming.updateCamera(worldPosition: worldPosition)
-        synchroniseWithResidentChunks(cameraWorldPosition: worldPosition, isFirstEverCall: isFirstEverCall)
+        synchroniseWithResidentChunks(cameraWorldPosition: worldPosition)
     }
 
     /// Mounts up to `maxChunksPerTick` chunks still waiting in
     /// `pendingMountQueue`, synchronously. `GameScene.update(_:)` calls this
-    /// every frame (in Release builds too, not just DEBUG \u2014 this is a
-    /// correctness fix, not scaffolding) so the chunks the first
-    /// `updateCamera` call deferred land over the next few frames rather than
-    /// never. A no-op once the queue is empty, so it is always safe to call
-    /// unconditionally.
+    /// every frame (in Release builds too, not just DEBUG — this is a
+    /// correctness fix, not scaffolding) so the chunks `updateCamera`
+    /// deferred land over the next few frames rather than never. A no-op once
+    /// the queue is empty, so it is always safe to call unconditionally.
     ///
     /// Returns the number of chunks actually mounted this call, mainly for
     /// tests that want to bound how many ticks a full drain takes.
@@ -197,30 +218,14 @@ final class GroundPlaneStreamer {
             let coordinate = pendingMountQueue.removeFirst()
             // The chunk may have streamed back out of residency (the camera
             // kept moving) before its turn came up, or may already have been
-            // mounted by an intervening non-incremental `updateCamera` call
-            // (see `synchroniseWithResidentChunks`'s \"else\" branch, which
-            // folds the queue in). Either way, skip it rather than double-
-            // mount or resurrect an evicted chunk's nodes.
+            // mounted by an intervening `updateCamera` call that found it
+            // inside the quickstart ring. Either way, skip it rather than
+            // double-mount or resurrect an evicted chunk's nodes.
             guard streaming.residentChunks[coordinate] != nil, nodesByChunk[coordinate] == nil else { continue }
             mountChunk(coordinate, into: worldLayer)
             mountedThisTick += 1
         }
         return mountedThisTick
-    }
-
-    /// Mounts every chunk still waiting in `pendingMountQueue` right now,
-    /// synchronously, draining the queue completely in one call. Exists for a
-    /// caller (or a test) that needs the full resident window to exist
-    /// immediately rather than waiting for further `advanceIncrementalMount()`
-    /// ticks \u2014 the same full-window guarantee the mount used to make on every
-    /// call, before `CYBERPUN-17-4-t4` made the *first* call incremental.
-    func flushPendingMounts() {
-        guard let worldLayer else { return }
-        for coordinate in pendingMountQueue {
-            guard streaming.residentChunks[coordinate] != nil, nodesByChunk[coordinate] == nil else { continue }
-            mountChunk(coordinate, into: worldLayer)
-        }
-        pendingMountQueue.removeAll()
     }
 
     /// Removes every mounted ground node from the scene graph. Called when a
@@ -231,13 +236,13 @@ final class GroundPlaneStreamer {
     /// call does not touch `streaming`, so `residentChunks` is unchanged and
     /// the next `updateCamera` re-mounts the very same window. Dropping them
     /// would make that re-mount allocate a full resident window's worth of
-    /// `SKSpriteNode`s \u2014 precisely the churn the pool exists to remove \u2014 and
+    /// `SKSpriteNode`s — precisely the churn the pool exists to remove — and
     /// would leave `pool`'s stated invariant false for a supported sequence.
     ///
     /// Also clears `pendingMountQueue`: after every mounted node is torn
-    /// down, \"pending\" is meaningless \u2014 the following `updateCamera` call is
-    /// never the *first* one on this instance (that already happened), so it
-    /// mounts everything immediately anyway, per `synchroniseWithResidentChunks`.
+    /// down, "pending" is meaningless — the next `updateCamera` re-derives
+    /// the whole split (quickstart ring now, remainder queued) from the
+    /// camera position it is given.
     func unmountAll() {
         for nodes in nodesByChunk.values {
             for node in nodes {
@@ -251,16 +256,16 @@ final class GroundPlaneStreamer {
         pendingMountQueue.removeAll()
     }
 
-    /// Adds nodes for resident-but-unmounted chunks and removes nodes for
-    /// mounted-but-evicted ones.
+    /// Removes nodes for mounted-but-evicted chunks, mounts the resident
+    /// chunks inside the quickstart ring, and queues the resident chunks
+    /// outside it for `advanceIncrementalMount()`.
     ///
-    /// Eviction runs **before** the mount pass so a chunk that streamed out
-    /// this call gives its nodes to `pool` in time for the mount pass below
-    /// to recycle them for a chunk streaming in this same call \u2014 that
-    /// ordering is what makes `pool` stay effectively empty in steady state
-    /// (see `pool`'s doc comment) instead of merely bounded by
-    /// `maxPoolSize`.
-    private func synchroniseWithResidentChunks(cameraWorldPosition: TilePoint, isFirstEverCall: Bool) {
+    /// Eviction runs **before** any mounting so a chunk that streamed out
+    /// this call gives its nodes to `pool` in time to be recycled by the
+    /// mount (or the drain of what this call queues) — that ordering is what
+    /// keeps `pool` bounded by one window's worth (see `pool`'s doc comment)
+    /// rather than merely by `maxPoolSize`.
+    private func synchroniseWithResidentChunks(cameraWorldPosition: TilePoint) {
         guard let worldLayer else { return }
 
         // Snapshot the keys: the loop body mutates `nodesByChunk`.
@@ -278,48 +283,45 @@ final class GroundPlaneStreamer {
         // residency before its turn came up must not linger in the queue.
         pendingMountQueue.removeAll { streaming.residentChunks[$0] == nil }
 
-        let newlyUnmounted = streaming.residentChunks.keys.filter {
-            nodesByChunk[$0] == nil && !pendingMountQueue.contains($0)
-        }
-        guard !newlyUnmounted.isEmpty || !pendingMountQueue.isEmpty else { return }
+        let cameraChunk = ChunkStreamingManager.chunkCoordinate(containing: cameraWorldPosition)
+        let quickstartRing = ChunkStreamingManager.chunkCoordinates(
+            withinRadius: ChunkStreamingManager.quickstartRadius,
+            of: cameraChunk
+        )
 
-        if isFirstEverCall {
-            // Mount only the viewport-covering ring now, so the very next
-            // rendered frame already shows a street; queue the remainder for
-            // `advanceIncrementalMount()` to bring in over the next few
-            // frames rather than blocking this call \u2014 the whole point of
-            // `CYBERPUN-17-4-t4`.
-            let cameraChunk = ChunkStreamingManager.chunkCoordinate(containing: cameraWorldPosition)
-            let quickstartRing = ChunkStreamingManager.chunkCoordinates(
-                withinRadius: ChunkStreamingManager.quickstartRadius,
-                of: cameraChunk
-            )
-            let quickstart = newlyUnmounted.filter { quickstartRing.contains($0) }
-            let remainder = newlyUnmounted.filter { !quickstartRing.contains($0) }
-
+        // Anything inside the ring may be on screen right now, so it is
+        // mounted in this call even if it was previously queued as an
+        // off-screen remainder (the camera has since moved towards it).
+        let quickstart = streaming.residentChunks.keys
+            .filter { nodesByChunk[$0] == nil && quickstartRing.contains($0) }
+        if !quickstart.isEmpty {
+            pendingMountQueue.removeAll { quickstartRing.contains($0) }
             for coordinate in quickstart {
                 mountChunk(coordinate, into: worldLayer)
             }
-            pendingMountQueue.append(contentsOf: remainder)
-        } else {
-            // Steady state (ordinary panning, or a RUN AGAIN reusing this
-            // streamer): mount anything newly resident immediately, and fold
-            // in anything still waiting from an earlier deferred first mount
-            // \u2014 exactly the full-window-per-call behaviour this type had
-            // before `CYBERPUN-17-4-t4`, for every call after the first.
-            for coordinate in newlyUnmounted {
-                mountChunk(coordinate, into: worldLayer)
-            }
-            for coordinate in pendingMountQueue where streaming.residentChunks[coordinate] != nil {
-                mountChunk(coordinate, into: worldLayer)
-            }
-            pendingMountQueue.removeAll()
         }
+
+        // Everything else is beyond the viewport by construction, so it can
+        // land over the next few frames instead of this call — nearest first,
+        // so the chunks the camera is most likely to reach next are the ones
+        // that arrive soonest.
+        let queued = Set(pendingMountQueue)
+        let remainder = streaming.residentChunks.keys
+            .filter { nodesByChunk[$0] == nil && !quickstartRing.contains($0) && !queued.contains($0) }
+            .sorted { chebyshevDistance($0, cameraChunk) < chebyshevDistance($1, cameraChunk) }
+        pendingMountQueue.append(contentsOf: remainder)
+    }
+
+    /// Chunk-space Chebyshev distance, the same metric `ChunkStreamingManager`
+    /// shapes its square windows with — used only to order the incremental
+    /// mount queue nearest-first.
+    private func chebyshevDistance(_ lhs: ChunkCoordinate, _ rhs: ChunkCoordinate) -> Int {
+        max(abs(lhs.x - rhs.x), abs(lhs.y - rhs.y))
     }
 
     /// Mounts every tile of `coordinate`'s chunk into `worldLayer`, recording
     /// the mounted nodes under `coordinate` in `nodesByChunk`. Assumes
-    /// `coordinate` is currently resident and not already mounted \u2014 every
+    /// `coordinate` is currently resident and not already mounted — every
     /// call site above checks both before calling this.
     private func mountChunk(_ coordinate: ChunkCoordinate, into worldLayer: SKNode) {
         guard let chunk = streaming.residentChunks[coordinate] else { return }
