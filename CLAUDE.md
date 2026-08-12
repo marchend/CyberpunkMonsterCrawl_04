@@ -66,8 +66,10 @@ CyberpunkMonsterCrawl/
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
+  Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, Double math with a CGFloat cast only at the boundary
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
+  IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
   ImagePixelSampling.swift                 shared alpha/RGBA decode helper for the asset gates
   AtlasCatalogTests.swift                  catalog-existence + alpha-channel gate for the 10 atlas sheets
@@ -188,6 +190,13 @@ docs/bootstrap.md                          original spec (source of truth)
   paint over `worldLayer`. Menu/death/high-scores backdrops are full-bleed on
   purpose (they hide the world); the scene's own `backgroundColor` supplies
   the dark base behind gameplay
+- Isometric coordinate transform: `IsometricProjection.tileToScreen`/
+  `screenToTile` for 96×48 tile diamonds (`screenX = (tileX - tileY) * 48`,
+  `screenY = (tileX + tileY) * 24`, and its exact algebraic inverse), Double
+  arithmetic throughout with a single `CGFloat` cast at the boundary
+  (implemented — `Sources/World/IsometricProjection.swift`,
+  `IsometricProjectionTests`). No production consumer places a tile-space
+  node via it yet; that lands with the ground-plane/depth-model PR
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
   rounded tile (deferred — future PR)
