@@ -56,10 +56,16 @@ final class ScreensTests: XCTestCase {
 
         XCTAssertEqual(menu.playButton.accessibilityIdentifier, "menu.playButton")
         XCTAssertEqual(menu.highScoresButton.accessibilityIdentifier, "menu.highScoresButton")
-        XCTAssertTrue(
-            menu.node.children.contains { $0.accessibilityIdentifier == "menu.container" },
+        let marker = menu.node.children.first { $0.accessibilityIdentifier == "menu.container" }
+        XCTAssertNotNil(
+            marker,
             "the menu must expose a container accessibility anchor independent of any one button"
         )
+        // As with `gameplay.container`: the identifier is Swift-side
+        // bookkeeping only (see `SKNodeAccessibilityIdentifier`), so the label
+        // is what any UI test or VoiceOver can actually observe.
+        XCTAssertTrue(marker?.isAccessibilityElement == true)
+        XCTAssertEqual(marker?.accessibilityLabel, "Menu")
     }
 
     func test_menuScreenNode_playButton_runsTheSuppliedClosure() {
@@ -132,12 +138,29 @@ final class ScreensTests: XCTestCase {
 
     // MARK: - GameplayScreenNode
 
+    /// The identifier assertion alone would only prove
+    /// `SKNodeAccessibilityIdentifier` stored and handed back a string:
+    /// `SKNode` has no real `accessibilityIdentifier`, so that value never
+    /// reaches UIKit and XCUITest can never match it. The marker must also be
+    /// an accessibility element carrying an `accessibilityLabel`, because the
+    /// label is the property SpriteKit genuinely forwards and therefore the
+    /// only thing `CyberpunkMonsterCrawlUITests` can actually query when it
+    /// checks that PLAY landed on a real screen.
     func test_gameplayScreenNode_exposesAContainerAccessibilityAnchor() {
         let gameplay = GameplayScreenNode()
 
-        XCTAssertTrue(
-            gameplay.node.children.contains { $0.accessibilityIdentifier == "gameplay.container" },
+        let marker = gameplay.node.children.first { $0.accessibilityIdentifier == "gameplay.container" }
+        XCTAssertNotNil(
+            marker,
             "a UI test must be able to observe PLAY landing on a real, mounted gameplay screen"
+        )
+        XCTAssertTrue(
+            marker?.isAccessibilityElement == true,
+            "the container marker must be an accessibility element or UIKit will not surface it at all"
+        )
+        XCTAssertEqual(
+            marker?.accessibilityLabel, "Gameplay",
+            "the UI test matches this marker by accessibility label - the identifier is invisible to XCUITest"
         )
     }
 

@@ -76,6 +76,86 @@ final class CityLatticeGeneratorTests: XCTestCase {
         }
     }
 
+    // MARK: - Intersection sub-classification
+
+    /// The sub-kind inside a 3x3 crossing is a data-model decision the
+    /// ground-plane renderer cannot undo, so it is pinned here by name:
+    /// centre = driving lane, the four mouths = painted stop line, the four
+    /// corners = the sidewalk band continuing through the junction. Swept
+    /// over crossings on both sides of the origin (period offsets are
+    /// hard-coded from the ticket's stated 6/3 constants, deliberately not
+    /// read off the generator).
+    func test_classify_crossing_pinsCentreLaneMouthAndCornerSubKinds() {
+        // Local (0, 0) of the 3x3 crossing block: tile (3, 3) modulo the
+        // 6-tile period. `-3` and `-9` exercise the negative-side `mod()`
+        // phase, `3` and `9` the positive side.
+        let crossingOrigins = [(3, 3), (3, -3), (-3, 3), (-3, -3), (9, -9), (-9, 9)]
+
+        /// Expected kind per (xBandPosition, yBandPosition) inside a crossing.
+        func expectedKind(xBand: Int, yBand: Int) -> TileKind {
+            let xIsLane = (xBand == 1)
+            let yIsLane = (yBand == 1)
+            if xIsLane && yIsLane { return .asphalt }
+            return (xIsLane || yIsLane) ? .junctionStopLine : .kerbSidewalk
+        }
+
+        for seed in someSeeds(5) {
+            for (originX, originY) in crossingOrigins {
+                for xBand in 0..<3 {
+                    for yBand in 0..<3 {
+                        let tileX = originX + xBand
+                        let tileY = originY + yBand
+                        let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
+
+                        XCTAssertTrue(
+                            isStreetBand(tileX) && isStreetBand(tileY),
+                            "(\(tileX), \(tileY)) was expected to be a crossing tile - check the test's offsets"
+                        )
+                        XCTAssertEqual(
+                            info.kind, expectedKind(xBand: xBand, yBand: yBand),
+                            "Crossing tile (\(tileX), \(tileY)) [band (\(xBand), \(yBand))] under seed "
+                                + "\(seed.rawValue) was \(info.kind)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// The consequence the renderer cares about: the `kerbSidewalk` ring
+    /// around a 3x3 block interior is unbroken, corners included, so the
+    /// corridor's "asphalt flanked by sidewalks" reading survives every
+    /// junction.
+    func test_classify_sidewalkRingAroundABlockInterior_isUnbrokenIncludingCorners() {
+        let seed = WorldSeed(rawValue: 31_337)
+
+        for blockX in -2..<2 {
+            for blockY in -2..<2 {
+                // Block interior spans local 0...2; the ring is local -1
+                // and 3 on each axis (6-tile period, 3-tile block).
+                let originX = blockX * 6
+                let originY = blockY * 6
+
+                for local in -1...3 {
+                    let ringTiles = [
+                        (originX + local, originY - 1),
+                        (originX + local, originY + 3),
+                        (originX - 1, originY + local),
+                        (originX + 3, originY + local)
+                    ]
+                    for (tileX, tileY) in ringTiles {
+                        let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
+                        XCTAssertEqual(
+                            info.kind, .kerbSidewalk,
+                            "Ring tile (\(tileX), \(tileY)) around block (\(blockX), \(blockY)) was \(info.kind), "
+                                + "breaking the sidewalk ring"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - AC6: ~1-in-4 blocks are empty lots
 
     func test_classify_emptyLotBlockRatio_isApproximatelyOneInFour_acrossManySeeds() {

@@ -108,10 +108,31 @@ enum CityLatticeGenerator {
 
         if isStreetX && isStreetY {
             // Inside a lattice crossing: both axes' bands are street, so
-            // this tile sits in the full 3x3 intersection area. The
-            // crossing's own centre tile is clear asphalt; every other
-            // tile in the crossing is the painted stop line.
-            return (xBandPosition == 1 && yBandPosition == 1) ? .asphalt : .junctionStopLine
+            // this tile sits in the full 3x3 intersection area. The three
+            // roles within that 3x3 are distinct, and the ground-plane
+            // renderer cannot recover them later, so they are pinned here:
+            //
+            //   corner  mouth   corner      corner = both axes on a band
+            //   mouth   centre  mouth       edge (band position 0 or 2)
+            //   corner  mouth   corner      mouth  = one axis is the lane
+            //
+            // - Centre (both axes on the driving lane): clear asphalt.
+            // - Lane mouth (one axis is the centre lane, the other a band
+            //   edge): this is literally where a stop line is painted,
+            //   across the lane at the mouth of the junction.
+            // - Corner (both axes on a band edge): the continuation of the
+            //   `kerbSidewalk` band running down each corridor. Painting
+            //   these as stop line would break the sidewalk ring around
+            //   every 3x3 block at all four corners and put road paint
+            //   where a kerb corner belongs on every intersection in the
+            //   city, so the corridor's "asphalt flanked by sidewalks"
+            //   reading survives the junction.
+            let xIsLane = xBandPosition == 1
+            let yIsLane = yBandPosition == 1
+            if xIsLane && yIsLane {
+                return .asphalt
+            }
+            return (xIsLane || yIsLane) ? .junctionStopLine : .kerbSidewalk
         }
 
         // Exactly one axis is in the street band: a straight corridor

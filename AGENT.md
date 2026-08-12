@@ -219,7 +219,13 @@ docs/bootstrap.md                          original spec (source of truth)
   camera-driven streaming and no cross-chunk neighbour lookups is deferred
   — `CYBERPUN-17-3-t3`. CYBERPUN-17-3 is deliberately split in three: `-t1`
   shipped the isometric coordinate transform, `-t2` ships the pure seeded
-  city-lattice function below, `-t3` wraps it into chunks and streaming
+  city-lattice function below, `-t3` wraps it into chunks and streaming.
+  **Moving AC2 (chunk-boundary agreement) and AC8 (bounded resident-chunk
+  window) out of `-t2` is a scope change, not a docs detail.** It needs an
+  explicit product call and `-t3` must exist as a filed, tracked story — a
+  deferral that lives only in this file points nowhere. Raised on
+  CYBERPUN-17-3-t2 so the split is recorded in the tracker rather than only
+  here; do not treat CYBERPUN-17-3 as closed by `-t2` until `-t3` is filed
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid (deferred — future PR; `TileKind.isWalkable` is the data
   this will consume)
@@ -234,12 +240,24 @@ docs/bootstrap.md                          original spec (source of truth)
   a block interior's lot-vs-building decision is seed-driven, made once per
   block via `SeedMixer` so every interior tile of one block agrees.
   `CityLatticeGeneratorTests` pins the period/intersection/ratio/
-  determinism contracts, `ConnectivityTests` flood-fills the walkable
-  output across >=20 seeds and a 12x12-block region and reaches every
-  intersection tile, and `ConcurrencyDeterminismTests` proves thread safety.
+  determinism contracts (including the crossing's sub-kinds by name: centre
+  lane asphalt, the four junction mouths stop-line, the four corners
+  sidewalk so the ring around each block is unbroken), `ConnectivityTests`
+  flood-fills the walkable output across >=20 seeds and a 12x12-block region
+  straddling the origin and reaches every intersection tile, and
+  `ConcurrencyDeterminismTests` proves thread safety.
   Chunk-boundary agreement (AC2) and the bounded resident-chunk window
   (AC8) are `CYBERPUN-17-3-t3`'s concern once chunking exists — this PR is
-  scoped to the pure per-tile function only, no chunking, no streaming
+  scoped to the pure per-tile function only, no chunking, no streaming.
+  Why that split is safe rather than convenient: because `classify` is a
+  pure function of `(tileX, tileY, seed)` and consults no neighbour, chunk
+  or cached state, two chunks meeting at a boundary cannot disagree — AC2
+  becomes true by construction the moment chunking wraps `classify`, so
+  `-t3`'s boundary-agreement test is a thin wrapper assertion (chunk-embedded
+  tile == standalone `classify` tile) rather than a genuine risk. AC8's
+  bounded resident-chunk window is the real engineering left in `-t3`. This
+  reasoning belongs on the `-t3` ticket too, so its reviewer knows which of
+  its ACs is load-bearing
 - Local high-score persistence, no network/Game Center (deferred — future PR)
 - `// SCAFFOLDING:` marker convention + grep-based removal gate
   (deferred — future PR)
@@ -263,7 +281,9 @@ docs/bootstrap.md                          original spec (source of truth)
   streaming with a bounded resident-chunk window — tracked as
   `CYBERPUN-17-3-t3` (the third of CYBERPUN-17-3's three PRs; `-t1` shipped
   the coordinate transform, `-t2` shipped the pure seeded city-lattice
-  function itself)
+  function itself). This carries CYBERPUN-17-3's AC2 and AC8, so it has to
+  be a filed story in the tracker and not merely this bullet — confirm it
+  exists (and link it on the `-t2` PR) before CYBERPUN-17-3 is signed off
 - Tile-grid collision system
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
