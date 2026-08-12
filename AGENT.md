@@ -46,9 +46,11 @@ CyberpunkMonsterCrawl/
   GameViewController.swift                 hosts the SKView
   BootScene.swift                          bootstrap SpriteKit scene
   PrivacyInfo.xcprivacy, *.entitlements
-  Resources/Assets.xcassets/               stub AppIcon slot
+  Atlas/AtlasContract.swift                atlas contract + measurement
+  Resources/Assets.xcassets/               stub AppIcon slot (art not yet imported)
 CyberpunkMonsterCrawlTests/
-  CyberpunkMonsterCrawlTests.swift
+  CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
+  AtlasContractTests.swift                 atlas contract rules + catalog gate
 docs/bootstrap.md                          original spec (source of truth)
 ```
 
@@ -56,9 +58,17 @@ docs/bootstrap.md                          original spec (source of truth)
 
 - UIKit + single `SKView` host (implemented in this PR)
 - Bootstrap `BootScene` showing the project name (implemented in this PR)
-- Asset catalog with 10 atlas sheets + 12 building sprites, plus a
-  programmatically-measured atlas contract type, with a test that fails if
-  any sheet/cell/building is missing (deferred — future PR)
+- Atlas contract type (`CyberpunkMonsterCrawl/Atlas/AtlasContract.swift`)
+  recording each sheet's measured pixel size, cell grid and owned cell
+  indices — measured programmatically from the imported image, never
+  inferred from filenames — plus the acceptance gate in
+  `AtlasContractTests` that fails when any referenced image id is missing
+  from the catalog (implemented)
+- Asset catalog with the 10 atlas sheets + 12 building sprites (`building_00`
+  … `building_11`) imported as 1× imagesets (deferred — asset-import PR; the
+  binary art pack is not in the repo yet). `AtlasContract.current.sheets` is
+  empty until then, which the contract reports as a violation, so the
+  catalog cannot stay empty behind a green suite
 - `menu → gameplay → death → highScores` state machine (deferred — future PR)
 - Scene graph z-layering: `worldLayer < effectsLayer < uiLayer`, `uiLayer`
   pinned to camera with first touch refusal, plus an ordering test
@@ -80,7 +90,15 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- Asset catalog import + atlas contract type and its missing-asset test
+- Binary asset pack import: the 10 atlas sheets and 12 building PNGs into
+  `Assets.xcassets` as 1× imagesets. The contract type and its missing-asset
+  gate have landed, so the import PR only has to add the files, fill
+  `AtlasContract.current.sheets` with each family's cell size and owned cell
+  index list, and delete the `XCTExpectFailure` scaffolding in
+  `AtlasContractTests.test_shippedAssetCatalog_satisfiesAtlasContract` —
+  that expectation is strict, so it fails once the art is present and cannot
+  be left muting the gate. `tileset_structure.png` and the HTML companion
+  files are not imported.
 - Menu/gameplay/death/highScores state machine
 - Scene z-layering enforcement + ordering test
 - Depth module
