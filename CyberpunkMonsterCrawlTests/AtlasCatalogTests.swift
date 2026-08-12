@@ -16,13 +16,11 @@ final class AtlasCatalogTests: XCTestCase {
     /// `.noneSkipLast`) is an opaque sheet — the usual cause is a re-export
     /// that flattened transparency, whose first symptom at render time is a
     /// black box behind every sprite.
-    private static let alphaCarryingInfos: [CGImageAlphaInfo] = [
-        .first,
-        .last,
-        .premultipliedFirst,
-        .premultipliedLast,
-        .alphaOnly,
-    ]
+    ///
+    /// Owned by `ImagePixelSampling` so the building gate in
+    /// `BuildingCatalogTests` asserts the identical rule rather than a second
+    /// copy that could drift from this one.
+    private static let alphaCarryingInfos: [CGImageAlphaInfo] = ImagePixelSampling.alphaCarryingInfos
 
     /// Guards against the loops below vacuously passing if the manifest ever
     /// silently shrank.

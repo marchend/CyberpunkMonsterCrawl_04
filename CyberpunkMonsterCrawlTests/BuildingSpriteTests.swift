@@ -75,6 +75,32 @@ final class BuildingSpriteTests: XCTestCase {
         }
     }
 
+    /// Cross-checks the hand-transcribed footprint column against the
+    /// *measured* art, so a mis-copied row cannot sit unnoticed until the
+    /// placement/depth story lands.
+    ///
+    /// `footprint` and `heightClass` are the only two facts here that cannot
+    /// be measured from the PNGs, and the table above restates the same
+    /// values it is checking. The width invariant is the independent signal:
+    /// a lot is one grid cell wide at 96px, so a building wider than 96px
+    /// reserves 2×2 and a 96px-wide building reserves 1×1 **no matter how
+    /// tall it is** — which is exactly why `building_04` (96×176) is 1×1
+    /// while `building_08`/`building_09` (144×136) are 2×2.
+    func test_footprint_followsTheMeasuredSpriteWidth_notItsHeight() {
+        for building in BuildingSprite.allCases {
+            let width = building.declaredPixelSize.width
+            let expected: BuildingSprite.Footprint = width > 96 ? .twoByTwo : .oneByOne
+
+            XCTAssertEqual(
+                building.footprint,
+                expected,
+                "\(building.imageID) is \(width)px wide but declares \(building.footprint). A lot is "
+                    + "96px wide: anything wider reserves 2×2, anything 96px wide reserves 1×1 "
+                    + "regardless of height. Re-check this row against the story's building table."
+            )
+        }
+    }
+
     /// Pins the story's height-class column.
     func test_heightClass_matchesTheStorysBuildingTable() {
         let expected: [BuildingSprite: BuildingSprite.HeightClass] = [
@@ -100,6 +126,11 @@ final class BuildingSpriteTests: XCTestCase {
 
     /// Buildings load whole through the centralized `TextureLoading` factory
     /// — nearest-filtered, no mipmaps, non-zero size — never a sliced cell.
+    ///
+    /// Resolving `texture` also walks `measuredPixelSize`'s measured-vs-
+    /// declared `precondition`, so this exercises the production path's own
+    /// guarantee (mismatched art aborts the process here, as it does for
+    /// `SpriteSheet.init`) rather than a test-only check.
     func test_texture_loadsWholeThroughTextureLoading_nearestFiltered_nonZeroSized() {
         for building in BuildingSprite.allCases {
             let texture = building.texture

@@ -5,13 +5,14 @@ import XCTest
 /// The catalog gate for the 12 building sprites (CYBERPUN-17-1 AC 5, closed
 /// out by CYBERPUN-17-1-t4's art import).
 ///
-/// Both gates below ran behind a strict `XCTExpectFailure` tagged
-/// `SCAFFOLDING(CYBERPUN-17-1-t4)` until the art landed in this PR — the
-/// scaffold is now removed, so a missing, duplicate, or mirrored building
-/// sprite fails this suite outright rather than being muted.
+/// The existence and distinctness gates below ran behind a strict
+/// `XCTExpectFailure` tagged `SCAFFOLDING(CYBERPUN-17-1-t4)` until the art
+/// landed in this PR — the scaffold is now removed, so a missing, duplicate,
+/// mirrored, or flattened/opaque building sprite fails this suite outright
+/// rather than being muted.
 final class BuildingCatalogTests: XCTestCase {
 
-    /// Anti-vacuity guard for both gates below.
+    /// Anti-vacuity guard for every gate below.
     func test_buildingSprite_hasTwelveDistinctlyNamedCases() {
         XCTAssertEqual(BuildingSprite.allCases.count, 12)
         XCTAssertEqual(
@@ -29,6 +30,48 @@ final class BuildingCatalogTests: XCTestCase {
             XCTAssertNotNil(
                 UIImage(named: building.imageID, in: .appModule, compatibleWith: nil),
                 "\(building.imageID) is referenced by BuildingSprite but is not in Assets.xcassets."
+            )
+        }
+    }
+
+    /// The buildings are PNG-32 like the atlas sheets, and are the assets
+    /// most exposed to a flattened re-export: they are placed *whole* on the
+    /// diamond lattice, so an opaque `building_08` rectangle draws straight
+    /// over the ground tiles instead of sitting on them.
+    ///
+    /// Two independent measurements, both off decoded pixels:
+    /// 1. the source image's `alphaInfo` must be alpha-carrying — the exact
+    ///    rule `AtlasCatalogTests` applies to the sheets, shared via
+    ///    `ImagePixelSampling.alphaCarryingInfos` rather than re-declared;
+    /// 2. the art must actually contain fully transparent pixels outside the
+    ///    silhouette. A re-export can keep a 32-bit container while filling
+    ///    every pixel to alpha 255, which check 1 alone would pass.
+    func test_everyBuildingSprite_carriesAnAlphaChannel_andHasTransparentPixelsOutsideItsSilhouette() {
+        for building in BuildingSprite.allCases {
+            guard let alphaInfo = ImagePixelSampling.sourceAlphaInfo(ofImageNamed: building.imageID) else {
+                XCTFail("\(building.imageID) is referenced by BuildingSprite but is not in Assets.xcassets.")
+                continue
+            }
+
+            XCTAssertTrue(
+                ImagePixelSampling.alphaCarryingInfos.contains(alphaInfo),
+                "\(building.imageID) decoded with alphaInfo raw value \(alphaInfo.rawValue) — no alpha "
+                    + "channel. The building art is PNG-32; a flattened/opaque re-export renders as a "
+                    + "black box over the ground tiles. Re-export with transparency, never silence this "
+                    + "check."
+            )
+
+            guard let pixels = ImagePixelSampling.pixels(ofImageNamed: building.imageID) else {
+                XCTFail("\(building.imageID) could not be decoded from Assets.xcassets.")
+                continue
+            }
+
+            XCTAssertGreaterThan(
+                pixels.fullyTransparentPixelCount,
+                0,
+                "\(building.imageID) has no fully transparent pixel in its \(pixels.width)×\(pixels.height) "
+                    + "bounding box — the silhouette fills the whole rectangle, which is what a flattened "
+                    + "re-export looks like even when the file is still 32-bit."
             )
         }
     }

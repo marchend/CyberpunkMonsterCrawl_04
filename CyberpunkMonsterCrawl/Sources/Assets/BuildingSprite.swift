@@ -17,7 +17,11 @@ import SpriteKit
 ///
 /// Buildings are loaded whole via `TextureLoading.texture(named:)` (exposed
 /// here as `texture`) and never sliced, which is why this is not a
-/// `SpriteSheet`: there is no cell grid to measure.
+/// `SpriteSheet`: there is no cell grid to measure. `texture` resolves
+/// `measuredPixelSize` on the way through, so the measurement check is
+/// structural — every production consumer of a building walks it, exactly as
+/// every consumer of a sheet walks `SpriteSheet.init`'s precondition — rather
+/// than holding only where a test calls it.
 ///
 /// Placement logic, footprint reservation and depth-sorting are out of scope
 /// here — a later story (footprint reservation lands with rooftop signs)
@@ -129,7 +133,16 @@ enum BuildingSprite: Int, CaseIterable {
     /// This building's whole-image texture, loaded via the centralized
     /// `TextureLoading` factory (nearest-filtered, no mipmaps) — never a
     /// sliced cell, since buildings are placed whole.
+    ///
+    /// Resolving the texture walks `measuredPixelSize` first, so the
+    /// measured-vs-declared `precondition` is enforced on the **production**
+    /// path rather than only where a test happens to call it. This is the
+    /// same guarantee `SpriteSheet.init` gives the atlas sheets: every
+    /// consumer of the art passes the measurement check, so a building
+    /// re-exported at a different size fails loudly at the point of use
+    /// instead of silently placing a wrongly-sized sprite.
     var texture: SKTexture {
-        TextureLoading.texture(named: imageID)
+        _ = measuredPixelSize
+        return TextureLoading.texture(named: imageID)
     }
 }

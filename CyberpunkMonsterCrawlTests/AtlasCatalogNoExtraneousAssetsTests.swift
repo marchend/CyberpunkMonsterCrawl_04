@@ -12,6 +12,13 @@ import XCTest
 /// regression introduced by *either* asset family, or by a new one added
 /// later, is caught without editing this file.
 ///
+/// The rendition scan reads three independent signals per imageset, because
+/// any one of them alone has a blind spot: the declared `scale` key (absent
+/// entirely on single-scale imagesets), the referenced `filename` (a `@2x`
+/// file can be declared `1x`), and the PNGs actually on disk (a stray import
+/// `Contents.json` never mentions — including the showcase sheet dropped into
+/// an existing imageset directory, which the name-based scan cannot see).
+///
 /// `#filePath` resolves, at compile time, to this file's own absolute path in
 /// the checked-out repository; CI builds and runs tests from that same
 /// checkout, so the path is still valid at run time. If the catalog is ever
@@ -68,8 +75,37 @@ final class AtlasCatalogNoExtraneousAssetsTests: XCTestCase {
         return directories
     }
 
+    /// Every `*.png` sitting on disk inside one imageset directory,
+    /// regardless of whether `Contents.json` mentions it.
+    private func pngFilesOnDisk(in imageSetDirectory: URL) -> [URL] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: imageSetDirectory,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        return contents.filter { $0.pathExtension.lowercased() == "png" }
+    }
+
     private func normalized(_ name: String) -> String {
         name.lowercased().filter(\.isLetter)
+    }
+
+    /// Returns a violation reason if `filename`'s stem carries an `@2x`/`@3x`
+    /// suffix, or `nil` if it is a plain 1× filename.
+    ///
+    /// Checked independently of the `scale` key because Xcode writes
+    /// single-scale imagesets with no `scale` at all ("Resizing → Single
+    /// Scale"), so a `@2x` file dropped into such an entry — or referenced
+    /// with `"scale": "1x"` — carries no `2x` marker anywhere but its name.
+    private func scaleSuffixViolation(_ filename: String) -> String? {
+        let stem = URL(fileURLWithPath: filename)
+            .deletingPathExtension()
+            .lastPathComponent
+            .lowercased()
+
+        for suffix in ["@2x", "@3x"] where stem.hasSuffix(suffix) {
+            return "filename \(filename) carries a \(suffix) suffix"
+        }
+        return nil
     }
 
     /// Returns a human-readable violation reason, or `nil` if `imageSetName`
@@ -108,7 +144,11 @@ final class AtlasCatalogNoExtraneousAssetsTests: XCTestCase {
         )
     }
 
-    func test_noImageSetAnywhereInTheCatalog_declaresA2xOr3xRendition() throws {
+    /// Covers three ways a non-1× or extraneous import can reach the catalog:
+    /// a declared `2x`/`3x` scale, a `@2x`/`@3x` **filename** (referenced with
+    /// any scale, or none at all), and a PNG sitting in an imageset directory
+    /// that `Contents.json` never references.
+    func test_noImageSetAnywhereInTheCatalog_declaresOrShipsA2xOr3xRendition_orAnUnreferencedPNG() throws {
         guard directoryExists(assetsXcassetsDirectory) else {
             throw XCTSkip("\(assetsXcassetsDirectory.path) not reachable; see test_catalog_scansAtLeastTheKnownImageSets.")
         }
@@ -124,12 +164,51 @@ final class AtlasCatalogNoExtraneousAssetsTests: XCTestCase {
                 continue
             }
 
+            var referencedFilenames: Set<String> = []
+
             for image in images {
-                guard let scale = image["scale"] as? String else { continue }
-                if scale == "2x" || scale == "3x" {
+                // The `scale` key is checked when present, but its absence is
+                // never a free pass: a single-scale entry has no `scale` at
+                // all, so the filename below is the only evidence left.
+                if let scale = image["scale"] as? String, scale == "2x" || scale == "3x" {
                     offenders.append(
                         "\(imageSetDirectory.lastPathComponent) declares a \(scale) rendition "
                             + "(filename: \(image["filename"] as? String ?? "?")) — the pack is 1× art only."
+                    )
+                }
+
+                guard let filename = image["filename"] as? String else { continue }
+                referencedFilenames.insert(filename)
+
+                if let violation = scaleSuffixViolation(filename) {
+                    offenders.append(
+                        "\(imageSetDirectory.lastPathComponent) references a non-1× rendition: "
+                            + "\(violation) (declared scale: \(image["scale"] as? String ?? "none")) "
+                            + "— the pack is 1× art only."
+                    )
+                }
+            }
+
+            // The PNGs actually on disk, which `Contents.json` can hide two
+            // ways: a `@2x` file referenced as 1×/unscaled, or a stray file
+            // (e.g. the opaque `tileset_structure` showcase sheet) dropped
+            // into an existing imageset directory under a name the
+            // imageset-name scan below can never see.
+            for pngURL in pngFilesOnDisk(in: imageSetDirectory) {
+                let pngName = pngURL.lastPathComponent
+
+                if let violation = scaleSuffixViolation(pngName) {
+                    offenders.append(
+                        "\(imageSetDirectory.lastPathComponent) ships \(violation) on disk "
+                            + "— the pack is 1× art only."
+                    )
+                }
+
+                if !referencedFilenames.contains(pngName) {
+                    offenders.append(
+                        "\(imageSetDirectory.lastPathComponent) ships \(pngName) on disk but does not "
+                            + "reference it in Contents.json — an unreferenced import (stray rendition or "
+                            + "showcase sheet) that no name-based scan can see."
                     )
                 }
             }
@@ -137,7 +216,8 @@ final class AtlasCatalogNoExtraneousAssetsTests: XCTestCase {
 
         XCTAssertTrue(
             offenders.isEmpty,
-            "Stray @2x/@3x renditions found in the catalog:\n" + offenders.joined(separator: "\n")
+            "Stray @2x/@3x renditions or unreferenced PNG imports found in the catalog:\n"
+                + offenders.joined(separator: "\n")
         )
     }
 
@@ -173,5 +253,21 @@ final class AtlasCatalogNoExtraneousAssetsTests: XCTestCase {
         XCTAssertNil(nameViolation("tileset_ground"))
         XCTAssertNil(nameViolation("sprite_signs"))
         XCTAssertNil(nameViolation("building_11"))
+    }
+
+    /// Pins the filename-based rendition rule itself, independent of what is
+    /// currently in the catalog — this is the check that catches a `@2x`
+    /// import whose `Contents.json` entry claims `1x` or omits `scale`
+    /// entirely, so it must hold on its own.
+    func test_scaleSuffixViolation_flagsAtSuffixedFilenames_andIgnoresPlain1xNames() {
+        XCTAssertNotNil(scaleSuffixViolation("building_00@2x.png"))
+        XCTAssertNotNil(scaleSuffixViolation("building_00@3x.png"))
+        XCTAssertNotNil(scaleSuffixViolation("tileset_ground@2X.PNG"))
+        XCTAssertNotNil(scaleSuffixViolation("sprite_pulse@3x"))
+
+        XCTAssertNil(scaleSuffixViolation("building_00.png"))
+        XCTAssertNil(scaleSuffixViolation("tileset_ground.png"))
+        // "@2x" only counts as a rendition marker at the end of the stem.
+        XCTAssertNil(scaleSuffixViolation("building_@2x_concept.png"))
     }
 }
