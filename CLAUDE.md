@@ -46,6 +46,9 @@ CyberpunkMonsterCrawl/
   GameViewController.swift                 hosts the SKView
   BootScene.swift                          bootstrap SpriteKit scene
   GameStateMachine.swift                   menu/gameplay/death/highScores GKStateMachine wrapper
+  GameScene.swift                          three persistent layers (worldLayer/effectsLayer/uiLayer), state-driven screen registry, UI-first touch routing
+  Layers/LayerConstants.swift              named zPosition bands enforcing worldLayer < effectsLayer < uiLayer
+  Layers/ScreenNode.swift                  ScreenNode protocol + PlaceholderScreenNode test double (concrete screens land in PR 3)
   PrivacyInfo.xcprivacy, *.entitlements
   Assets.xcassets/                         the single asset catalog for the target
     Atlas/                                 10 atlas-sheet imagesets (1x only)
@@ -70,8 +73,11 @@ CyberpunkMonsterCrawlTests/
   AtlasCatalogNoExtraneousAssetsTests.swift whole-catalog scan: no stray @2x/@3x, no tileset_structure/preview art
   DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
   GameStateMachineTests.swift              exhaustive legal/illegal transition matrix for GameStateMachine
+  LayerOrderingTests.swift                 zPosition ordering invariant (named constants) + live GameScene layer/registry checks
+  TouchRoutingTests.swift                  UI-first touch routing: an overlapping UI node always wins over a world node
+  GameSceneScreenSwitchingTests.swift      state-machine-driven screen registry swap, using PlaceholderScreenNode doubles
 CyberpunkMonsterCrawlUITests/
-  CyberpunkMonsterCrawlUITests.swift       proof-of-life (app launches), tagged SCAFFOLDING(CYBERPUN-17-2-t2); real flow coverage lands there
+  CyberpunkMonsterCrawlUITests.swift       proof-of-life (app launches), tagged SCAFFOLDING(CYBERPUN-17-2); real flow coverage lands with the CYBERPUN-17-2 PR that ships concrete screens
 docs/bootstrap.md                          original spec (source of truth)
 ```
 
@@ -135,11 +141,20 @@ docs/bootstrap.md                          original spec (source of truth)
   observes instead of polling `currentState`) and routes every rejected pair
   to `onIllegalTransition`, which defaults to an `os.Logger` warning in DEBUG
   so a mis-wired button that silently does nothing is visible in the
-  simulator rather than at QA time (implemented — the scene/UI wiring that
-  gives it a production caller lands in CYBERPUN-17-2-t2)
+  simulator rather than at QA time (implemented; `GameScene` is its first
+  production caller as of PR 2 — concrete menu/gameplay/death/highScores
+  screens and wiring `GameViewController` to present `GameScene` instead of
+  `BootScene` land in PR 3)
 - Scene graph z-layering: `worldLayer < effectsLayer < uiLayer`, `uiLayer`
-  pinned to camera with first touch refusal, plus an ordering test
-  (deferred — CYBERPUN-17-2-t2)
+  pinned to the scene's camera with first refusal on every touch, backed by
+  named `LayerConstants` and a state-driven `[GameState: ScreenNode]`
+  registry that swaps the active screen in `uiLayer` on every
+  `GameStateMachine` transition (implemented — `GameScene.swift`,
+  `Layers/LayerConstants.swift`, `Layers/ScreenNode.swift`;
+  `LayerOrderingTests`, `TouchRoutingTests` and
+  `GameSceneScreenSwitchingTests` cover the ordering invariant, UI-first
+  touch routing and the registry swap respectively, all via
+  `PlaceholderScreenNode` test doubles since no concrete screen exists yet)
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
   rounded tile (deferred — future PR)
@@ -159,19 +174,20 @@ docs/bootstrap.md                          original spec (source of truth)
   pulse, hit puff, signs, ground tiles, buildings) into an actual on-screen
   scene — `TextureLoading.texture(named:)` / `BuildingSprite.texture` exist
   and are tested, but no scene places any sprite yet (later PRs)
-- CYBERPUN-17-2-t2 — the app shell that consumes `GameStateMachine`: wiring
-  it into the boot scene / a menu-gameplay-death-highScores scene graph, the
-  menu screen with a working PLAY button, and UI-first touch routing. Until
-  that ticket lands, `GameStateMachine` has no production caller —
-  `GameViewController` still presents `BootScene` (the state machine core
-  itself is implemented and unit-tested — see above)
-- Scene z-layering enforcement + ordering test — CYBERPUN-17-2-t2
+- PR 3 (next in CYBERPUN-17-2) — the concrete menu/gameplay/death/highScores
+  screens registered with `GameScene.register(_:for:)`, the menu screen's
+  working PLAY button, and wiring `GameViewController` to present
+  `GameScene` instead of `BootScene`. The layered scene architecture, the
+  named zPosition contract, the state-driven screen registry and UI-first
+  touch routing are already implemented and unit-tested (PR 2 — see above);
+  what remains is real screen content and the composition-root swap
 - Depth module
 - Procedural world generation + chunk streaming
 - Tile-grid collision system
-- Real XCUITest flow coverage — CYBERPUN-17-2-t2 (the
-  `CyberpunkMonsterCrawlUITests` target exists with a proof-of-life launch
-  test carrying a `// SCAFFOLDING(CYBERPUN-17-2-t2)` marker; the acceptance
+- Real XCUITest flow coverage — lands with the CYBERPUN-17-2 PR that ships
+  the concrete screens it exercises (the `CyberpunkMonsterCrawlUITests`
+  target exists with a proof-of-life launch test carrying a
+  `// SCAFFOLDING(CYBERPUN-17-2)` marker; the acceptance
   assertions — menu screen present, PLAY button hittable, tapping it enters
   gameplay — land with the scenes they exercise)
 - Local high-score persistence

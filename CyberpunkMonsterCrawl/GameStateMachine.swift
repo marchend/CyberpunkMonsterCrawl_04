@@ -6,7 +6,11 @@ import os
 /// back-to-menu paths spelled out below). This enum is the public,
 /// scene/rendering-agnostic surface; `GameStateMachine` wraps the
 /// `GKStateMachine` implementation detail behind it.
-enum GameState: CaseIterable, Equatable {
+///
+/// `Hashable` (which implies `Equatable`) so `GameScene`
+/// (CYBERPUN-17-2-t2, PR 2) can key its `[GameState: ScreenNode]` screen
+/// registry directly off this enum.
+enum GameState: CaseIterable, Hashable {
     case menu
     case gameplay
     case death
@@ -85,8 +89,8 @@ final class HighScoresState: GKState {
 /// polling `currentState`, and rejected transitions are reported through
 /// `onIllegalTransition` (DEBUG default: an `os.Logger` warning) so a
 /// mis-wired button that silently does nothing is visible at the moment it
-/// misbehaves. The scene/UI consumer that uses both hooks lands in
-/// CYBERPUN-17-2-t2.
+/// misbehaves. `GameScene` (CYBERPUN-17-2-t2, PR 2) is the scene/UI consumer
+/// that uses `onChange` to drive its screen registry.
 final class GameStateMachine {
     /// Fired on every *successful* entry into a state, with the state just
     /// entered. Rejected transitions never fire it. Supplying the hook via

@@ -4,11 +4,13 @@ import UIKit
 /// Hosts the single SKView for the app. Bootstrap scope: presents the
 /// trivial BootScene.
 ///
-/// `GameStateMachine` (menu -> gameplay -> death -> highScores) is
-/// implemented and unit-tested but deliberately has no caller here yet:
-/// CYBERPUN-17-2-t2 replaces the BootScene presentation below with the
-/// layered menu scene graph (worldLayer < effectsLayer < uiLayer, uiLayer
-/// pinned to the camera) and the PLAY button that drives the machine. This
+/// `GameStateMachine` (menu -> gameplay -> death -> highScores) now drives
+/// `GameScene`'s layered scene graph (worldLayer < effectsLayer < uiLayer,
+/// uiLayer pinned to the camera) and its state-driven screen registry
+/// (CYBERPUN-17-2-t2, PR 2) — but `GameScene` has no concrete screens or
+/// PLAY button registered yet, so this controller still presents
+/// `BootScene` rather than `GameScene`. The next PR in this feature
+/// registers the real screens and switches the presentation below. This
 /// controller (and its SKView hosting responsibility) stays the same shape.
 final class GameViewController: UIViewController {
     private var skView: SKView!
