@@ -66,8 +66,11 @@ CyberpunkMonsterCrawl/
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
+  Sources/Rendering/GroundTileCatalog.swift  GroundTileKind (the ground plane's own 6-case vocabulary: 2 asphalt orientations, junction stop-line, kerb/sidewalk, lot, building-footprint overhang) mapped onto AtlasGroundDiamond — a semantic relabeling, not a re-measurement; AtlasSheet.swift stays the one source of truth for the pixel rects
+  Sources/Rendering/PixelCrispness.swift   PixelCrispness.apply(to:): the shared SKSpriteNode finalizer — .nearest filtering/no mipmaps, whole-integer xScale/yScale, position snapped to the nearest whole point — every future sprite consumer (buildings, actors, bullets, ...) goes through this, not just ground tiles
   Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule floor(coord + 0.5) with both a screen-space and a tile-space overload so no call site re-derives it; Double math with a CGFloat cast only at the boundary
   Sources/World/DepthModel.swift           single source of truth for painter's-algorithm zPosition: band(forTile:) = -(tileX+tileY)*10, groundZPosition = band - 5000, buildingContentRange (<+3) / actorOffsetRange (6.5-9.9) in-band slots, band(forActorAt:) rounds a fractional TilePoint to its owning tile (discontinuous by design) via IsometricProjection.tile(containing:)
+  Sources/World/GroundTileRenderer.swift   maps a TileKind + TileCoordinate to a pixel-crisp SKSpriteNode: GroundTileCatalog for the crop rect (re-deriving .asphalt's corridor orientation, north-south vs east-west, from the tile coordinate's lattice-band position — TileKind alone doesn't carry it), IsometricProjection for screen position, DepthModel.groundZPosition + worldLayerRelativeZ for zPosition, PixelCrispness.apply for the finishing pass. Every produced node is meant as a direct child of GameScene.worldLayer
   Sources/World/SeedMixer.swift            explicit splitmix64-style bit mixer over (seed, tileX, tileY), wrapping arithmetic only - never Hasher/.hashValue, which is randomized per process
   Sources/World/WorldSeed.swift            thin UInt64-wrapping per-run seed type: "a run is fully described by its seed"
   Sources/World/TileKind.swift             asphalt/junctionStopLine/kerbSidewalk/lot/buildingFootprint + isWalkable (asphalt, sidewalk, stop-line and empty lot walkable; building footprint solid). An empty .lot never turns solid - buildings are placed on the already-solid .buildingFootprint interiors (Chunk.placementSurface)
@@ -200,7 +203,7 @@ docs/bootstrap.md                          original spec (source of truth)
   that is meant to sit *over* live world content (today only
   `GameplayScreenNode`) must not mount a node that blankets the viewport,
   because `routeTouch(at:)` returns any non-`uiLayer` hit before it looks at
-  `worldLayer` \u2014 a full-bleed backdrop there would swallow every touch and
+  `worldLayer` — a full-bleed backdrop there would swallow every touch and
   paint over `worldLayer`. Menu/death/high-scores backdrops are full-bleed on
   purpose (they hide the world); the scene's own `backgroundColor` supplies
   the dark base behind gameplay
@@ -214,8 +217,13 @@ docs/bootstrap.md                          original spec (source of truth)
   a seam belongs to the higher-index tile, identically on both sides of the
   origin, which `round()` would not do)
   (implemented — `Sources/World/IsometricProjection.swift`,
-  `IsometricProjectionTests`). No production consumer places a tile-space
-  node via it yet; that lands with the ground-plane/depth-model PR
+  `IsometricProjectionTests`). `GroundTileRenderer` / `GroundPlaneStreamer`
+  (`CYBERPUN-17-4-t2`) are the first production consumers that place
+  tile-space nodes through it. The seam epsilon lives on the *screen-space*
+  overload only \u2014 `tileToScreen`/`screenToTile` round trips are what
+  introduce the floating-point noise, so the fix sits at the cause and
+  `tile(containing: TilePoint)` keeps the exactly half-open
+  `[centre - 0.5, centre + 0.5)` region
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below its own band, building content <+3 in-band, actor offsets
   6.5–9.9 sampling a rounded tile (implemented — `Sources/World/DepthModel.swift`,
@@ -245,17 +253,45 @@ docs/bootstrap.md                          original spec (source of truth)
   buildings use for their base tile, and is deliberately discontinuous (a
   step function of the rounded tile, never interpolated) — see the doc
   comment on `DepthModel.band(forActorAt:)` for why continuous depth would
-  desync from building placement. No production consumer sets a node's
-  `zPosition` from this yet; that lands with the ground-plane/building-
-  placement PRs (`CYBERPUN-17-5` onward)
-- Ground-plane rendering + pixel crispness (the other half of
-  `CYBERPUN-17-4`, *not* yet built): ground cells drawn from the six
-  `tileset_ground` diamonds, the "asphalt between sidewalks" street look,
-  and `.nearest` texture filtering / whole-integer camera scale /
-  device-pixel snapping (deferred — owned by `CYBERPUN-17-4-t2`, the
-  follow-up task to this PR's `-t1`; `CYBERPUN-17-5` is the
-  building-placement story and does *not* own these ACs, so they are tracked
-  here rather than falling through the crack between the two)
+  desync from building placement. `GroundTileRenderer` (`CYBERPUN-17-4-t2`)
+  is the first production consumer of `DepthModel.groundZPosition` /
+  `worldLayerRelativeZ`; building/actor consumers still land with
+  `CYBERPUN-17-5` onward
+- Ground-plane rendering + pixel crispness, the other half of
+  `CYBERPUN-17-4` (implemented — `Sources/Rendering/GroundTileCatalog.swift`,
+  `Sources/Rendering/PixelCrispness.swift`, `Sources/World/GroundTileRenderer.swift`;
+  `GroundTileCatalogTests`, `GroundTileRendererTests` — `CYBERPUN-17-4-t2`):
+  `GroundTileRenderer.node(for:at:)` maps a `TileKind` + `TileCoordinate` to a
+  finished ground `SKSpriteNode` — `GroundTileCatalog`'s six-case
+  `GroundTileKind` (two asphalt orientations, junction stop-line dash,
+  kerb/sidewalk, lot, building-footprint overhang) picks the measured
+  `AtlasGroundDiamond` sub-rect (re-deriving `.asphalt`'s corridor
+  orientation from the tile coordinate's lattice-band position, since
+  `TileKind` alone doesn't carry it), `IsometricProjection` places it on
+  screen, `DepthModel.groundZPosition` + `worldLayerRelativeZ` set its
+  `zPosition` for a direct child of `GameScene.worldLayer`, and
+  `PixelCrispness.apply` finishes it (`.nearest` filtering, whole-integer
+  scale, position snapped to a whole point, sign preserved so an
+  `xScale = -1` mirror survives the clamp; `PixelCrispnessTests` covers that
+  shared helper directly rather than only through the ground sweep).
+  `GroundPlaneStreamer` (`Sources/World/GroundPlaneStreamer.swift`,
+  `GroundPlaneStreamerTests`) is the **production mount**: it walks
+  `ChunkStreamingManager`'s resident window and parents one ground node per
+  resident tile *directly* into `GameScene.worldLayer` (no intermediate
+  container, or its `zPosition` would shift the whole depth scheme), dropping
+  a chunk's nodes when that chunk is evicted, and `GameScene` starts it on
+  entry to `.gameplay` from `worldSeed` centred on `cameraWorldPosition`. So
+  tapping PLAY in a real build shows the generated city rather than an empty
+  scene, and the mounted node count stays bounded by the resident window
+  however far the camera roams. Which crop *is* the east-west lane is pinned
+  by `GroundTileSemanticsTests`, which re-measures the shipped pixels (crop
+  fingerprints must all differ; each lane crop's paint must be elongated
+  along the tile axis its case name claims) - a swapped lane pair fails
+  there, where a literal table compared against a copy of itself cannot see
+  it. Legacy note, superseded: earlier revisions of this entry said no scene
+  parented these
+  nodes into `worldLayer` — that lands with the building-placement /
+  integration-checkpoint PRs (`CYBERPUN-17-5` onward)
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,
@@ -356,9 +392,6 @@ docs/bootstrap.md                          original spec (source of truth)
   not. `GameplayScreenNode`'s placeholder is tagged for CYBERPUN-17-7 (the
   floating-thumbstick story); the death/high-scores placeholders are tagged
   for CYBERPUN-17-16 (integration checkpoint #2)
-- Ground-plane rendering and pixel crispness, the remaining half of
-  `CYBERPUN-17-4` (`CYBERPUN-17-4-t2`) — `CYBERPUN-17-4-t1` shipped only the
-  depth model
 - Tile-grid collision system
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
