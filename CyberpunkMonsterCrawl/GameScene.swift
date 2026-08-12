@@ -389,7 +389,7 @@ final class GameScene: SKScene {
 
     // MARK: - Accessibility
 
-    /// Every node in the `uiLayer` subtree that presents itself to
+    /// Every *visible* node in the `uiLayer` subtree that presents itself to
     /// UIAccessibility (`isAccessibilityElement == true`), in scene-graph
     /// order.
     ///
@@ -402,6 +402,15 @@ final class GameScene: SKScene {
     /// of ground tiles and (later) actors, none of which is an accessibility
     /// element, and none of which is ever the target of an element-driven
     /// tap.
+    ///
+    /// Invisible nodes are skipped so the walk stays *total* with respect to
+    /// this feature's central invariant - "the published frame and the hit
+    /// test cannot disagree". `routeTouch(at:)` resolves through
+    /// `SKNode.atPoint(_:)`, which never returns a hidden node, so an
+    /// invisible accessible node would publish a frame that an
+    /// element-driven tap aims at and the scene then refuses to route: the
+    /// original defect wearing yet another hat. Nothing hides a button
+    /// today; this keeps it from becoming a bug the day something does.
     func accessibleUINodes() -> [SKNode] {
         var accessible: [SKNode] = []
         collectAccessibleNodes(under: uiLayer, into: &accessible)
@@ -410,11 +419,25 @@ final class GameScene: SKScene {
 
     private func collectAccessibleNodes(under node: SKNode, into accessible: inout [SKNode]) {
         for child in node.children {
+            // The whole subtree is skipped, not just the node itself:
+            // hiding a parent hides everything under it, so its descendants
+            // are equally unreachable by `atPoint(_:)`.
+            guard isVisibleToTouchRouting(child) else { continue }
             if child.isAccessibilityElement {
                 accessible.append(child)
             }
             collectAccessibleNodes(under: child, into: &accessible)
         }
+    }
+
+    /// Whether `node` can be returned by the `atPoint(_:)` walk
+    /// `routeTouch(at:)` performs. `isHidden` is what SpriteKit's hit test
+    /// itself honours; `alpha <= 0` is filtered too because a node nobody
+    /// can see is a node nobody should be told to tap - and erring towards
+    /// publishing *fewer* elements keeps "published implies routable" true
+    /// in the safe direction.
+    private func isVisibleToTouchRouting(_ node: SKNode) -> Bool {
+        !node.isHidden && node.alpha > 0
     }
 
     /// `node`'s accumulated frame expressed in **scene** coordinates - the

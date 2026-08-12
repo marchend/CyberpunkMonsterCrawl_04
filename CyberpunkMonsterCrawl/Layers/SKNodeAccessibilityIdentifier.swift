@@ -25,28 +25,41 @@ private enum AccessibilityIdentifierAssociation {
 /// screens (`ButtonNode`, `MenuScreenNode`, `GameplayScreenNode`, ...) were
 /// written assuming it existed and fail to compile without it.
 ///
-/// **Scope: this is Swift-side bookkeeping only, and XCUITest cannot see
-/// it.** The value lives in an associated object on the `SKNode`; it never
-/// reaches the accessibility element `SKView` synthesises for the node, so
-/// UIKit's accessibility system does not report it and an XCUITest
-/// subscript query like `app.descendants(matching: .any)["gameplay.container"]`
-/// can **never** match a value set here. Only the properties SpriteKit
-/// genuinely forwards - `isAccessibilityElement`, `accessibilityLabel`,
-/// `accessibilityHint`, `accessibilityTraits` - are visible to XCUITest.
+/// **Scope: storing a value here is Swift-side bookkeeping. It becomes
+/// visible to XCUITest only because `AccessibleSKView` deliberately carries
+/// it across.** The value lives in an associated object on the `SKNode`, and
+/// it never reaches the accessibility element SpriteKit synthesises on its
+/// own - of the node's accessibility properties, only the ones SpriteKit
+/// genuinely forwards (`isAccessibilityElement`, `accessibilityLabel`,
+/// `accessibilityHint`, `accessibilityTraits`) travel that route.
+///
+/// What closes the gap is `AccessibleSKView.publishedAccessibilityElements()`,
+/// which builds the `UIAccessibilityElement`s itself and copies
+/// `node.accessibilityIdentifier` onto each one. That is what makes an
+/// XCUITest subscript query like
+/// `app.descendants(matching: .any)["menu.playButton"]` resolve, and
+/// `AppLaunchAndRotationUITests` relies on exactly that.
 ///
 /// Consequences, so nobody re-learns this the hard way:
-/// - **A UI test must match on `accessibilityLabel`, not on an identifier
-///   set through this extension.** `ButtonNode` sets both (`accessibilityLabel
-///   = title`), which is why `app.descendants(matching: .any)["PLAY"]`
+/// - **The reach of an identifier is conditional, not universal.** It is
+///   visible to a driver only while the node lives under `GameScene.uiLayer`
+///   in a scene hosted by an `AccessibleSKView` - that is the only subtree
+///   the view walks. A `worldLayer`/`effectsLayer` node's identifier is
+///   still invisible to XCUITest, so a UI test must not query one.
+/// - `accessibilityLabel` remains the belt-and-braces match, and setting
+///   both stays the house style. `ButtonNode` sets `accessibilityLabel =
+///   title`, which is why `app.descendants(matching: .any)["PLAY"]` also
 ///   resolves; the screen container markers in `MenuScreenNode` /
 ///   `GameplayScreenNode` likewise carry `accessibilityLabel` values
-///   ("Menu" / "Gameplay") for exactly this reason, and
-///   `CyberpunkMonsterCrawlUITests` queries those labels.
-/// - A unit-test assertion on `node.accessibilityIdentifier` only proves
-///   this extension stored and returned a string. It is a bookkeeping
-///   assertion, not evidence that anything is reachable from a UI test, so
-///   pair it with an `accessibilityLabel` assertion when the value is meant
-///   to be externally observable.
+///   ("Menu" / "Gameplay").
+/// - A unit-test assertion on `node.accessibilityIdentifier` still only
+///   proves this extension stored and returned a string. Evidence that the
+///   value is reachable by a driver comes from `AccessibleSKViewTests`
+///   asserting on `publishedAccessibilityElements()`, so pin it there when
+///   the value is meant to be externally observable.
+/// - If `AccessibleSKView` is ever swapped back out for a plain `SKView`,
+///   every identifier-based UI-test query goes dark again. That swap is
+///   guarded by `GameViewControllerCompositionTests`.
 ///
 /// Kept because the call sites above (and their unit tests) depend on the
 /// property existing. If SpriteKit ever adopts

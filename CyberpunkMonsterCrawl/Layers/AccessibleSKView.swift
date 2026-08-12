@@ -45,8 +45,22 @@ import UIKit
 ///    the conversion SpriteKit uses to give `UITouch.location(in:)` its
 ///    value (and camera-aware, which is the step SpriteKit's implicit support
 ///    gets wrong).
-/// 3. `convert(_:to: nil)` - view space to window space, the space
-///    `accessibilityFrame` is documented in.
+/// 3. `UIAccessibility.convertToScreenCoordinates(_:in:)` - view space to
+///    *screen* space, the space `accessibilityFrame` is documented in
+///    (`UIScreen.fixedCoordinateSpace`, portrait-up origin).
+///
+/// Step 3 deliberately does **not** use `convert(_:to: nil)`, which yields
+/// *window* coordinates. The two spaces coincide on a full-bleed portrait
+/// window - which is why the window form looked correct and unit-tested
+/// green - and diverge the moment the interface rotates: the window's
+/// coordinate space rotates with the interface, the accessibility screen
+/// space does not. `AppLaunchAndRotationUITests` rotates to `.landscapeLeft`
+/// and then taps `menu.playButton` by identifier, i.e. it drives exactly
+/// this element-frame path in the orientation where window != screen, so a
+/// window-space frame would resurrect "the synthesized tap landed somewhere
+/// that is not the button" wearing the rotation hat.
+/// `UIAccessibility.convertToScreenCoordinates(_:in:)` does view -> screen
+/// directly and handles interface orientation itself.
 ///
 /// Because the published frame is derived from the inverse of the hit test,
 /// an element-driven tap and the scene's own routing cannot disagree.
@@ -139,7 +153,7 @@ final class AccessibleSKView: SKView {
         let elements: [UIAccessibilityElement] = gameScene.accessibleUINodes().compactMap { node in
             guard let sceneFrame = gameScene.accessibilityFrameInScene(for: node) else { return nil }
             let element = UIAccessibilityElement(accessibilityContainer: self)
-            element.accessibilityFrame = self.windowFrame(forSceneRect: sceneFrame, in: gameScene)
+            element.accessibilityFrame = self.screenFrame(forSceneRect: sceneFrame, in: gameScene)
             element.accessibilityIdentifier = node.accessibilityIdentifier
             element.accessibilityLabel = node.accessibilityLabel
             element.accessibilityTraits = node.accessibilityTraits
@@ -149,22 +163,53 @@ final class AccessibleSKView: SKView {
     }
 
     /// Converts `sceneRect` (scene coordinates, y-up, origin bottom-left)
-    /// into window coordinates (y-down, origin top-left) - the space
-    /// `accessibilityFrame` is defined in.
+    /// into **screen** coordinates - `UIScreen.fixedCoordinateSpace`, y-down,
+    /// portrait-up origin - which is the space `accessibilityFrame` is
+    /// defined in.
+    ///
+    /// The view -> screen step goes through
+    /// `UIAccessibility.convertToScreenCoordinates(_:in:)` rather than
+    /// `convert(_:to: nil)`: the latter answers in *window* coordinates,
+    /// which only coincide with screen coordinates while the interface is
+    /// portrait and the window is full-bleed (see the class comment).
     ///
     /// Internal so the conversion can be exercised directly by tests.
-    func windowFrame(forSceneRect sceneRect: CGRect, in scene: SKScene) -> CGRect {
+    func screenFrame(forSceneRect sceneRect: CGRect, in scene: SKScene) -> CGRect {
+        let rect = viewRect(forSceneRect: sceneRect, in: scene)
+
+        // A view with no window has no screen mapping to speak of, and
+        // `UIAccessibility.convertToScreenCoordinates(_:in:)` goes through
+        // the window to reach the screen - so off-window it can only answer
+        // a degenerate rect. Return the view-space rect instead: it is the
+        // same number the windowed conversion produces for the app's single
+        // full-bleed portrait window, and it keeps an off-window view (unit
+        // tests, a view mid-teardown) publishing a frame that still measures
+        // the button rather than an empty one.
+        guard window != nil else { return rect }
+
+        return UIAccessibility.convertToScreenCoordinates(rect, in: self)
+    }
+
+    /// The scene -> view half of `screenFrame(forSceneRect:in:)`: `sceneRect`
+    /// expressed in this view's own coordinate space (y-down, origin
+    /// top-left), still camera-aware.
+    ///
+    /// Split out from the screen conversion so tests can round-trip a
+    /// published frame back into scene space with `convert(_:to: scene)`
+    /// without a window and without having to invert UIKit's
+    /// orientation-dependent screen mapping - the view-space rect is the
+    /// number the round trip is actually about.
+    func viewRect(forSceneRect sceneRect: CGRect, in scene: SKScene) -> CGRect {
         // Two opposite corners rather than origin + size, because the
         // scene-to-view step flips the y axis: taking min/abs afterwards
         // rebuilds a well-formed rect whichever way round they land.
         let first = convert(CGPoint(x: sceneRect.minX, y: sceneRect.minY), from: scene)
         let second = convert(CGPoint(x: sceneRect.maxX, y: sceneRect.maxY), from: scene)
-        let viewRect = CGRect(
+        return CGRect(
             x: min(first.x, second.x),
             y: min(first.y, second.y),
             width: abs(second.x - first.x),
             height: abs(second.y - first.y)
         )
-        return convert(viewRect, to: nil)
     }
 }
