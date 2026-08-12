@@ -10,7 +10,7 @@ final class CyberpunkMonsterCrawlUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// `MenuScreen`'s PLAY button is an accessibility element with `.button`
+    /// `MenuScreenNode`'s PLAY button is an accessibility element with `.button`
     /// traits (see `ButtonNode`); matching on `.any` keeps the query working
     /// whichever element type SpriteKit surfaces it as.
     private func playButton(in app: XCUIApplication) -> XCUIElement {
@@ -31,15 +31,17 @@ final class CyberpunkMonsterCrawlUITests: XCTestCase {
 
         play.tap()
 
-        // SCAFFOLDING(CYBERPUN-17-2-t3): with no gameplay screen registered
-        // yet, the menu unmounting is the only observable consequence of the
-        // menu -> gameplay transition; assert the gameplay HUD here instead
-        // once CYBERPUN-17-2-t3 ships it.
         let menuDismissed = expectation(
             for: NSPredicate(format: "exists == false"),
             evaluatedWith: play
         )
         wait(for: [menuDismissed], timeout: 5)
         XCTAssertEqual(app.state, .runningForeground)
+
+        let gameplayContainer = app.descendants(matching: .any)["gameplay.container"]
+        XCTAssertTrue(
+            gameplayContainer.waitForExistence(timeout: 5),
+            "PLAY must land on the (skeleton) gameplay screen, not an empty uiLayer"
+        )
     }
 }

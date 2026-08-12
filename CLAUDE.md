@@ -43,16 +43,19 @@ project.yml                          XcodeGen spec (app + test targets)
 setup.sh, .gitignore
 CyberpunkMonsterCrawl/
   AppDelegate.swift, SceneDelegate.swift   UIKit scene wiring
-  GameViewController.swift                 composition root: hosts the SKView, builds GameScene, registers MenuScreen, presents it
-  BootScene.swift                          bootstrap SpriteKit scene (no longer presented; removed by CYBERPUN-17-2-t3)
+  GameViewController.swift                 composition root: hosts the SKView, builds GameScene, registers all four screens, presents it
   GameStateMachine.swift                   menu/gameplay/death/highScores GKStateMachine wrapper
   GameScene.swift                          three persistent layers (worldLayer/effectsLayer/uiLayer), state-driven screen registry, UI-first touch dispatch
   Layers/LayerConstants.swift              named zPosition bands enforcing worldLayer < effectsLayer < uiLayer
-  Layers/ScreenNode.swift                  ScreenNode protocol + PlaceholderScreenNode test double (remaining concrete screens land in CYBERPUN-17-2-t3)
+  Layers/ScreenNode.swift                  ScreenNode protocol + PlaceholderScreenNode test double
   Layers/TouchResponder.swift              touch-consumer protocol + the "scene is the sole dispatcher" contract
-  Layers/ButtonNode.swift                  minimal tappable button (plate + label) delivered to via TouchResponder
+  Layers/ButtonNode.swift                  minimal tappable button (plate + label, optional neon accent frame) delivered to via TouchResponder
   Layers/SceneInvariants.swift             runtime audits: cumulative-z band escapes, nodes bypassing scene touch dispatch
-  Screens/MenuScreen.swift                 the menu: title + working PLAY button, registered for .menu
+  Layers/PixelGritPalette.swift            shared dark-background / neon-accent colors for every screen
+  Screens/MenuScreenNode.swift             the menu: title + neon PLAY button + placeholder HIGH SCORES entry, registered for .menu
+  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; SCAFFOLDING(CYBERPUN-17-7) placeholder content
+  Screens/DeathScreenNode.swift            skeleton .death screen; real RUN AGAIN / back-to-menu buttons, SCAFFOLDING(CYBERPUN-17-16) placeholder run-summary content
+  Screens/HighScoresScreenNode.swift       skeleton .highScores screen; real back-to-menu button, SCAFFOLDING(CYBERPUN-17-16) placeholder scores content
   PrivacyInfo.xcprivacy, *.entitlements
   Assets.xcassets/                         the single asset catalog for the target
     Atlas/                                 10 atlas-sheet imagesets (1x only)
@@ -81,9 +84,10 @@ CyberpunkMonsterCrawlTests/
   TouchRoutingTests.swift                  UI-first touch routing: an overlapping UI node always wins over a world node
   TouchDispatchTests.swift                 the routed touch is delivered to a TouchResponder; no node bypasses scene dispatch
   GameSceneScreenSwitchingTests.swift      state-machine-driven screen registry swap incl. replace-while-active, using PlaceholderScreenNode doubles
-  GameViewControllerCompositionTests.swift composition root builds GameScene, mounts MenuScreen, wires PLAY to the state machine
+  GameViewControllerCompositionTests.swift composition root builds GameScene, mounts MenuScreenNode + the three skeleton screens, wires PLAY to the state machine
 CyberpunkMonsterCrawlUITests/
-  CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run; SCAFFOLDING(CYBERPUN-17-2-t3) for the gameplay-HUD assertion
+  CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run and lands on the gameplay screen
+  AppLaunchAndRotationUITests.swift        launch shows the menu in portrait, rotation re-lays it out in landscape with nothing off-screen, PLAY dismisses the menu
 docs/bootstrap.md                          original spec (source of truth)
 ```
 
@@ -94,9 +98,8 @@ docs/bootstrap.md                          original spec (source of truth)
 ## Planned architecture (from docs/bootstrap.md)
 
 - UIKit + single `SKView` host (implemented in this PR)
-- Bootstrap `BootScene` showing the project name (implemented; no longer
-  presented — `GameViewController` presents `GameScene`, and
-  CYBERPUN-17-2-t3 removes `BootScene`)
+- `GameViewController` presents `GameScene` directly (the bootstrap
+  `BootScene` smoke scene has been removed now that a real menu exists)
 - Atlas contract type for the 10 sheet families
   (`CyberpunkMonsterCrawl/Sources/Assets/SpriteSheet.swift` +
   `AtlasSheet.swift` + `AtlasCellIndex.swift`) recording each sheet's declared
@@ -150,10 +153,12 @@ docs/bootstrap.md                          original spec (source of truth)
   to `onIllegalTransition`, which defaults to an `os.Logger` warning in DEBUG
   so a mis-wired button that silently does nothing is visible in the
   simulator rather than at QA time (implemented; `GameScene` is its first
-  production caller, and `GameViewController` presents `GameScene` with
-  `MenuScreen` registered for `.menu`, so PLAY drives menu → gameplay in a
-  real build — the gameplay/death/highScores screens land in
-  CYBERPUN-17-2-t3)
+  production caller, and `GameViewController` presents `GameScene` with all
+  four concrete screens registered — `MenuScreenNode` for `.menu`,
+  `GameplayScreenNode` for `.gameplay`, `DeathScreenNode` for `.death` and
+  `HighScoresScreenNode` for `.highScores` — so PLAY drives menu → gameplay,
+  and RUN AGAIN / back-to-menu drive the remaining legal transitions, in a
+  real build)
 - Scene graph z-layering: `worldLayer < effectsLayer < uiLayer`, `uiLayer`
   pinned to the scene's camera with first refusal on every touch, backed by
   named `LayerConstants` and a state-driven `[GameState: ScreenNode]`
@@ -161,7 +166,9 @@ docs/bootstrap.md                          original spec (source of truth)
   `GameStateMachine` transition (implemented — `GameScene.swift`,
   `Layers/LayerConstants.swift`, `Layers/ScreenNode.swift`,
   `Layers/TouchResponder.swift`, `Layers/ButtonNode.swift`,
-  `Layers/SceneInvariants.swift`, `Screens/MenuScreen.swift`;
+  `Layers/SceneInvariants.swift`, `Layers/PixelGritPalette.swift`,
+  `Screens/MenuScreenNode.swift`, `Screens/GameplayScreenNode.swift`,
+  `Screens/DeathScreenNode.swift`, `Screens/HighScoresScreenNode.swift`;
   `LayerOrderingTests`, `TouchRoutingTests`, `TouchDispatchTests`,
   `GameSceneScreenSwitchingTests` and `GameViewControllerCompositionTests`
   cover the ordering invariant, UI-first routing, actual touch delivery, the
@@ -192,23 +199,17 @@ docs/bootstrap.md                          original spec (source of truth)
   pulse, hit puff, signs, ground tiles, buildings) into an actual on-screen
   scene — `TextureLoading.texture(named:)` / `BuildingSprite.texture` exist
   and are tested, but no scene places any sprite yet (later PRs)
-- CYBERPUN-17-2-t3 (next sub-task in CYBERPUN-17-2) — the concrete
-  gameplay/death/highScores screens registered with
-  `GameScene.register(_:for:)`, the styled menu (high-scores entry, art,
-  layout polish) and deleting the now-unpresented `BootScene`. The layered
-  scene architecture, the named zPosition contract, the state-driven screen
-  registry, UI-first touch dispatch, a working PLAY button and the
-  composition-root swap to `GameScene` are implemented and tested
-  (CYBERPUN-17-2-t2 — see above); what remains is the rest of the screen
-  content
+- Final gameplay HUD, death-screen run-summary rows and the high-scores list
+  are explicitly out of scope for CYBERPUN-17-2 (see the story's "Out of
+  scope" section) and remain marked `// SCAFFOLDING:` in
+  `GameplayScreenNode` / `DeathScreenNode` / `HighScoresScreenNode` —
+  navigation (PLAY, RUN AGAIN, back-to-menu) is real; the visual content is
+  not. `GameplayScreenNode`'s placeholder is tagged for CYBERPUN-17-7 (the
+  floating-thumbstick story); the death/high-scores placeholders are tagged
+  for CYBERPUN-17-16 (integration checkpoint #2)
 - Depth module
 - Procedural world generation + chunk streaming
 - Tile-grid collision system
-- Gameplay-HUD XCUITest assertion — the UI test asserts the acceptance flow
-  it can observe today (menu present, PLAY button hittable, tapping it
-  dismisses the menu and starts a run); asserting the gameplay HUD itself
-  carries a `// SCAFFOLDING(CYBERPUN-17-2-t3)` marker and lands with that
-  screen
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
 - Audio, app icon art, launch screen polish, App Store metadata/submission

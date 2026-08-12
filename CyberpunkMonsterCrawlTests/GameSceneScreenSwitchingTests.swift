@@ -4,10 +4,10 @@ import UIKit
 @testable import CyberpunkMonsterCrawl
 
 /// Exercises `GameScene`'s state-driven screen registry using
-/// `PlaceholderScreenNode` doubles for the slots that have no concrete
-/// screen yet (gameplay / death / high scores, which land in
-/// CYBERPUN-17-2-t3; `.menu` is a real `MenuScreen` in the composed app -
-/// see `GameViewControllerCompositionTests`). Proves a `GameStateMachine`
+/// `PlaceholderScreenNode` doubles, independent of the concrete screens the
+/// composed app registers (`MenuScreenNode` / `GameplayScreenNode` /
+/// `DeathScreenNode` / `HighScoresScreenNode` - see
+/// `GameViewControllerCompositionTests`). Proves a `GameStateMachine`
 /// transition correctly calls
 /// `willExit()` on the outgoing screen and `willEnter()` on the incoming
 /// one, and that the registry's active screen swaps accordingly.

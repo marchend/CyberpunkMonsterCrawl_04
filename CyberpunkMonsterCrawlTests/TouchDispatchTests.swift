@@ -105,11 +105,11 @@ final class TouchDispatchTests: XCTestCase {
         let scene = makeScene()
         XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
 
-        scene.register(MenuScreen(onPlay: {}), for: .menu)
+        scene.register(MenuScreenNode(onPlay: {}, onHighScores: {}), for: .menu)
 
         XCTAssertTrue(
             scene.nodesBypassingSceneTouchDispatch().isEmpty,
-            "MenuScreen/ButtonNode must not set isUserInteractionEnabled: UIKit would deliver the "
+            "MenuScreenNode/ButtonNode must not set isUserInteractionEnabled: UIKit would deliver the "
                 + "touch before the scene's touchesBegan and bypass UI-first routing"
         )
     }
@@ -140,9 +140,12 @@ final class TouchDispatchTests: XCTestCase {
 
     func test_tappingMenuPlayButton_transitionsTheStateMachineToGameplay() {
         let scene = makeScene()
-        let menu = MenuScreen { [weak scene] in
-            scene?.stateMachine.transition(to: .gameplay)
-        }
+        let menu = MenuScreenNode(
+            onPlay: { [weak scene] in
+                scene?.stateMachine.transition(to: .gameplay)
+            },
+            onHighScores: {}
+        )
         scene.register(menu, for: .menu)
 
         // Registration laid the screen out for the scene size; the camera is
@@ -151,7 +154,7 @@ final class TouchDispatchTests: XCTestCase {
         scene.dispatchTouch(atScenePoint: menu.playButton.position)
 
         XCTAssertEqual(scene.stateMachine.currentState, .gameplay, "PLAY must start a run")
-        XCTAssertNil(scene.activeScreen, "the menu unmounts; .gameplay has no screen until CYBERPUN-17-2-t3")
+        XCTAssertNil(scene.activeScreen, "the menu unmounts; .gameplay has no screen registered in this scene")
         XCTAssertNil(menu.node.parent)
     }
 }

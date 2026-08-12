@@ -18,9 +18,17 @@ final class GameViewControllerCompositionTests: XCTestCase {
         let scene = makeScene()
 
         XCTAssertEqual(scene.stateMachine.currentState, .menu)
-        XCTAssertTrue(scene.activeScreen is MenuScreen, "the app must launch into the menu screen")
-        XCTAssertTrue(scene.screens[.menu] is MenuScreen)
+        XCTAssertTrue(scene.activeScreen is MenuScreenNode, "the app must launch into the menu screen")
+        XCTAssertTrue(scene.screens[.menu] is MenuScreenNode)
         XCTAssertTrue(scene.activeScreen?.node.parent === scene.uiLayer, "the menu must be mounted in uiLayer")
+    }
+
+    func test_compositionRoot_registersSkeletonScreens_forGameplayDeathAndHighScores() {
+        let scene = makeScene()
+
+        XCTAssertTrue(scene.screens[.gameplay] is GameplayScreenNode)
+        XCTAssertTrue(scene.screens[.death] is DeathScreenNode)
+        XCTAssertTrue(scene.screens[.highScores] is HighScoresScreenNode)
     }
 
     func test_compositionRoot_scene_satisfiesTheLayerAndDispatchInvariants() {
@@ -32,7 +40,7 @@ final class GameViewControllerCompositionTests: XCTestCase {
 
     func test_compositionRoot_playButton_isWiredToTheStateMachine() throws {
         let scene = makeScene()
-        let menu = try XCTUnwrap(scene.activeScreen as? MenuScreen)
+        let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
 
         scene.dispatchTouch(atScenePoint: menu.playButton.position)
 
@@ -45,5 +53,53 @@ final class GameViewControllerCompositionTests: XCTestCase {
 
     func test_compositionRoot_usesResizeFill_soTheMenuWorksInBothOrientations() {
         XCTAssertEqual(makeScene().scaleMode, .resizeFill)
+    }
+
+    func test_compositionRoot_menuHighScoresButton_isWiredToTheStateMachine() throws {
+        let scene = makeScene()
+        let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
+
+        scene.dispatchTouch(atScenePoint: menu.highScoresButton.position)
+
+        XCTAssertEqual(scene.stateMachine.currentState, .highScores)
+        XCTAssertTrue(scene.activeScreen is HighScoresScreenNode)
+    }
+
+    func test_compositionRoot_deathScreenButtons_areWiredToTheStateMachine() throws {
+        let scene = makeScene()
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+        XCTAssertTrue(scene.stateMachine.transition(to: .death))
+        let death = try XCTUnwrap(scene.activeScreen as? DeathScreenNode)
+
+        scene.dispatchTouch(atScenePoint: death.runAgainButton.position)
+
+        XCTAssertEqual(
+            scene.stateMachine.currentState,
+            .gameplay,
+            "RUN AGAIN in the composed scene must start a new run"
+        )
+    }
+
+    func test_compositionRoot_deathScreenBackToMenuButton_isWiredToTheStateMachine() throws {
+        let scene = makeScene()
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+        XCTAssertTrue(scene.stateMachine.transition(to: .death))
+        let death = try XCTUnwrap(scene.activeScreen as? DeathScreenNode)
+
+        scene.dispatchTouch(atScenePoint: death.backToMenuButton.position)
+
+        XCTAssertEqual(scene.stateMachine.currentState, .menu)
+        XCTAssertTrue(scene.activeScreen is MenuScreenNode)
+    }
+
+    func test_compositionRoot_highScoresScreenBackToMenuButton_isWiredToTheStateMachine() throws {
+        let scene = makeScene()
+        XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
+        let highScores = try XCTUnwrap(scene.activeScreen as? HighScoresScreenNode)
+
+        scene.dispatchTouch(atScenePoint: highScores.backToMenuButton.position)
+
+        XCTAssertEqual(scene.stateMachine.currentState, .menu)
+        XCTAssertTrue(scene.activeScreen is MenuScreenNode)
     }
 }

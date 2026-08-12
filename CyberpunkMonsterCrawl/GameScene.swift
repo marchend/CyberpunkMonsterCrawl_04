@@ -12,15 +12,15 @@ import UIKit
 /// (`LayerOrderingTests`) and a checked routing function
 /// (`TouchRoutingTests`), not an unenforced convention.
 ///
-/// `GameViewController` presents this scene and registers `MenuScreen` for
-/// `.menu`, so the layer bands, camera pinning, screen registry and touch
-/// dispatch below are reachable from the running app rather than from unit
-/// tests only: launching the app shows the menu, and tapping PLAY drives
+/// `GameViewController` presents this scene and registers `MenuScreenNode`
+/// for `.menu` plus the skeleton `GameplayScreenNode` / `DeathScreenNode` /
+/// `HighScoresScreenNode` for the remaining states, so the layer bands,
+/// camera pinning, screen registry and touch dispatch below are reachable
+/// from the running app rather than from unit tests only: launching the app
+/// shows the menu, and tapping PLAY drives
 /// `stateMachine.transition(to: .gameplay)` through `ButtonNode`.
-/// The remaining concrete screens (gameplay HUD / death / high scores) land
-/// in CYBERPUN-17-2-t3 and register the same way;
-/// `GameSceneScreenSwitchingTests` exercises the swap logic for those slots
-/// with `PlaceholderScreenNode` doubles in the meantime.
+/// `GameSceneScreenSwitchingTests` continues to exercise the generic swap
+/// logic with `PlaceholderScreenNode` doubles.
 final class GameScene: SKScene {
 
     // MARK: - Layers
@@ -57,8 +57,9 @@ final class GameScene: SKScene {
     let stateMachine = GameStateMachine()
 
     /// State -> screen registry. Empty by default; the composition root
-    /// (`GameViewController`) registers `MenuScreen` for `.menu`, and
-    /// CYBERPUN-17-2-t3 registers the remaining screens the same way.
+    /// (`GameViewController`) registers `MenuScreenNode`, `GameplayScreenNode`,
+    /// `DeathScreenNode` and `HighScoresScreenNode` for their respective
+    /// states.
     private(set) var screens: [GameState: ScreenNode] = [:]
 
     /// The screen currently mounted in `uiLayer`, if any.
@@ -124,9 +125,9 @@ final class GameScene: SKScene {
     /// Swaps the active screen in `uiLayer` for `state`: `willExit()` then
     /// removal of the outgoing screen (if any), followed by mounting,
     /// layout and `willEnter()` on the incoming screen (if one is
-    /// registered for `state`). A state with no registered screen - the
-    /// case for `.gameplay`/`.death`/`.highScores` until CYBERPUN-17-2-t3
-    /// ships them - simply clears `activeScreen`.
+    /// registered for `state`). A state with no registered screen at all
+    /// (not possible in the composed app today, but exercised directly by
+    /// unit tests) simply clears `activeScreen`.
     func transitionScreens(to state: GameState) {
         if let current = activeScreen {
             current.willExit()

@@ -11,10 +11,11 @@ import XCTest
 ///
 /// **Scope.** The scan walks `CyberpunkMonsterCrawl/` rather than
 /// `CyberpunkMonsterCrawl/Sources/`, because the files most likely to
-/// hand-roll a crop rect — `GameViewController.swift`, `BootScene.swift`, and
-/// whatever scene files the renderer PRs add next — sit at the target root or
-/// in new sibling directories, not under `Sources/`. Anything under a
-/// `…Tests` directory is excluded: test code measures pixels deliberately.
+/// hand-roll a crop rect — `GameViewController.swift`, the `Screens/` screen
+/// nodes, and whatever scene files the renderer PRs add next — sit at the
+/// target root or in new sibling directories, not under `Sources/`. Anything
+/// under a `…Tests` directory is excluded: test code measures pixels
+/// deliberately.
 ///
 /// **Patterns.** `SKTexture(rect:` and `textureRect` are forbidden outright.
 /// `CGRect(` is only forbidden on lines that also mention a texture/sheet
@@ -74,8 +75,8 @@ final class AtlasContractConventionTests: XCTestCase {
         "AtlasCellIndex.swift",
         "TextureLoading.swift",
         "GameViewController.swift",
-        "BootScene.swift",
         "SceneDelegate.swift",
+        "MenuScreenNode.swift",
     ]
 
     private var productionDirectory: URL {
