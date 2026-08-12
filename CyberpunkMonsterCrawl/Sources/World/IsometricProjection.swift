@@ -129,7 +129,24 @@ enum IsometricProjection {
 
     /// `floor(coordinate + 0.5)` — see `tile(containing:)` for why this
     /// rounding rule and not `round()`.
+    ///
+    /// A tiny epsilon is folded in before flooring to absorb floating-point
+    /// noise introduced by the screen-space round trip
+    /// (`tileToScreen`/`screenToTile`): multiplying and dividing by 48/24
+    /// is not exact for most tile-space values, so a coordinate that is
+    /// mathematically exactly on a seam (e.g. tile-space `-4.5`) can come
+    /// back from the round trip as `-4.500000000000002` instead. Without
+    /// the epsilon that noise flips `floor` to the tile on the wrong side
+    /// of the seam, so `tile(containing: TilePoint)` and
+    /// `tile(containing: CGPoint)` disagree for the exact same position.
+    /// `1e-6` is many orders of magnitude larger than the accumulated
+    /// double-precision error here (~1e-13) but far smaller than the
+    /// half-tile seam spacing this rule cares about, so it cannot change
+    /// the answer for any position that is not already on (or numerically
+    /// indistinguishable from) a seam.
+    private static let seamEpsilon: Double = 1e-6
+
     private static func owningTileIndex(forTileSpaceCoordinate coordinate: Double) -> Int {
-        Int((coordinate + 0.5).rounded(.down))
+        Int((coordinate + 0.5 + seamEpsilon).rounded(.down))
     }
 }
