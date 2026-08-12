@@ -5,7 +5,7 @@ import XCTest
 /// must keep the resident-chunk count within a fixed window at every step,
 /// and a chunk that gets evicted and later revisited must regenerate
 /// byte-for-byte identically to the pure `ChunkGenerator`/`CityLatticeGenerator`
-/// output \u2014 streaming must never be observable as a change in world content.
+/// output — streaming must never be observable as a change in world content.
 final class ChunkStreamingManagerTests: XCTestCase {
 
     private let seed = WorldSeed(rawValue: 2_024)
@@ -37,7 +37,7 @@ final class ChunkStreamingManagerTests: XCTestCase {
     }
 
     func test_residentChunkCount_atRest_equalsTheFullWindowSize() {
-        // Far from any world edge (there is none \u2014 the world is
+        // Far from any world edge (there is none — the world is
         // unbounded), a single `updateCamera` call should fill the entire
         // window in one shot.
         let manager = ChunkStreamingManager(seed: seed)
@@ -208,7 +208,7 @@ final class ChunkStreamingManagerTests: XCTestCase {
     func test_evictedChunk_whenRevisited_matchesStandaloneClassifyDirectly() {
         // Same guarantee as above, but checked straight against
         // `CityLatticeGenerator.classify` rather than a second
-        // `ChunkGenerator.generate` call \u2014 pinning the full chain
+        // `ChunkGenerator.generate` call — pinning the full chain
         // (streaming -> chunk generation -> pure per-tile classification)
         // end to end.
         let manager = ChunkStreamingManager(seed: seed)
