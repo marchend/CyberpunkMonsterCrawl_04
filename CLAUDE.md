@@ -283,7 +283,19 @@ docs/bootstrap.md                          original spec (source of truth)
   entry to `.gameplay` from `worldSeed` centred on `cameraWorldPosition`. So
   tapping PLAY in a real build shows the generated city rather than an empty
   scene, and the mounted node count stays bounded by the resident window
-  however far the camera roams. Which crop *is* the east-west lane is pinned
+  however far the camera roams. **The very first `updateCamera` call on a
+  fresh streamer (`CYBERPUN-17-4-t4`) mounts only the
+  `ChunkStreamingManager.quickstartRadius` ring synchronously** and queues
+  the rest of the window in `pendingMountQueue`, drained a few chunks per
+  call by `advanceIncrementalMount()` \u2014 which `GameScene.update(_:)` calls
+  every frame, in Release builds too, not just DEBUG. This exists because the
+  old code mounted the *entire* resident window (up to 3,136 `SKSpriteNode`s)
+  synchronously inside the PLAY tap's own call stack, a stall long enough for
+  a scripted runtime probe to catch the app before the first `.gameplay`
+  frame had presented. Every call after the first mounts immediately, exactly
+  as before; `flushPendingMounts()` mounts the deferred remainder on demand
+  for a caller (or a test) that needs the full window right now rather than
+  waiting for further ticks. Which crop *is* the east-west lane is pinned
   by `GroundTileSemanticsTests`, which re-measures the shipped pixels (crop
   fingerprints must all differ; each lane crop's paint must be elongated
   along the tile axis its case name claims) - a swapped lane pair fails
@@ -300,12 +312,17 @@ docs/bootstrap.md                          original spec (source of truth)
   (`ChunkStreamingGroundTests` pins both sequences)
 - `GameScene` carries one `SCAFFOLDING(CYBERPUN-17-7)` artifact in
   production code: a debug camera pan (`debugPanEnabled`,
-  `debugPanTilesPerSecond`, `advanceDebugPanIfNeeded` and the `update(_:)`
-  override, all `#if DEBUG` and off by default) that exists only so
-  multi-chunk streaming can be watched end-to-end during a manual run, since
-  there is no camera-follow yet. `CYBERPUN-17-7` deletes the block when real
-  player/camera movement lands. Deliberately **not** covered by any test, so
-  removing it cannot mean deleting a green test
+  `debugPanTilesPerSecond` and `advanceDebugPanIfNeeded`, all `#if DEBUG`
+  and off by default) that exists only so multi-chunk streaming can be
+  watched end-to-end during a manual run, since there is no camera-follow
+  yet. `CYBERPUN-17-7` deletes the block when real player/camera movement
+  lands. Deliberately **not** covered by any test, so removing it cannot
+  mean deleting a green test. The `update(_:)` override that calls it is
+  **not** part of that scaffolding (`CYBERPUN-17-4-t4`): it also drains
+  `groundPlane`'s incremental-mount queue every frame, unconditionally, in
+  Release builds too \u2014 that half is a correctness fix (see
+  `GroundPlaneStreamer` above), so `CYBERPUN-17-7` must keep the override and
+  delete only the `#if DEBUG` call inside it
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,

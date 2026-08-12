@@ -233,16 +233,32 @@ final class GameScene: SKScene {
         #endif
     }
 
+    /// Drains `groundPlane`'s incremental-mount queue a few chunks at a time
+    /// (`GroundPlaneStreamer.advanceIncrementalMount()`), and \u2014 DEBUG builds
+    /// only \u2014 advances the scaffolding debug pan.
+    ///
+    /// `CYBERPUN-17-4-t4`: the incremental-mount drain runs in Release too,
+    /// deliberately. It exists to fix a real stall (the first `.gameplay`
+    /// entry used to mount the entire resident chunk window synchronously,
+    /// inside the PLAY tap's own call stack, which a runtime probe caught
+    /// mid-stall), so it is production behaviour, not a debug aid \u2014 unlike
+    /// the pan below, gating it behind `#if DEBUG` would ship the bug it
+    /// fixes.
+    override func update(_ currentTime: TimeInterval) {
+        super.update(currentTime)
+        groundPlane?.advanceIncrementalMount()
+        #if DEBUG
+        advanceDebugPanIfNeeded(currentTime: currentTime)
+        #endif
+    }
+
     #if DEBUG
     // SCAFFOLDING(CYBERPUN-17-7): see the block comment above `debugPanEnabled`.
     // `CYBERPUN-17-7` should delete `advanceDebugPanIfNeeded(currentTime:)`
-    // and the `update(_:)` override below along with it once real
-    // player/camera movement exists to exercise streaming instead. Both are
-    // DEBUG-only, so a Release build has no per-frame work here at all.
-    override func update(_ currentTime: TimeInterval) {
-        super.update(currentTime)
-        advanceDebugPanIfNeeded(currentTime: currentTime)
-    }
+    // once real player/camera movement exists to exercise streaming instead.
+    // It is DEBUG-only, so a Release build has no per-frame work from it at
+    // all (the incremental-mount drain above runs unconditionally though \u2014
+    // see its own doc comment for why that one is not scaffolding).
 
     /// Moves the camera in a straight line (+x in tile space) at
     /// `debugPanTilesPerSecond`, driving `groundPlane`'s streaming as it

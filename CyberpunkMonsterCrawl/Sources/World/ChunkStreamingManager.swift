@@ -81,6 +81,49 @@ final class ChunkStreamingManager {
         return side * side
     }
 
+    /// Chebyshev-distance radius, in chunks, around the camera's chunk that
+    /// must be mounted **synchronously** on the very first `.gameplay`
+    /// entry \u2014 `CYBERPUN-17-4-t4`'s fix for the main-thread stall a runtime
+    /// probe caught: the old code built/mounted the entire `residentRadius`
+    /// window (49 chunks, up to 3,136 `SKSpriteNode`s) inside the same call
+    /// stack as the PLAY tap. `GroundPlaneStreamer` mounts only this smaller
+    /// ring immediately and streams the rest in over the next few
+    /// `GameScene.update(_:)` ticks, so the first rendered frame already
+    /// shows a street without blocking the tap handler on the full window.
+    ///
+    /// Deliberately smaller than `residentRadius` (which is sized for the
+    /// worst-case iPad-landscape *reference* viewport, `referenceViewportPoints`):
+    /// a radius-1 ring (9 chunks, a guaranteed 8-tile margin) comfortably
+    /// covers a typical phone viewport for the one synchronous frame this
+    /// exists to unblock, trading a slightly tighter first-frame margin for
+    /// never doing the full 49-chunk mount inside a touch handler.
+    static let quickstartRadius = 1
+
+    /// The chunk coordinate that owns `worldPosition` (tile space) \u2014 the
+    /// camera-chunk computation `updateCamera` needs, exposed so
+    /// `GroundPlaneStreamer` can derive the same "which chunk is the camera
+    /// on" answer for its own quickstart-ring mounting without re-deriving
+    /// (or disagreeing with) the rounding rule.
+    static func chunkCoordinate(containing worldPosition: TilePoint) -> ChunkCoordinate {
+        let tile = IsometricProjection.tile(containing: worldPosition)
+        return ChunkCoordinate.containing(tileX: tile.tileX, tileY: tile.tileY)
+    }
+
+    /// Every chunk coordinate within `radius` (Chebyshev distance) of
+    /// `center`, inclusive \u2014 a `(2*radius + 1)`-side square of chunks
+    /// centred on `center`. Exposed (rather than kept private to
+    /// `residentRadius`'s own use) so `GroundPlaneStreamer` can compute the
+    /// smaller `quickstartRadius` ring with the identical shape rule.
+    static func chunkCoordinates(withinRadius radius: Int, of center: ChunkCoordinate) -> Set<ChunkCoordinate> {
+        var result: Set<ChunkCoordinate> = []
+        for dx in -radius...radius {
+            for dy in -radius...radius {
+                result.insert(ChunkCoordinate(x: center.x + dx, y: center.y + dy))
+            }
+        }
+        return result
+    }
+
     private let seed: WorldSeed
 
     /// Building-footprint reservation state for the whole world.
@@ -124,10 +167,9 @@ final class ChunkStreamingManager {
         // (tile-space x = 7.6 -> tile 7 -> chunk 0, where the pinned rule says
         // tile 8 -> chunk 1), which slid the whole resident window half a tile
         // off from the camera.
-        let cameraTile = IsometricProjection.tile(containing: worldPosition)
-        let cameraChunk = ChunkCoordinate.containing(tileX: cameraTile.tileX, tileY: cameraTile.tileY)
+        let cameraChunk = Self.chunkCoordinate(containing: worldPosition)
 
-        let desired = Self.chunkCoordinatesWithinRadius(of: cameraChunk)
+        let desired = Self.chunkCoordinates(withinRadius: Self.residentRadius, of: cameraChunk)
 
         var newlyLoaded: Set<ChunkCoordinate> = []
         for coordinate in desired where residentChunks[coordinate] == nil {
@@ -145,18 +187,5 @@ final class ChunkStreamingManager {
         }
 
         return newlyLoaded
-    }
-
-    /// Every chunk coordinate within `residentRadius` (Chebyshev distance)
-    /// of `center`, inclusive \u2014 a `(2*radius + 1)`-side square of chunks
-    /// centred on the camera's own chunk.
-    private static func chunkCoordinatesWithinRadius(of center: ChunkCoordinate) -> Set<ChunkCoordinate> {
-        var result: Set<ChunkCoordinate> = []
-        for dx in -residentRadius...residentRadius {
-            for dy in -residentRadius...residentRadius {
-                result.insert(ChunkCoordinate(x: center.x + dx, y: center.y + dy))
-            }
-        }
-        return result
     }
 }
