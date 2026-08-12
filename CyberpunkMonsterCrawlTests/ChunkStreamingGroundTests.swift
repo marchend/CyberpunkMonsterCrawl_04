@@ -10,16 +10,23 @@ import XCTest
 ///
 /// `GroundPlaneStreamerTests` already pins the basic mount/evict contract
 /// (one node per resident tile, no rebuild within the same chunk, torn down
-/// on `unmountAll`). This suite covers the three things this PR's plan calls
-/// out specifically and that suite does not: (1) resident node count staying
-/// bounded across a genuinely long multi-chunk pan, not just a handful of
-/// steps; (2) a chunk that streams out and later streams back in reusing
-/// node identities from `GroundPlaneStreamer`'s recycle pool rather than
-/// allocating without bound; and (3) no gap or duplicate ground node at any
-/// tile of the resident window, checked at every step of a sweep that
+/// on `unmountAll`). This suite covers what that one does not: (1) resident
+/// node count staying bounded across a genuinely long multi-chunk pan, not
+/// just a handful of steps; (2) a chunk that streams out and later streams
+/// back in reusing node identities from `GroundPlaneStreamer`'s recycle pool
+/// rather than allocating without bound; (3) no gap or duplicate ground node
+/// at any tile of the resident window, checked at every step of a sweep that
 /// repeatedly crosses chunk boundaries (AC1, the continuous-ground/no-seams
 /// criterion, holding across a pan rather than only at a single camera
-/// position).
+/// position); and (4) the two sequences that are *not* a pan — `unmountAll()`
+/// followed by `updateCamera`, and a run restarted through `GameScene` —
+/// recycling the same nodes instead of re-allocating a whole window.
+///
+/// Everything here drives the production streaming API. In particular
+/// nothing references `GameScene.debugPanEnabled`: the
+/// `SCAFFOLDING(CYBERPUN-17-7)` debug pan is a manual-inspection aid, and a
+/// test asserting its behaviour would mean `CYBERPUN-17-7` could not remove
+/// it without removing a green test.
 final class ChunkStreamingGroundTests: XCTestCase {
 
     private let seed = WorldSeed(rawValue: 90_210)
@@ -31,7 +38,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
 
     /// Pans the camera far beyond any single chunk (hundreds of tiles, both
     /// along a single axis and diagonally) and asserts the mounted ground
-    /// node count never grows past the fixed resident window \u2014 in
+    /// node count never grows past the fixed resident window — in
     /// particular, it must not creep upward the further the camera has
     /// travelled, which is exactly the failure mode a leaking mount/evict
     /// pairing would produce.
@@ -100,7 +107,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
     /// The same reuse property, checked as a long walk rather than a single
     /// out-and-back trip: many chunk boundaries are crossed, in both
     /// directions, and the set of node identities ever mounted still must
-    /// not exceed the bounded window \u2014 "does not duplicate" at minimum, and
+    /// not exceed the bounded window — "does not duplicate" at minimum, and
     /// in this implementation genuine identity reuse.
     func test_repeatedBackAndForthPan_stillReusesNodeIdentities_ratherThanGrowingWithoutBound() {
         let worldLayer = SKNode()
@@ -125,7 +132,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
     /// At every step of a sweep that crosses many chunk boundaries, the set
     /// of tile coordinates covered by mounted ground nodes must exactly
     /// match the set of tiles belonging to the currently resident chunks:
-    /// no missing tile (a gap \u2014 AC1's continuous-ground/no-seams criterion
+    /// no missing tile (a gap — AC1's continuous-ground/no-seams criterion
     /// would be violated) and no tile covered by more than one node (a
     /// duplicate at a shared chunk edge).
     func test_sweepAcrossManyChunkBoundaries_hasNoGapOrDuplicateGroundNode() {
@@ -165,7 +172,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
     /// Every world tile belonging to any chunk `manager` currently
     /// considers resident, derived independently from `ChunkCoordinate`'s
     /// own `worldTileOrigin` rather than from anything `GroundPlaneStreamer`
-    /// computes \u2014 so this is a check against the streaming manager's
+    /// computes — so this is a check against the streaming manager's
     /// ground truth, not a restatement of the mount code under test.
     private func expectedResidentTiles(for manager: ChunkStreamingManager) -> Set<TileCoordinate> {
         var tiles: Set<TileCoordinate> = []
@@ -180,60 +187,144 @@ final class ChunkStreamingGroundTests: XCTestCase {
         return tiles
     }
 
-    // MARK: - Scaffolding debug pan (GameScene)
+    // MARK: - Scene invariants hold while the ground streams
 
-    /// The scaffolding debug pan (`GameScene.debugPanEnabled`) is what
-    /// exercises multi-chunk streaming end-to-end in a running session per
-    /// this PR's AC \u2014 this pins that it actually moves the camera across a
-    /// chunk boundary over time, and that doing so keeps every scene
-    /// invariant intact (no world content escaping its layer band, no node
-    /// bypassing the scene's own touch dispatch).
-    func test_debugPan_movesCameraAcrossAChunkBoundary_keepingSceneInvariantsIntact() {
+    /// Streaming across chunk boundaries inside a real `GameScene` must keep
+    /// both structural invariants the scene audits intact: no world content
+    /// escaping its layer band (the v1 "world paints over UI" failure), and
+    /// no node bypassing the scene's own touch dispatch.
+    ///
+    /// Driven through `GameScene.groundPlane`'s own `updateCamera` rather
+    /// than through the `SCAFFOLDING(CYBERPUN-17-7)` debug pan. The property
+    /// under test is a *streaming* property, and pinning it to the debug pan
+    /// would mean `CYBERPUN-17-7` could not delete that scaffolding without
+    /// deleting a green test — which is how temporary code becomes
+    /// permanent. Nothing in this suite references `debugPanEnabled`.
+    func test_streamingAcrossChunkBoundariesInAScene_keepsEverySceneInvariantIntact() {
         let scene = GameScene(size: CGSize(width: 400, height: 800))
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
-        scene.debugPanEnabled = true
+        guard let plane = scene.groundPlane else {
+            return XCTFail("Entering .gameplay must start the ground plane.")
+        }
 
-        let startingChunk = ChunkCoordinate.containing(
-            tileX: IsometricProjection.tile(containing: scene.cameraWorldPosition).tileX,
-            tileY: IsometricProjection.tile(containing: scene.cameraWorldPosition).tileY
-        )
+        let startingChunk = chunk(containing: TilePoint(x: 0, y: 0))
+        var endingChunk = startingChunk
 
-        // Enough elapsed time, at `debugPanTilesPerSecond`, to cross at
-        // least one `Chunk.size`-tile boundary.
-        let secondsToCrossAChunk = Double(Chunk.size) / GameScene.debugPanTilesPerSecond
-        scene.update(0)
-        scene.update(secondsToCrossAChunk * 1.5)
+        for step in stride(from: 0.0, through: Double(Chunk.size * 6), by: 3) {
+            let position = TilePoint(x: step, y: step * 0.5)
+            plane.updateCamera(worldPosition: position)
+            endingChunk = chunk(containing: position)
 
-        let endingChunk = ChunkCoordinate.containing(
-            tileX: IsometricProjection.tile(containing: scene.cameraWorldPosition).tileX,
-            tileY: IsometricProjection.tile(containing: scene.cameraWorldPosition).tileY
-        )
+            XCTAssertTrue(
+                scene.nodesEscapingTheirLayerBand().isEmpty,
+                "step \(step): streamed ground nodes escaped the world band: "
+                    + "\(scene.layerBandViolationReport())"
+            )
+            XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
+            XCTAssertEqual(
+                scene.worldLayer.children.count, boundedNodeCount,
+                "step \(step): the scene graph grew past the fixed resident window."
+            )
+        }
 
         XCTAssertNotEqual(
             startingChunk, endingChunk,
-            "The scaffolding debug pan must move the camera across a chunk boundary given enough time."
+            "The sweep must actually cross chunk boundaries, or it pins nothing about streaming."
         )
-        XCTAssertTrue(
-            scene.nodesEscapingTheirLayerBand().isEmpty,
-            "Debug-pan-streamed ground nodes escaped the world band: \(scene.layerBandViolationReport())"
-        )
-        XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
     }
 
-    /// Off by default: a scene that never opts in must not have its camera
-    /// move on its own when `update(_:)` runs, since that is exactly the
-    /// real camera-follow behaviour this scaffolding explicitly must not
-    /// stand in for.
-    func test_debugPan_disabledByDefault_doesNotMoveTheCameraOnItsOwn() {
+    // MARK: - Teardown and restart reuse the pool rather than reallocating
+
+    /// `unmountAll()` -> `updateCamera` is a supported sequence (it is what a
+    /// restarted run does), and it must not re-allocate a whole resident
+    /// window's worth of `SKSpriteNode`s.
+    ///
+    /// `unmountAll()` leaves `streaming.residentChunks` untouched, so the
+    /// following `updateCamera` re-mounts the very same window; the nodes it
+    /// detached therefore have to go back into the recycle pool, not on the
+    /// floor. The three tests above only ever pan, so this is the path they
+    /// do not reach.
+    func test_unmountAllThenUpdateCamera_recyclesTheTornDownNodes_ratherThanReallocatingTheWindow() {
+        let worldLayer = SKNode()
+        let streamer = GroundPlaneStreamer(seed: seed, worldLayer: worldLayer)
+
+        streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        let firstMount = Set(worldLayer.children.map(ObjectIdentifier.init))
+        XCTAssertEqual(firstMount.count, boundedNodeCount)
+
+        streamer.unmountAll()
+        XCTAssertTrue(worldLayer.children.isEmpty, "unmountAll must detach every node from the scene graph.")
+        XCTAssertEqual(streamer.mountedNodeCount, 0)
+        XCTAssertEqual(
+            streamer.pooledNodeCount, boundedNodeCount,
+            "unmountAll dropped its nodes instead of returning them to the recycle pool, so the next "
+                + "updateCamera has to allocate a whole resident window again."
+        )
+
+        streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        let secondMount = Set(worldLayer.children.map(ObjectIdentifier.init))
+
+        XCTAssertEqual(secondMount.count, boundedNodeCount)
+        XCTAssertEqual(
+            secondMount, firstMount,
+            "Re-mounting after unmountAll allocated fresh SKSpriteNode identities instead of recycling "
+                + "the ones it had just torn down."
+        )
+    }
+
+    /// The scene-level half of the same property: RUN AGAIN with an unchanged
+    /// seed is the same city, so `startGroundPlane()` keeps the existing
+    /// streamer (and with it the pool) instead of building a replacement
+    /// whose pool starts empty — which would re-allocate the whole window on
+    /// every restart.
+    func test_restartingARunWithTheSameSeed_keepsTheStreamer_soNoWindowIsReallocated() {
         let scene = GameScene(size: CGSize(width: 400, height: 800))
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
-        XCTAssertFalse(scene.debugPanEnabled)
+        let firstPlane = scene.groundPlane
+        let firstNodes = Set(scene.worldLayer.children.map(ObjectIdentifier.init))
+        XCTAssertNotNil(firstPlane)
 
-        let before = scene.cameraWorldPosition
-        scene.update(0)
-        scene.update(10)
-        let after = scene.cameraWorldPosition
+        XCTAssertTrue(scene.stateMachine.transition(to: .death))
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
 
-        XCTAssertEqual(before, after, "The camera must not move on its own unless the debug pan is explicitly enabled.")
+        XCTAssertTrue(
+            scene.groundPlane === firstPlane,
+            "An unchanged seed is the same city, so the run restart must reuse the streamer."
+        )
+        XCTAssertEqual(
+            Set(scene.worldLayer.children.map(ObjectIdentifier.init)), firstNodes,
+            "Restarting the run rebuilt the ground plane's nodes instead of keeping the mounted ones."
+        )
+    }
+
+    /// The other side of that decision: a *different* seed is a different
+    /// city, so the mounted ground genuinely cannot be reused and the
+    /// streamer is replaced.
+    func test_restartingARunWithADifferentSeed_replacesTheStreamer_andLeavesNoStaleGround() {
+        let scene = GameScene(size: CGSize(width: 400, height: 800))
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+        let firstPlane = scene.groundPlane
+        XCTAssertNotNil(firstPlane)
+
+        XCTAssertTrue(scene.stateMachine.transition(to: .death))
+        scene.worldSeed = WorldSeed(rawValue: seed.rawValue &+ 1)
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+
+        XCTAssertFalse(
+            scene.groundPlane === firstPlane,
+            "A new seed must not keep streaming the previous run's city."
+        )
+        XCTAssertEqual(
+            scene.worldLayer.children.count, scene.groundPlane?.mountedNodeCount,
+            "The replaced ground plane left stale nodes behind in worldLayer."
+        )
+        XCTAssertEqual(scene.worldLayer.children.count, boundedNodeCount)
+    }
+
+    /// The chunk owning `position`, resolved through the same seam rule the
+    /// streaming manager uses.
+    private func chunk(containing position: TilePoint) -> ChunkCoordinate {
+        let tile = IsometricProjection.tile(containing: position)
+        return ChunkCoordinate.containing(tileX: tile.tileX, tileY: tile.tileY)
     }
 }

@@ -34,6 +34,13 @@ final class GroundPlaneStreamer {
     /// truth for "which tiles exist right now".
     let streaming: ChunkStreamingManager
 
+    /// The world seed `streaming` generates from. Exposed so a caller
+    /// restarting a run (`GameScene.startGroundPlane()`) can tell whether the
+    /// mounted city is still the right one and keep this streamer — along
+    /// with its `pool` and its already-generated chunks — instead of building
+    /// a replacement whose pool starts empty.
+    let seed: WorldSeed
+
     /// The layer ground nodes are parented into. Weak: the scene owns the
     /// layer, and this mount must never keep a dead scene's graph alive.
     private weak var worldLayer: SKNode?
@@ -42,29 +49,53 @@ final class GroundPlaneStreamer {
     /// eviction is an O(tiles-per-chunk) removal rather than a full rescan.
     private var nodesByChunk: [ChunkCoordinate: [SKSpriteNode]] = [:]
 
-    /// Nodes given up by a chunk that just streamed out of the resident
-    /// window, held here for reuse rather than deallocated.
+    /// Nodes this mount has given up — because their chunk streamed out of
+    /// the resident window, or because `unmountAll()` tore the whole window
+    /// down — held here for reuse rather than deallocated.
     ///
     /// `CYBERPUN-17-4-t3`: without this, every chunk that streams in would
     /// allocate a fresh `SKSpriteNode` per tile, so panning far enough would
     /// have allocated and discarded many multiples of the resident window's
     /// worth of nodes even though only `mountedNodeCount` are ever on screen
-    /// at once. Because eviction always runs (in `synchroniseWithResidentChunks`)
-    /// *before* the mount pass in the same `updateCamera` call, and the
-    /// resident window is a fixed size, the number of nodes freed by
-    /// eviction on any call is exactly the number the mount pass needs that
-    /// same call \u2014 so after the very first `updateCamera` fills the window
-    /// from empty, no further `SKSpriteNode` is ever allocated; the pool
-    /// always has enough to recycle. Capped defensively at `maxPoolSize`
-    /// anyway, so a call pattern this reasoning doesn't cover still can't
-    /// grow memory without bound.
+    /// at once.
+    ///
+    /// **The invariant, scoped to what actually holds.** For a given
+    /// `GroundPlaneStreamer` instance, after the first `updateCamera` fills
+    /// the window from empty, no further `SKSpriteNode` is allocated by
+    /// either supported call sequence:
+    /// - *Panning.* Eviction runs (in `synchroniseWithResidentChunks`)
+    ///   *before* the mount pass of the same `updateCamera` call, and the
+    ///   resident window is a fixed size, so the nodes freed by eviction on
+    ///   any call are exactly what the mount pass needs that same call.
+    /// - *`unmountAll()` then `updateCamera`* (what a restarted run does).
+    ///   `unmountAll()` returns every node it detaches to this pool rather
+    ///   than dropping it, and it leaves `streaming.residentChunks` alone, so
+    ///   the re-mount asks for exactly the window's worth the pool is now
+    ///   holding. Both paths are pinned by `ChunkStreamingGroundTests`.
+    ///
+    /// The invariant is per instance and cannot be otherwise: a brand-new
+    /// `GroundPlaneStreamer` starts with an empty pool by construction, so a
+    /// caller that discards this object discards the pool with it. That is
+    /// why `GameScene.startGroundPlane()` keeps the existing streamer when
+    /// the run's seed is unchanged instead of building a fresh one per run.
+    ///
+    /// Capped defensively at `maxPoolSize` regardless, so a call pattern the
+    /// reasoning above doesn't cover still can't grow memory without bound.
     private var pool: [SKSpriteNode] = []
 
-    /// Defensive cap on `pool`'s size \u2014 see `pool`'s doc comment for why it
+    /// Nodes currently parked in the recycle pool. Exposed for the tests that
+    /// pin the invariant on `pool`'s doc comment (notably the
+    /// `unmountAll()` -> `updateCamera` sequence, where the pool is what
+    /// stands between a restarted run and a whole window of fresh
+    /// allocations).
+    var pooledNodeCount: Int { pool.count }
+
+    /// Defensive cap on `pool`'s size — see `pool`'s doc comment for why it
     /// should never need to hold more than one resident window's worth.
     private static var maxPoolSize: Int { ChunkStreamingManager.residentWindowSize * Chunk.size * Chunk.size }
 
     init(seed: WorldSeed, worldLayer: SKNode) {
+        self.seed = seed
         self.streaming = ChunkStreamingManager(seed: seed)
         self.worldLayer = worldLayer
     }
@@ -89,12 +120,22 @@ final class GroundPlaneStreamer {
     }
 
     /// Removes every mounted ground node from the scene graph. Called when a
-    /// run ends (or a new one starts), so a fresh world never inherits the
-    /// previous one's tiles.
+    /// run ends (or a new one starts with a different seed), so a fresh world
+    /// never inherits the previous one's tiles.
+    ///
+    /// Detached nodes go back into `pool` rather than being dropped: this
+    /// call does not touch `streaming`, so `residentChunks` is unchanged and
+    /// the next `updateCamera` re-mounts the very same window. Dropping them
+    /// would make that re-mount allocate a full resident window's worth of
+    /// `SKSpriteNode`s — precisely the churn the pool exists to remove — and
+    /// would leave `pool`'s stated invariant false for a supported sequence.
     func unmountAll() {
         for nodes in nodesByChunk.values {
             for node in nodes {
                 node.removeFromParent()
+                if pool.count < Self.maxPoolSize {
+                    pool.append(node)
+                }
             }
         }
         nodesByChunk.removeAll()
@@ -105,7 +146,7 @@ final class GroundPlaneStreamer {
     ///
     /// Eviction runs **before** the mount pass so a chunk that streamed out
     /// this call gives its nodes to `pool` in time for the mount pass below
-    /// to recycle them for a chunk streaming in this same call \u2014 that
+    /// to recycle them for a chunk streaming in this same call — that
     /// ordering is what makes `pool` stay effectively empty in steady state
     /// (see `pool`'s doc comment) instead of merely bounded by
     /// `maxPoolSize`.

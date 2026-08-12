@@ -31,7 +31,7 @@ final class GameScene: SKScene {
     ///
     /// Ground nodes are parented **directly** here, with the
     /// `worldLayer`-relative `zPosition` `DepthModel.worldLayerRelativeZ`
-    /// produces \u2014 an intermediate container would add its own `zPosition` to
+    /// produces — an intermediate container would add its own `zPosition` to
     /// every descendant and shift the whole depth scheme.
     let worldLayer = SKNode()
 
@@ -93,7 +93,7 @@ final class GameScene: SKScene {
 
     // MARK: - SCAFFOLDING(CYBERPUN-17-7): debug camera pan
     //
-    // `GameScene` has no real camera-follow behaviour yet \u2014 that lands with
+    // `GameScene` has no real camera-follow behaviour yet — that lands with
     // `CYBERPUN-17-7` ("Wire the floating thumbstick, player movement,
     // building collision and camera"), which should delete this block. Until
     // then, `GroundPlaneStreamer`/`ChunkStreamingManager` have no in-app way
@@ -102,26 +102,35 @@ final class GameScene: SKScene {
     // straight-line pan, off by default, that moves the camera far enough to
     // cross several chunks so multi-chunk streaming is visible end-to-end.
     // It is deliberately not physically based, not player-controlled and not
-    // camera-follow \u2014 just enough motion to drive the streaming system.
+    // camera-follow — just enough motion to drive the streaming system.
+    //
+    // The whole block is `#if DEBUG`, so a shipped Release build physically
+    // cannot pan on its own and carries none of this state. Nothing in the
+    // test suite asserts the pan's behaviour either (see
+    // `ChunkStreamingGroundTests`, which drives `GroundPlaneStreamer`
+    // directly instead), so `CYBERPUN-17-7` can delete these lines without
+    // deleting a green test.
 
+    #if DEBUG
     /// Tiles per second the scaffolding debug pan moves the camera once
     /// `debugPanEnabled` is set. `Chunk.size` (8 tiles) at this rate crosses
-    /// a chunk boundary every 2 seconds \u2014 slow enough to inspect visually,
-    /// fast enough to sweep several boundaries in a short manual/test run.
+    /// a chunk boundary every 2 seconds — slow enough to inspect visually,
+    /// fast enough to sweep several boundaries in a short manual run.
     static let debugPanTilesPerSecond: Double = 4
 
     /// Turns the scaffolding debug pan on or off. Off by default, so normal
-    /// gameplay (and every other test in the suite) is unaffected; only a
-    /// caller that explicitly opts in (`ChunkStreamingGroundTests`, or a
-    /// manual on-device check) sees the camera move on its own.
+    /// gameplay (and every test in the suite) is unaffected; only a manual
+    /// on-device check that explicitly opts in sees the camera move on its
+    /// own.
     var debugPanEnabled = false
 
     /// Where in tile space, and at what `currentTime`, the debug pan most
-    /// recently (re)started \u2014 `nil` whenever it hasn't run yet this
+    /// recently (re)started — `nil` whenever it hasn't run yet this
     /// `.gameplay` episode. Reset in `startGroundPlane()` so a fresh run
     /// (including RUN AGAIN) starts its pan from the new camera position
     /// rather than replaying stale timing from a previous run.
     private var debugPanOrigin: (worldPosition: TilePoint, time: TimeInterval)?
+    #endif
 
     // MARK: - Init
 
@@ -137,7 +146,7 @@ final class GameScene: SKScene {
 
     /// Builds the persistent layer hierarchy and wires the state machine.
     /// Runs from both designated initializers so `GameScene` is fully
-    /// structured before `didMove(to:)` \u2014 tests construct a `GameScene`
+    /// structured before `didMove(to:)` — tests construct a `GameScene`
     /// directly (no `SKView`) and rely on this having already happened.
     private func commonInit() {
         // The dark "Pixel Grit" base every screen sits on. The menu, death
@@ -186,31 +195,50 @@ final class GameScene: SKScene {
     }
 
     /// Mounts the ground plane for `worldSeed`, centred on the camera's own
-    /// world position, replacing any previously mounted one.
+    /// world position: reusing the existing `GroundPlaneStreamer` when the
+    /// seed is unchanged, and replacing it outright when the seed (and so
+    /// the city) has changed.
     ///
     /// Exposed (rather than private) so tests can drive the mount directly on
     /// a scene built without an `SKView`, the same way the screen registry is
     /// exercised.
     func startGroundPlane() {
-        groundPlane?.unmountAll()
-        let plane = GroundPlaneStreamer(seed: worldSeed, worldLayer: worldLayer)
-        plane.updateCamera(worldPosition: cameraWorldPosition)
-        groundPlane = plane
-        // SCAFFOLDING(CYBERPUN-17-7): a fresh ground plane means a fresh pan
-        // \u2014 clear any stale origin so RUN AGAIN starts the debug pan (if
-        // enabled) from wherever the new run's camera actually sits.
-        debugPanOrigin = nil
+        if let existing = groundPlane, existing.seed == worldSeed {
+            // Same seed means the same city, tile for tile (`WorldSeed`'s
+            // whole contract), so the mounted ground is already correct for
+            // this run: keep the streamer — and with it its recycle pool and
+            // its generated chunks — and just bring residency back in step
+            // with wherever the camera now sits. Tearing it down and
+            // building a fresh `GroundPlaneStreamer` would discard the pool
+            // with the old instance and re-allocate a whole resident
+            // window's worth of `SKSpriteNode`s on every RUN AGAIN.
+            existing.updateCamera(worldPosition: cameraWorldPosition)
+        } else {
+            // A different seed is a different city, so the old streamer's
+            // generated chunks can't be reused.
+            groundPlane?.unmountAll()
+            let plane = GroundPlaneStreamer(seed: worldSeed, worldLayer: worldLayer)
+            plane.updateCamera(worldPosition: cameraWorldPosition)
+            groundPlane = plane
+        }
         #if DEBUG
+        // SCAFFOLDING(CYBERPUN-17-7): a fresh run means a fresh pan — clear
+        // any stale origin so RUN AGAIN starts the debug pan (if enabled)
+        // from wherever the new run's camera actually sits.
+        debugPanOrigin = nil
+
         // Ground nodes are the first world-space content in the graph, so
         // audit the moment they land rather than at the next touch.
         assertSceneInvariants()
         #endif
     }
 
+    #if DEBUG
     // SCAFFOLDING(CYBERPUN-17-7): see the block comment above `debugPanEnabled`.
     // `CYBERPUN-17-7` should delete `advanceDebugPanIfNeeded(currentTime:)`
     // and the `update(_:)` override below along with it once real
-    // player/camera movement exists to exercise streaming instead.
+    // player/camera movement exists to exercise streaming instead. Both are
+    // DEBUG-only, so a Release build has no per-frame work here at all.
     override func update(_ currentTime: TimeInterval) {
         super.update(currentTime)
         advanceDebugPanIfNeeded(currentTime: currentTime)
@@ -241,11 +269,12 @@ final class GameScene: SKScene {
         // Move the actual SpriteKit camera to match, converting the new
         // tile-space position through the same projection ground nodes use,
         // from worldLayer's coordinate space (where `tileToScreen` output
-        // lives) into the scene's own \u2014 the space `cameraNode.position` is
+        // lives) into the scene's own — the space `cameraNode.position` is
         // expressed in.
         let screenPoint = IsometricProjection.tileToScreen(tileX: newWorldPosition.x, tileY: newWorldPosition.y)
         cameraNode.position = worldLayer.convert(screenPoint, to: self)
     }
+    #endif
 
     /// Where the camera sits in **tile space**, derived through the same
     /// projection the ground nodes are placed with, so the resident chunk
@@ -390,7 +419,7 @@ final class GameScene: SKScene {
 
     /// UI-first touch routing: returns the node hit under `uiLayer` at
     /// `scenePoint`, if any; otherwise falls through to the node hit under
-    /// `worldLayer`; otherwise `nil`. Pure and independently testable \u2014
+    /// `worldLayer`; otherwise `nil`. Pure and independently testable —
     /// `TouchRoutingTests` calls it directly with overlapping UI/world nodes
     /// to prove the UI wins.
     func routeTouch(at scenePoint: CGPoint) -> SKNode? {
