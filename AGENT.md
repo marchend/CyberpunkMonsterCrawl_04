@@ -53,15 +53,24 @@ CyberpunkMonsterCrawl/
   Sources/Assets/SpriteSheet.swift         measured-geometry contract: pixel/cell size, texture(col:row:)
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
+  Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids (art import owned by t4)
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
-  AtlasCatalogTests.swift                  catalog-existence gate for the 10 atlas sheets
+  ImagePixelSampling.swift                 shared alpha/RGBA decode helper for the asset gates
+  AtlasCatalogTests.swift                  catalog-existence + alpha-channel gate for the 10 atlas sheets
   AtlasDimensionsTests.swift               measured-vs-declared dims + cell-alignment gate
   AtlasCellIndexTests.swift                bounds-checks every owned cell index (incl. ground diamonds)
-  AtlasContractConventionTests.swift       scans Sources/ for raw cell-rect construction outside the contract
+  AtlasGroundDiamondTests.swift            derives tileset_ground's 6 seams from pixel alpha (5x96+112)
+  BuildingCatalogTests.swift               building catalog + distinctness gate, strict SCAFFOLDING(t4)
+  AtlasContractConventionTests.swift       scans the app target for raw texture-crop rects outside the contract
+  DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
 docs/bootstrap.md                          original spec (source of truth)
 ```
+
+> `AGENT.md` and `CLAUDE.md` are the same document under two names. Every edit
+> must land in both, byte for byte — `DocumentationParityTests` fails the suite
+> if they ever diverge, so the two cannot drift into disagreeing instructions.
 
 ## Planned architecture (from docs/bootstrap.md)
 
@@ -76,19 +85,33 @@ docs/bootstrap.md                          original spec (source of truth)
   filenames, with a hard `precondition` failure on any mismatch. One owning
   cell-index list per family lives in `AtlasCellIndex`, including
   `tileset_ground`'s six non-uniform diamond sub-rects (declared in
-  `AtlasSheet.swift` as `AtlasGroundDiamond`, with a comment recording how
-  they were measured). `AtlasContractConventionTests` greps `Sources/` and
-  fails if any file outside those three constructs a raw cell rect
-  (implemented)
+  `AtlasSheet.swift` as `AtlasGroundDiamond`). That `5×96 + 112` partition is
+  not left as prose: `AtlasGroundDiamondTests` re-runs the alpha scan at test
+  time and pins the documented content bounding box, the gap-free tiling of
+  the measured sheet width, and each sub-rect holding its own centred diamond
+  — so a wrong partition fails rather than merely staying inside the sheet
+  bounds. `AtlasContractConventionTests` greps the whole
+  `CyberpunkMonsterCrawl/` target (not just `Sources/`, so the root scene
+  files are covered; `…Tests` dirs excluded) and fails if any file outside
+  those three crops a texture with a rect of its own — `SKTexture(rect:` and
+  `textureRect` outright, `CGRect(` only in texture-cropping context so HUD
+  and viewport layout cannot erode the gate through exemptions (implemented)
 - Asset catalog: the 10 atlas sheets are imported as 1× imagesets under
   `CyberpunkMonsterCrawl/Assets.xcassets/Atlas/`, and every one is referenced
-  by `AtlasSheet.allCases`, so renaming or dropping an imageset turns
-  `AtlasCatalogTests` red today, unmuted (implemented). There is one asset
-  catalog in the target; the AppIcon stub lives in it rather than in a second
-  same-named catalog. Still outstanding and owned by **CYBERPUN-17-1-t4**: the
-  12 building sprites (`building_00` … `building_11`), which are not in the
-  repo yet, plus the whole-catalog "no stray `@2x`/`@3x`, no
-  `tileset_structure`" checks that depend on both asset families existing
+  by `AtlasSheet.allCases`, so renaming or dropping an imageset — or shipping
+  one without an alpha channel, which `AtlasCatalogTests` measures off
+  `CGImage.alphaInfo` because the pack is specified as PNG-32 — turns the
+  suite red today, unmuted (implemented). There is one asset catalog in the
+  target; the AppIcon stub lives in it rather than in a second same-named
+  catalog. The 12 building sprites (`building_00` … `building_11`) are not in
+  the repo yet, but they are still referenced in code: `BuildingSprite` is
+  their owning manifest and `BuildingCatalogTests` gates both catalog presence
+  and building distinctness (no duplicate or horizontally-mirrored art) behind
+  a *strict* `XCTExpectFailure` tagged `SCAFFOLDING(CYBERPUN-17-1-t4)`, scoped
+  to building ids only so it cannot mute the 10 sheets, and strict so it flips
+  red the moment the art lands. The art import and the whole-catalog "no stray
+  `@2x`/`@3x`, no `tileset_structure`" checks are owned by
+  **CYBERPUN-17-1-t4**
 - Central texture loader (`CyberpunkMonsterCrawl/Sources/Assets/TextureLoading.swift`)
   enforcing `.nearest` filtering, no mipmaps (implemented — asset-import PR).
   No production consumer calls it yet; that lands with the sprites/tiles that
@@ -112,14 +135,23 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- **CYBERPUN-17-1-t4 — the 12 building sprites:** import `building_00` …
-  `building_11` into `Assets.xcassets` as 1× imagesets, add a `BuildingSprite`
-  enum recording each one's pixel size/footprint/height class (loaded whole
-  via `TextureLoading`, never sliced), and add the whole-catalog scan that
-  fails if any imageset anywhere (atlas or building) declares a `2x`/`3x`
-  rendition, or if `tileset_structure`/the Asset-Scales-preview art was ever
-  imported. `tileset_structure.png` and the HTML companion files were not
-  imported by this PR.
+- **CYBERPUN-17-1-t4 — the 12 building sprites (art import only; the gate is
+  already in the repo):** import `building_00` … `building_11` into
+  `Assets.xcassets` as 1× imagesets. The `BuildingSprite` manifest and both
+  gates (`BuildingCatalogTests`: catalog presence, plus content and
+  horizontally-mirrored fingerprint distinctness) already exist and are held
+  behind a strict `XCTExpectFailure` tagged `SCAFFOLDING(CYBERPUN-17-1-t4)` —
+  the import consists of adding the art, extending `BuildingSprite` with each
+  one's measured pixel size/footprint/height class (loaded whole via
+  `TextureLoading`, never sliced), and deleting those two scaffolds, which the
+  strict option forces the moment the art lands. Also add the whole-catalog
+  scan that fails if any imageset anywhere (atlas or building) declares a
+  `2x`/`3x` rendition, or if `tileset_structure`/the Asset-Scales-preview art
+  was ever imported. `tileset_structure.png` and the HTML companion files were
+  not imported by this PR. **This deferral is only valid while
+  `CYBERPUN-17-1-t4` exists as a filed ticket** — a scaffold tag pointing at
+  an unfiled ticket points nowhere, which is how "green suite, empty catalog"
+  happens again; if it is not filed, file it or import the art here.
 - Wiring every real texture consumer (player, raccoons, bullets, pickups,
   pulse, hit puff, signs, ground tiles) through
   `TextureLoading.texture(named:)` as each is built — the factory exists and

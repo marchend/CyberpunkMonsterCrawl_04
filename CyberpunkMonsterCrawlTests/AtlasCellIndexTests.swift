@@ -70,6 +70,10 @@ final class AtlasCellIndexTests: XCTestCase {
     /// The six ground diamonds are not `(col, row)` cells, so they are
     /// checked against the full sheet bounds directly instead of through
     /// `assertAllIndicesInBounds`.
+    ///
+    /// Containment alone does not discriminate between candidate partitions
+    /// of the sheet — `AtlasGroundDiamondTests` is what pins the `5×96 + 112`
+    /// seams to the shipped pixels.
     func test_groundDiamonds_allSixSubRectsFallWithinTheSheetBounds() {
         let sheet = AtlasSheet.groundTiles.sheet
         let sheetBounds = CGRect(origin: .zero, size: sheet.pixelSize)

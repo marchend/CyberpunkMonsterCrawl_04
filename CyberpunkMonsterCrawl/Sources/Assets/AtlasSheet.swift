@@ -133,12 +133,24 @@ enum AtlasSheet: CaseIterable {
 /// "road/kerb/lot variants + overhang" note), and is why the sheet is 60px
 /// tall rather than a clean 48. 592 does not divide evenly into six 96px-wide
 /// cells (592 / 6 ≈ 98.67px), confirming this sheet is *not* a uniform grid,
-/// exactly as `docs/bootstrap.md` §2 calls out. Five of the six diamonds sit
-/// in a standard 96px-wide cell (the world tile width) and the sixth — the
-/// overhang/kerb variant — is 112px wide; 5×96 + 112 = 592px exactly, with no
-/// gap or overlap across the sheet's width. Every sub-rect keeps the full
-/// 60px sheet height (rather than cropping to the 48px content band) so the
-/// overhang lip stays part of the cropped texture instead of being clipped.
+/// exactly as `docs/bootstrap.md` §2 calls out. The first five diamonds —
+/// including `kerbTransition` at x:384 — each sit in a standard 96px-wide
+/// cell (the world tile width); only the sixth, `overhangLot` at x:480, is
+/// 112px wide, because its lot overhang runs past the tile footprint.
+/// 5×96 + 112 = 592px exactly, with no gap or overlap across the sheet's
+/// width. Every sub-rect keeps the full 60px sheet height (rather than
+/// cropping to the 48px content band) so the overhang lip stays part of the
+/// cropped texture instead of being clipped.
+///
+/// **How that partition is pinned:** the numbers below are not left as prose.
+/// `AtlasGroundDiamondTests` re-runs the alpha scan at test time and asserts
+/// (a) the documented content bounding box above, (b) that the six sub-rects
+/// tile the *measured* sheet width exactly — five 96px cells plus one 112px
+/// cell, last — and (c) that each sub-rect's own content bounding box is
+/// non-empty and sits centred in that sub-rect. A 6×98.67px partition, a
+/// 96px-plus-padding layout, or the 112px cell placed at x:0 instead of
+/// x:480 all fail (c), which a bounds-containment check alone cannot
+/// discriminate between.
 enum AtlasGroundDiamond: Int, CaseIterable {
     case laneEastWest = 0
     case laneNorthSouth = 1
