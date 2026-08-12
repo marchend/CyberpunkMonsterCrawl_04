@@ -10,9 +10,14 @@ import XCTest
 ///   `(tileX, tileY, seed)` with no neighbour lookups), so this test is
 ///   deliberately a thin wrapper assertion rather than a search for subtle
 ///   bugs \u2014 exactly as the ticket's implementation notes describe.
-/// - **Lot-reservation no-overlap:** `Chunk.reserve` must refuse a footprint
-///   that would overlap an already-reserved one, and must still allow a
-///   genuinely disjoint reservation to succeed.
+/// - **Footprint-reservation no-overlap:** `Chunk.reserve` must refuse a
+///   footprint that would overlap an already-reserved one, and must still
+///   allow a genuinely disjoint reservation to succeed.
+/// - **Placement-surface polarity:** reservation happens on
+///   `Chunk.placementSurface` (`.buildingFootprint`, the ~3-in-4 block
+///   interiors the lattice fills with buildings) and is refused on both
+///   street tiles and the deliberately empty `.lot` blocks. That polarity is
+///   easy to invert, so it is pinned in both directions here.
 final class ChunkGeneratorTests: XCTestCase {
 
     // MARK: - AC2: chunk-embedded generation agrees with standalone `classify`
@@ -87,13 +92,27 @@ final class ChunkGeneratorTests: XCTestCase {
         }
     }
 
-    // MARK: - Lot reservation: no overlap
+    // MARK: - Building-footprint reservation: no overlap
 
-    /// Finds the first `WorldSeed` (from a fixed candidate list) under
-    /// which block `(blockX: 0, blockY: 0)` \u2014 world tiles `(0...2, 0...2)`,
-    /// fully inside chunk `(0, 0)` \u2014 is an empty lot, so this test has a
-    /// guaranteed 3x3 patch of `.lot` tiles to reserve against rather than
-    /// depending on luck with a single hardcoded seed.
+    /// Finds the first `WorldSeed` under which block `(blockX: 0, blockY: 0)`
+    /// — world tiles `(0...2, 0...2)`, fully inside chunk `(0, 0)` — is a
+    /// *building* block, so these tests have a guaranteed 3x3 patch of
+    /// `Chunk.placementSurface` (`.buildingFootprint`) tiles to reserve
+    /// against rather than depending on luck with a single hardcoded seed.
+    private func seedWithBuildingBlockAtOriginBlock() -> WorldSeed {
+        for rawSeed in UInt64(0)..<500 {
+            let seed = WorldSeed(rawValue: rawSeed)
+            if !CityLatticeGenerator.isEmptyLotBlock(blockX: 0, blockY: 0, seed: seed) {
+                return seed
+            }
+        }
+        XCTFail("Expected at least one seed in 0..<500 to make block (0, 0) a building block")
+        return WorldSeed(rawValue: 0)
+    }
+
+    /// The mirror of the above: a seed under which block `(0, 0)` is one of
+    /// the ~1-in-4 blocks the brief leaves empty, used to pin that `.lot`
+    /// tiles are *not* reservable.
     private func seedWithEmptyLotAtOriginBlock() -> WorldSeed {
         for rawSeed in UInt64(0)..<500 {
             let seed = WorldSeed(rawValue: rawSeed)
@@ -106,14 +125,14 @@ final class ChunkGeneratorTests: XCTestCase {
     }
 
     func test_reserve_twoByTwoFootprint_blocksOverlappingReservations_butAllowsDisjointOnes() {
-        let seed = seedWithEmptyLotAtOriginBlock()
+        let seed = seedWithBuildingBlockAtOriginBlock()
         let chunk = ChunkGenerator.generate(chunkCoordinate: ChunkCoordinate(x: 0, y: 0), seed: seed)
 
-        // Sanity: the 3x3 block interior this test relies on is really
-        // `.lot` under this seed.
+        // Sanity: the 3x3 block interior this test relies on is really the
+        // placement surface under this seed.
         for tileX in 0..<3 {
             for tileY in 0..<3 {
-                XCTAssertEqual(chunk.tile(localX: tileX, localY: tileY).kind, .lot)
+                XCTAssertEqual(chunk.tile(localX: tileX, localY: tileY).kind, Chunk.placementSurface)
             }
         }
 
@@ -132,8 +151,8 @@ final class ChunkGeneratorTests: XCTestCase {
             "A 2x2 footprint overlapping an already-reserved 2x2 must be refused"
         )
 
-        // A genuinely disjoint 1x1 footprint elsewhere in the same lot
-        // block must still succeed \u2014 refusing overlaps must not turn into
+        // A genuinely disjoint 1x1 footprint elsewhere in the same building
+        // block must still succeed — refusing overlaps must not turn into
         // refusing everything.
         XCTAssertTrue(
             chunk.reserve(footprint: .oneByOne, at: TileCoordinate(tileX: 2, tileY: 2)),
@@ -142,7 +161,7 @@ final class ChunkGeneratorTests: XCTestCase {
     }
 
     func test_reservableFootprints_excludesTilesCoveredByAnExistingReservation() {
-        let seed = seedWithEmptyLotAtOriginBlock()
+        let seed = seedWithBuildingBlockAtOriginBlock()
         let chunk = ChunkGenerator.generate(chunkCoordinate: ChunkCoordinate(x: 0, y: 0), seed: seed)
 
         let beforeReservation = Set(chunk.reservableFootprints(in: .oneByOne))
@@ -157,18 +176,66 @@ final class ChunkGeneratorTests: XCTestCase {
         )
         XCTAssertTrue(
             afterReservation.contains(TileCoordinate(tileX: 2, tileY: 2)),
-            "A tile outside the existing reservation, still .lot, must remain reservable"
+            "A tile outside the existing reservation, still the placement surface, must remain reservable"
         )
     }
 
-    func test_reserve_refusesFootprintOnNonLotTile() {
+    // MARK: - Placement-surface polarity
+
+    func test_reserve_refusesFootprintOnStreetTile() {
         // Street tiles are structurally guaranteed at (3...5) mod 6 on
         // either axis regardless of seed, so tile (3, 0) is street under
-        // every seed \u2014 no need to search for one.
+        // every seed — no need to search for one.
         let seed = WorldSeed(rawValue: 12_345)
         let chunk = ChunkGenerator.generate(chunkCoordinate: ChunkCoordinate(x: 0, y: 0), seed: seed)
 
-        XCTAssertNotEqual(chunk.tile(localX: 3, localY: 0).kind, .lot)
+        XCTAssertNotEqual(chunk.tile(localX: 3, localY: 0).kind, Chunk.placementSurface)
         XCTAssertFalse(chunk.reserve(footprint: .oneByOne, at: TileCoordinate(tileX: 3, tileY: 0)))
+    }
+
+    func test_placementSurface_isTheBuildingBlockInterior_notTheDeliberatelyEmptyLot() {
+        // Polarity guard. `.lot` marks the ~1-in-4 blocks the brief leaves
+        // empty, so a footprint must never be offered or accepted there;
+        // buildings belong in the ~3-in-4 `.buildingFootprint` interiors.
+        XCTAssertEqual(Chunk.placementSurface, .buildingFootprint)
+
+        let emptyLotSeed = seedWithEmptyLotAtOriginBlock()
+        let emptyLotChunk = ChunkGenerator.generate(chunkCoordinate: ChunkCoordinate(x: 0, y: 0), seed: emptyLotSeed)
+        XCTAssertEqual(emptyLotChunk.tile(localX: 1, localY: 1).kind, .lot)
+        XCTAssertFalse(
+            emptyLotChunk.reserve(footprint: .oneByOne, at: TileCoordinate(tileX: 1, tileY: 1)),
+            "A footprint must never be reservable inside a deliberately empty .lot block"
+        )
+        XCTAssertFalse(
+            emptyLotChunk.reservableFootprints(in: .oneByOne).contains(TileCoordinate(tileX: 1, tileY: 1)),
+            "An empty .lot tile must never be offered as a reservable footprint origin"
+        )
+
+        let buildingSeed = seedWithBuildingBlockAtOriginBlock()
+        let buildingChunk = ChunkGenerator.generate(chunkCoordinate: ChunkCoordinate(x: 0, y: 0), seed: buildingSeed)
+        XCTAssertTrue(
+            buildingChunk.reservableFootprints(in: .oneByOne).contains(TileCoordinate(tileX: 1, tileY: 1)),
+            "A building-block interior tile must be offered as a reservable footprint origin"
+        )
+    }
+
+    func test_reservedFootprint_isSolidByConstruction_withoutAnyTileKindTransition() {
+        // The other half of the polarity contract: because the placement
+        // surface is already the not-walkable kind, a reserved footprint
+        // collides without `Chunk` having to mutate any tile, so collision
+        // consumers can keep reading `isWalkable` alone.
+        let seed = seedWithBuildingBlockAtOriginBlock()
+        let chunk = ChunkGenerator.generate(chunkCoordinate: ChunkCoordinate(x: 0, y: 0), seed: seed)
+
+        XCTAssertTrue(chunk.reserve(footprint: .twoByTwo, at: TileCoordinate(tileX: 0, tileY: 0)))
+        for localX in 0..<2 {
+            for localY in 0..<2 {
+                XCTAssertFalse(
+                    chunk.tile(localX: localX, localY: localY).isWalkable,
+                    "A reserved footprint tile must be solid without needing a TileKind transition"
+                )
+            }
+        }
+        XCTAssertFalse(Chunk.placementSurface.isWalkable)
     }
 }

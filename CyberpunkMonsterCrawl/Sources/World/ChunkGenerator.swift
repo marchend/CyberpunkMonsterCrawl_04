@@ -15,7 +15,18 @@ import Foundation
 enum ChunkGenerator {
     /// Generates the chunk at `chunkCoordinate` under `seed`: every tile in
     /// its 8x8 world-tile footprint, classified independently.
-    static func generate(chunkCoordinate: ChunkCoordinate, seed: WorldSeed) -> Chunk {
+    ///
+    /// `reservations` is the building-footprint reservation store the new
+    /// chunk reads and writes through. It defaults to a fresh private store
+    /// (so a standalone call still yields a self-contained chunk), but
+    /// `ChunkStreamingManager` passes its own world-lifetime store, which is
+    /// what makes a reservation survive eviction and regeneration — tile
+    /// content is reproduced by `classify`, reservations cannot be.
+    static func generate(
+        chunkCoordinate: ChunkCoordinate,
+        seed: WorldSeed,
+        reservations: LotReservationStore = LotReservationStore()
+    ) -> Chunk {
         let worldOrigin = chunkCoordinate.worldTileOrigin
 
         let tiles: [[TileInfo]] = (0..<Chunk.size).map { localX in
@@ -28,6 +39,6 @@ enum ChunkGenerator {
             }
         }
 
-        return Chunk(origin: chunkCoordinate, tiles: tiles)
+        return Chunk(origin: chunkCoordinate, tiles: tiles, reservations: reservations)
     }
 }

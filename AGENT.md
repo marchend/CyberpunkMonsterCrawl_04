@@ -66,22 +66,22 @@ CyberpunkMonsterCrawl/
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
-  Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule; Double math with a CGFloat cast only at the boundary
+  Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule floor(coord + 0.5) with both a screen-space and a tile-space overload so no call site re-derives it; Double math with a CGFloat cast only at the boundary
   Sources/World/SeedMixer.swift            explicit splitmix64-style bit mixer over (seed, tileX, tileY), wrapping arithmetic only - never Hasher/.hashValue, which is randomized per process
   Sources/World/WorldSeed.swift            thin UInt64-wrapping per-run seed type: "a run is fully described by its seed"
-  Sources/World/TileKind.swift             asphalt/junctionStopLine/kerbSidewalk/lot/buildingFootprint + isWalkable (asphalt, sidewalk, stop-line and empty lot walkable; building footprint solid)
+  Sources/World/TileKind.swift             asphalt/junctionStopLine/kerbSidewalk/lot/buildingFootprint + isWalkable (asphalt, sidewalk, stop-line and empty lot walkable; building footprint solid). An empty .lot never turns solid - buildings are placed on the already-solid .buildingFootprint interiors (Chunk.placementSurface)
   Sources/World/CityLatticeGenerator.swift pure classify(tileX:tileY:seed:) -> TileInfo: 6-tile period, 3x3 block + 3-tile street corridor, intersections structurally always street (seed never reaches street tiles), ~1-in-4 empty-lot decision made once per block via SeedMixer
-  Sources/World/Chunk.swift                 8x8 tile data container (ChunkCoordinate origin, tiles[[TileInfo]]) plus per-chunk lot-reservation state: reservableFootprints(in:)/reserve(footprint:at:) refuse overlapping 1x1/2x2 footprints and only ever offer .lot tiles
-  Sources/World/ChunkGenerator.swift        generate(chunkCoordinate:seed:) -> Chunk, calling classify once per tile in the chunk's own 8x8 world-tile footprint, no cross-chunk lookups
-  Sources/World/ChunkStreamingManager.swift camera-driven resident-chunk window: updateCamera(worldPosition:) loads/evicts chunks within a fixed Chebyshev radius of the camera's chunk; SpriteKit-free (plain TilePoint input) so it's unit-testable without a scene
+  Sources/World/Chunk.swift                 8x8 tile data container (ChunkCoordinate origin, tiles[[TileInfo]]) + building-footprint reservation: placementSurface pins .buildingFootprint (never the deliberately empty .lot) as the surface, reservableFootprints(in:)/reserve(footprint:at:) refuse overlapping 1x1/2x2 footprints; LotReservationStore holds the state above the chunk cache so it survives eviction
+  Sources/World/ChunkGenerator.swift        generate(chunkCoordinate:seed:reservations:) -> Chunk, calling classify once per tile in the chunk's own 8x8 world-tile footprint, no cross-chunk lookups
+  Sources/World/ChunkStreamingManager.swift camera-driven resident-chunk window: updateCamera(worldPosition:) loads/evicts chunks within a fixed Chebyshev radius (3, sized from the worst-case 24-tile margin via coversViewport) of the camera's chunk, using IsometricProjection.tile(containing:) for camera tile ownership; owns the world's LotReservationStore; SpriteKit-free (plain TilePoint input) so it's unit-testable without a scene
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
-  IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile + off-centre and on-seam cases pinning tile(containing:)
+  IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile + off-centre and on-seam cases pinning tile(containing:), plus the tile-space overload agreeing with the screen-space one across an off-centre sweep (7.6 -> tile 8, not 7)
   CityLatticeGeneratorTests.swift          6-tile period test, intersection-always-street test, ~1-in-4 empty-lot-ratio test, per-block decision consistency, determinism
   ConnectivityTests.swift                  flood-fill over classify's walkable output across >=20 seeds and a 12x12-block region, reaching every intersection tile; private BFS helper over a Set<Coord>
   ConcurrencyDeterminismTests.swift        dispatches classify for the same and for many distinct (tileX, tileY, seed) inputs across DispatchQueue.concurrentPerform and asserts every result matches a single-threaded reference
-  ChunkGeneratorTests.swift                chunk-boundary agreement vs standalone classify at chunk edges across multiple chunk pairs (AC2), lot-reservation no-overlap tests (2x2 blocks overlaps, disjoint reservations still allowed)
-  ChunkStreamingManagerTests.swift         resident-chunk count stays within the fixed window across a long straight sweep and a diagonal sweep (AC8); an evicted-then-revisited chunk regenerates identically to pure ChunkGenerator/classify output
+  ChunkGeneratorTests.swift                chunk-boundary agreement vs standalone classify at chunk edges across multiple chunk pairs (AC2), footprint-reservation no-overlap tests (2x2 overlaps refused, disjoint reservations still allowed), placement-surface polarity in both directions (street and empty .lot refused, building-block interior offered) and reserved footprints solid with no TileKind transition
+  ChunkStreamingManagerTests.swift         resident-chunk count stays within the fixed window across a long straight sweep and a diagonal sweep (AC8); an evicted-then-revisited chunk regenerates identically to pure ChunkGenerator/classify output; a reservation survives eviction/revisit and is still refused a second time; worst-case viewport coverage in both orientations (with an anti-vacuity guard); camera tile ownership follows IsometricProjection's pinned rule, not floor
   TextureLoadingTests.swift                nearest-filtering assertion for TextureLoading
   ImagePixelSampling.swift                 shared alpha/RGBA decode helper for the asset gates
   AtlasCatalogTests.swift                  catalog-existence + alpha-channel gate for the 10 atlas sheets
@@ -236,11 +236,34 @@ docs/bootstrap.md                          original spec (source of truth)
   camera's current chunk, generated via `ChunkGenerator` as the camera
   approaches and evicted once outside it, so the resident count never
   exceeds `residentWindowSize` regardless of how far the camera roams.
-  Lot reservation (`Chunk.reservableFootprints(in:)` /
-  `Chunk.reserve(footprint:at:)`) only ever offers `.lot` tiles and refuses
-  any footprint overlapping an existing reservation, so 1x1/2x2 buildings
-  placed by a later story (`CYBERPUN-17-5`) can never collide.
-  `CYBERPUN-17-3` is now fully shipped across `-t1`/`-t2`/`-t3`
+  `residentRadius` is 3, sized from the *worst-case* margin
+  (`residentRadius * Chunk.size` = 24 tiles — the camera may sit on its own
+  chunk's edge, so its own chunk guarantees nothing), which keeps an
+  iPad-sized landscape *and* portrait viewport inside the resident window;
+  `ChunkStreamingManager.coversViewport(widthPoints:heightPoints:)` is that
+  arithmetic and the tests assert it, so coverage is a checked fact rather
+  than prose. Camera-to-tile ownership goes through
+  `IsometricProjection.tile(containing:)` (tile-space overload) so the
+  `floor(coord + 0.5)` rounding rule has exactly one home in the codebase.
+  Building-footprint reservation (`Chunk.reservableFootprints(in:)` /
+  `Chunk.reserve(footprint:at:)`) offers only `Chunk.placementSurface` —
+  `.buildingFootprint`, the ~3-in-4 block interiors the lattice fills with
+  buildings, never the ~1-in-4 `.lot` blocks the brief deliberately leaves
+  empty — and refuses any footprint overlapping an existing reservation, so
+  1x1/2x2 buildings placed by a later story (`CYBERPUN-17-5`) cannot collide
+  with each other. Because the placement surface is already the not-walkable
+  kind, a reserved footprint is solid by construction with no `TileKind`
+  transition, and an empty `.lot` stays walkable forever. Reservation state
+  lives in a manager-owned `LotReservationStore` held *above* the chunk
+  cache, so it survives eviction/revisit: chunk tiles are re-derived by
+  `classify`, but a reservation is a decision that cannot be re-derived.
+  Two limits are accepted deliberately: `Chunk.size` (8) is not a multiple of
+  the lattice period (6), so a 2x2 footprint straddling a chunk seam is never
+  offered by either side (chunk-local generation is the stronger invariant),
+  and nothing renders any of this yet. All three tasks of `CYBERPUN-17-3`
+  (`-t1`/`-t2`/`-t3`) have landed, but no production consumer streams or
+  draws chunks — treat it as shipped data-layer work awaiting the
+  ground-plane/renderer story, not as a finished on-screen feature
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid (deferred — future PR; `TileKind.isWalkable` is the data
   this will consume)
@@ -272,7 +295,10 @@ docs/bootstrap.md                          original spec (source of truth)
   tile) rather than a search for subtle bugs. AC8's bounded resident-chunk
   window was the real engineering in `-t3`, enforced by
   `ChunkStreamingManager.residentRadius` and proven by
-  `ChunkStreamingManagerTests`'s long straight and diagonal camera sweeps
+  `ChunkStreamingManagerTests`'s long straight and diagonal camera sweeps.
+  The same suite pins the two things the bound alone does not: worst-case
+  viewport coverage (so "no chunk pops in at the viewport edge" is checked,
+  not claimed) and reservation survival across eviction/revisit
 - Local high-score persistence, no network/Game Center (deferred — future PR)
 - `// SCAFFOLDING:` marker convention + grep-based removal gate
   (deferred — future PR)
