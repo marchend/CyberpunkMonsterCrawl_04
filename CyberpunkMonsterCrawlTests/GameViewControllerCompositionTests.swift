@@ -55,6 +55,36 @@ final class GameViewControllerCompositionTests: XCTestCase {
         XCTAssertEqual(makeScene().scaleMode, .resizeFill)
     }
 
+    /// The entry-point wiring for the accessibility-frame fix.
+    ///
+    /// `AccessibleSKView` is what gives every UI node a correct screen-space
+    /// `accessibilityFrame`, so a tap driven by accessibility element
+    /// (XCUITest, the scripted runtime probe, VoiceOver) lands on the button
+    /// instead of missing it - the "tapped PLAY, screen stayed on the menu"
+    /// failure. It only helps if the running app actually hosts the scene in
+    /// one: reverting `viewDidLoad()` to a plain `SKView` would leave the
+    /// class fully tested and completely dead. Asserted against the view
+    /// really installed in the hierarchy (not just the declared property
+    /// type), so the check cannot pass tautologically.
+    func test_compositionRoot_hostsTheSceneInAnAccessibleSKView() throws {
+        let controller = GameViewController()
+        controller.loadViewIfNeeded()
+
+        let hostedView = try XCTUnwrap(
+            controller.view.subviews.first { $0 is SKView } as? SKView,
+            "the composition root must install an SKView to host the scene"
+        )
+        XCTAssertTrue(
+            hostedView is AccessibleSKView,
+            "the hosted view must be an AccessibleSKView, or accessibility-driven taps miss every button"
+        )
+        XCTAssertTrue(controller.skView === hostedView)
+        XCTAssertTrue(
+            hostedView.scene is GameScene,
+            "the composition root must present the composed GameScene into that view"
+        )
+    }
+
     func test_compositionRoot_menuHighScoresButton_isWiredToTheStateMachine() throws {
         let scene = makeScene()
         let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)

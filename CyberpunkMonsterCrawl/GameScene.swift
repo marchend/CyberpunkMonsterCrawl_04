@@ -387,6 +387,111 @@ final class GameScene: SKScene {
         view?.safeAreaInsets ?? .zero
     }
 
+    // MARK: - Accessibility
+
+    /// Every *visible* node in the `uiLayer` subtree that presents itself to
+    /// UIAccessibility (`isAccessibilityElement == true`), in scene-graph
+    /// order.
+    ///
+    /// `AccessibleSKView` publishes one `UIAccessibilityElement` per entry.
+    /// The walk lives here rather than inside the view so it is testable
+    /// without a live `SKView`, a window or an accessibility client - see
+    /// `AccessibleSKViewTests`.
+    ///
+    /// Only `uiLayer` is walked: `worldLayer`/`effectsLayer` hold thousands
+    /// of ground tiles and (later) actors, none of which is an accessibility
+    /// element, and none of which is ever the target of an element-driven
+    /// tap.
+    ///
+    /// Invisible nodes are skipped so the walk stays *total* with respect to
+    /// this feature's central invariant - "the published frame and the hit
+    /// test cannot disagree". `routeTouch(at:)` resolves through
+    /// `SKNode.atPoint(_:)`, which never returns a hidden node, so an
+    /// invisible accessible node would publish a frame that an
+    /// element-driven tap aims at and the scene then refuses to route: the
+    /// original defect wearing yet another hat. Nothing hides a button
+    /// today; this keeps it from becoming a bug the day something does.
+    func accessibleUINodes() -> [SKNode] {
+        var accessible: [SKNode] = []
+        collectAccessibleNodes(under: uiLayer, into: &accessible)
+        return accessible
+    }
+
+    private func collectAccessibleNodes(under node: SKNode, into accessible: inout [SKNode]) {
+        for child in node.children {
+            // The whole subtree is skipped, not just the node itself:
+            // hiding a parent hides everything under it, so its descendants
+            // are equally unreachable by `atPoint(_:)`.
+            guard isVisibleToTouchRouting(child) else { continue }
+            if child.isAccessibilityElement {
+                accessible.append(child)
+            }
+            collectAccessibleNodes(under: child, into: &accessible)
+        }
+    }
+
+    /// Whether `node` can be returned by the `atPoint(_:)` walk
+    /// `routeTouch(at:)` performs. `isHidden` is what SpriteKit's hit test
+    /// itself honours; `alpha <= 0` is filtered too because a node nobody
+    /// can see is a node nobody should be told to tap - and erring towards
+    /// publishing *fewer* elements keeps "published implies routable" true
+    /// in the safe direction.
+    private func isVisibleToTouchRouting(_ node: SKNode) -> Bool {
+        !node.isHidden && node.alpha > 0
+    }
+
+    /// `node`'s accumulated frame expressed in **scene** coordinates - the
+    /// single geometric fact `AccessibleSKView` turns into an
+    /// `accessibilityFrame`, and the exact space
+    /// `dispatchTouch(atScenePoint:)` takes its argument in.
+    ///
+    /// Derived through `SKNode.convert(_:from:)` off the node's own parent,
+    /// which is the algebraic inverse of the `uiLayer.convert(_:from: self)`
+    /// + `atPoint(_:)` walk `routeTouch(at:)` performs. That is what makes
+    /// "the frame an element-driven tap aims at" and "the point the scene
+    /// hit-tests" the same number *by construction* rather than by luck: the
+    /// two paths cannot disagree, which is precisely the failure the runtime
+    /// probe hit (see `AccessibleSKView`). `AccessibleSKViewTests` pins the
+    /// agreement so it cannot silently regress.
+    ///
+    /// Returns `nil` for a node with no parent (nothing to convert from).
+    /// A marker node with no visual content of its own (e.g.
+    /// `MenuScreenNode`'s `menu.container`) legitimately yields an *empty*
+    /// rect - it is still published, so it can still be found by identifier,
+    /// but it is not meant to be tapped.
+    func accessibilityFrameInScene(for node: SKNode) -> CGRect? {
+        guard let parent = node.parent else { return nil }
+
+        let frameInParent = node.calculateAccumulatedFrame()
+
+        // A marker node with no visual content of its own has no accumulated
+        // frame, and SpriteKit is entitled to report that as a null/infinite
+        // rect - whose corners would subtract into NaN and reach UIKit as a
+        // NaN `accessibilityFrame`. Publish a zero-size rect at the node's own
+        // position instead: findable by identifier, honestly not tappable.
+        if frameInParent.isNull || frameInParent.isInfinite {
+            return CGRect(origin: convert(node.position, from: parent), size: .zero)
+        }
+
+        let corners = [
+            CGPoint(x: frameInParent.minX, y: frameInParent.minY),
+            CGPoint(x: frameInParent.maxX, y: frameInParent.minY),
+            CGPoint(x: frameInParent.minX, y: frameInParent.maxY),
+            CGPoint(x: frameInParent.maxX, y: frameInParent.maxY),
+        ].map { self.convert($0, from: parent) }
+
+        // All four corners, so a rotated node still yields a containing box.
+        let xs = corners.map(\.x)
+        let ys = corners.map(\.y)
+        guard
+            let minX = xs.min(), let maxX = xs.max(),
+            let minY = ys.min(), let maxY = ys.max()
+        else {
+            return nil
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
     // MARK: - Touch routing
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {

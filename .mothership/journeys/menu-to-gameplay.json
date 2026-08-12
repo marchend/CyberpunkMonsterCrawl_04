@@ -1,0 +1,15 @@
+{
+  "name": "menu-to-gameplay",
+  "demonstrates": "Tapping PLAY on the menu by accessibility element (the way the runtime probe and XCUITest tap) actually leaves the menu and shows the streamed isometric ground plane. Before CYBERPUN-17-4-t5 the tap resolved to a wrong accessibility frame, never reached GameScene.touchesBegan, and the app stayed on the menu.",
+  "stories": ["CYBERPUN-17-4", "CYBERPUN-17-4-t5"],
+  "steps": [
+    { "action": "wait", "seconds": 3 },
+    { "action": "assert_running" },
+    { "action": "wait_for_element", "target": "PLAY" },
+    { "action": "screenshot", "name": "01-menu" },
+    { "action": "tap", "target": "PLAY" },
+    { "action": "wait", "seconds": 4 },
+    { "action": "assert_running" },
+    { "action": "screenshot", "name": "02-gameplay-ground-plane" }
+  ]
+}
