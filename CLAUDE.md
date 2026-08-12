@@ -217,8 +217,13 @@ docs/bootstrap.md                          original spec (source of truth)
   a seam belongs to the higher-index tile, identically on both sides of the
   origin, which `round()` would not do)
   (implemented — `Sources/World/IsometricProjection.swift`,
-  `IsometricProjectionTests`). No production consumer places a tile-space
-  node via it yet; that lands with the ground-plane/depth-model PR
+  `IsometricProjectionTests`). `GroundTileRenderer` / `GroundPlaneStreamer`
+  (`CYBERPUN-17-4-t2`) are the first production consumers that place
+  tile-space nodes through it. The seam epsilon lives on the *screen-space*
+  overload only — `tileToScreen`/`screenToTile` round trips are what
+  introduce the floating-point noise, so the fix sits at the cause and
+  `tile(containing: TilePoint)` keeps the exactly half-open
+  `[centre - 0.5, centre + 0.5)` region
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below its own band, building content <+3 in-band, actor offsets
   6.5–9.9 sampling a rounded tile (implemented — `Sources/World/DepthModel.swift`,
@@ -266,9 +271,41 @@ docs/bootstrap.md                          original spec (source of truth)
   screen, `DepthModel.groundZPosition` + `worldLayerRelativeZ` set its
   `zPosition` for a direct child of `GameScene.worldLayer`, and
   `PixelCrispness.apply` finishes it (`.nearest` filtering, whole-integer
-  scale, position snapped to a whole point). No scene yet parents these
-  nodes into `worldLayer` — that lands with the building-placement /
-  integration-checkpoint PRs (`CYBERPUN-17-5` onward)
+  scale, position snapped to a whole point, sign preserved so an
+  `xScale = -1` mirror survives the clamp; `PixelCrispnessTests` covers that
+  shared helper directly rather than only through the ground sweep).
+  `GroundPlaneStreamer` (`Sources/World/GroundPlaneStreamer.swift`,
+  `GroundPlaneStreamerTests`) is the **production mount**: it walks
+  `ChunkStreamingManager`'s resident window and parents one ground node per
+  resident tile *directly* into `GameScene.worldLayer` (no intermediate
+  container, or its `zPosition` would shift the whole depth scheme), dropping
+  a chunk's nodes when that chunk is evicted, and `GameScene` starts it on
+  entry to `.gameplay` from `worldSeed` centred on `cameraWorldPosition`. So
+  tapping PLAY in a real build shows the generated city rather than an empty
+  scene, and the mounted node count stays bounded by the resident window
+  however far the camera roams. Which crop *is* the east-west lane is pinned
+  by `GroundTileSemanticsTests`, which re-measures the shipped pixels (crop
+  fingerprints must all differ; each lane crop's paint must be elongated
+  along the tile axis its case name claims) - a swapped lane pair fails
+  there, where a literal table compared against a copy of itself cannot see
+  it. Buildings and actors are the world content that is still missing; they
+  mount into the same `worldLayer`, alongside these ground nodes, with the
+  building-placement / integration-checkpoint PRs (`CYBERPUN-17-5` onward).
+  Nodes evicted from the resident window go into `GroundPlaneStreamer`'s
+  recycle pool rather than being deallocated, and `unmountAll()` returns its
+  nodes there too, so a restarted run re-mounts the window out of the pool;
+  `GameScene.startGroundPlane()` keeps the existing streamer when `worldSeed`
+  is unchanged (same seed = same city) and replaces it only when the seed
+  changes, since a discarded streamer takes its pool with it
+  (`ChunkStreamingGroundTests` pins both sequences)
+- `GameScene` carries one `SCAFFOLDING(CYBERPUN-17-7)` artifact in
+  production code: a debug camera pan (`debugPanEnabled`,
+  `debugPanTilesPerSecond`, `advanceDebugPanIfNeeded` and the `update(_:)`
+  override, all `#if DEBUG` and off by default) that exists only so
+  multi-chunk streaming can be watched end-to-end during a manual run, since
+  there is no camera-follow yet. `CYBERPUN-17-7` deletes the block when real
+  player/camera movement lands. Deliberately **not** covered by any test, so
+  removing it cannot mean deleting a green test
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,

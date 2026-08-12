@@ -39,6 +39,23 @@ enum GroundTileRenderer {
     /// ground offset (converted to worldLayer-relative), and finalizes it
     /// with `PixelCrispness`.
     static func node(for tileKind: TileKind, at tileCoordinate: TileCoordinate) -> SKSpriteNode {
+        let node = SKSpriteNode()
+        configure(node, for: tileKind, at: tileCoordinate)
+        return node
+    }
+
+    /// Reconfigures an existing sprite node in place to render `tileKind` at
+    /// `tileCoordinate`, exactly as `node(for:at:)` builds a fresh one:
+    /// same texture crop, position, `DepthModel` zPosition and
+    /// `PixelCrispness` finalization.
+    ///
+    /// This is what lets `GroundPlaneStreamer` (`CYBERPUN-17-4-t3`) recycle a
+    /// node from a chunk that just streamed out of the resident window
+    /// instead of allocating a brand-new `SKSpriteNode` for every chunk that
+    /// streams in: panning across many chunks then reuses a fixed pool of
+    /// node instances rather than growing the number of `SKSpriteNode`s ever
+    /// allocated without bound.
+    static func configure(_ node: SKSpriteNode, for tileKind: TileKind, at tileCoordinate: TileCoordinate) {
         #if DEBUG
         // `DepthModel.isWithinSupportedDepthRange(forTile:)` asks consumers
         // placing nodes far from the origin to assert on it in DEBUG; this is
@@ -68,7 +85,8 @@ enum GroundTileRenderer {
         // extra 16px of overhang is split evenly, so the crop's midpoint is
         // still the diamond's midpoint. Alignment depends on that measured
         // fact, not on an assumption about where the overhang sits.
-        let node = SKSpriteNode(texture: texture)
+        node.texture = texture
+        node.size = texture.size()
         node.position = IsometricProjection.tileToScreen(
             tileX: Double(tileCoordinate.tileX),
             tileY: Double(tileCoordinate.tileY)
@@ -78,7 +96,6 @@ enum GroundTileRenderer {
         node.zPosition = DepthModel.worldLayerRelativeZ(forAbsoluteZ: absoluteZ)
 
         PixelCrispness.apply(to: node)
-        return node
     }
 
     /// The `GroundTileCatalog` entry `tileKind` (at `tileCoordinate`) maps

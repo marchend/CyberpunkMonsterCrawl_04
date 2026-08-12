@@ -48,7 +48,30 @@ enum GroundTileKind: CaseIterable {
 /// index" (what the sheet measurement is keyed by) — so `AtlasSheet.swift`
 /// stays the single source of truth for the pixel arithmetic.
 ///
-/// The six-way mapping itself, from the story's asset contract:
+/// The six-way mapping itself, from the story's asset contract. The lane
+/// pair follows `AtlasGroundDiamond`'s own case order: `.asphaltEastWest`
+/// takes `laneEastWest`, whose `pixelRect` is the crop at **x:0**, and
+/// `.asphaltNorthSouth` takes `laneNorthSouth` at **x:96** (both numbers
+/// read off `AtlasGroundDiamond.pixelRect` in
+/// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth
+/// for the pixel arithmetic).
+///
+/// That pairing is not left as prose either.
+/// `GroundTileSemanticsTests
+/// .test_eachLaneCrop_carriesPaintElongatedAlongTheAxisItsCaseNameClaims`
+/// re-measures the shipped pixels and fails if the two are swapped. Its
+/// measurement is comparative rather than a fixed pixel count: the crop
+/// `diamond(for: .asphaltEastWest)` returns must carry paint whose
+/// brightness-weighted spread along tile X exceeds its spread along tile Y
+/// (`elongationRatio > 1`), and `.asphaltNorthSouth`'s crop the reverse.
+/// That test's failure messages print the measured `alongTileX`/`alongTileY`
+/// numbers for both crops, so a red run reports which crop is which instead
+/// of leaving the reader to re-measure by hand.
+///
+/// **If it does go red, swap the two `case` returns in `diamond(for:)`
+/// below — do not edit this comment to match the art.** The mapping is the
+/// thing under test, and prose disagreeing with `diamond(for:)` is how a
+/// later reader ends up inverting every street in the city:
 /// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
 /// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
 /// - `.lot`               -> `AtlasGroundDiamond.plainLot`       (x:192, 96x60)
@@ -58,7 +81,7 @@ enum GroundTileKind: CaseIterable {
 ///
 /// ## Geometry is measured; *meaning* is what this table adds
 ///
-/// `AtlasGroundDiamondTests` measures geometry only \u2014 592x60, the content
+/// `AtlasGroundDiamondTests` measures geometry only — 592x60, the content
 /// bounding box, the `5x96 + 112` partition, and that each sub-rect's
 /// content is non-empty and centred. None of that says the crop at `x:0`
 /// depicts an **east-west** lane rather than a north-south one, so a table
@@ -83,7 +106,7 @@ enum GroundTileKind: CaseIterable {
 ///   is a measurable question with a two-valued answer, and a swapped pair
 ///   fails it.
 /// - **`.junctionStopLine` -> `.intersection`**: which tiles of a crossing
-///   carry junction paint is not this file's decision at all \u2014
+///   carry junction paint is not this file's decision at all —
 ///   `CityLatticeGenerator.streetTileKind` already pins it (the four lane
 ///   *mouths* of a 3x3 crossing are `.junctionStopLine`, the centre is plain
 ///   `.asphalt`, the four corners continue the `kerbSidewalk` ring). This

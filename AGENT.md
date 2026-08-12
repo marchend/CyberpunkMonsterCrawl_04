@@ -220,7 +220,7 @@ docs/bootstrap.md                          original spec (source of truth)
   `IsometricProjectionTests`). `GroundTileRenderer` / `GroundPlaneStreamer`
   (`CYBERPUN-17-4-t2`) are the first production consumers that place
   tile-space nodes through it. The seam epsilon lives on the *screen-space*
-  overload only \u2014 `tileToScreen`/`screenToTile` round trips are what
+  overload only — `tileToScreen`/`screenToTile` round trips are what
   introduce the floating-point noise, so the fix sits at the cause and
   `tile(containing: TilePoint)` keeps the exactly half-open
   `[centre - 0.5, centre + 0.5)` region
@@ -288,10 +288,24 @@ docs/bootstrap.md                          original spec (source of truth)
   fingerprints must all differ; each lane crop's paint must be elongated
   along the tile axis its case name claims) - a swapped lane pair fails
   there, where a literal table compared against a copy of itself cannot see
-  it. Legacy note, superseded: earlier revisions of this entry said no scene
-  parented these
-  nodes into `worldLayer` — that lands with the building-placement /
-  integration-checkpoint PRs (`CYBERPUN-17-5` onward)
+  it. Buildings and actors are the world content that is still missing; they
+  mount into the same `worldLayer`, alongside these ground nodes, with the
+  building-placement / integration-checkpoint PRs (`CYBERPUN-17-5` onward).
+  Nodes evicted from the resident window go into `GroundPlaneStreamer`'s
+  recycle pool rather than being deallocated, and `unmountAll()` returns its
+  nodes there too, so a restarted run re-mounts the window out of the pool;
+  `GameScene.startGroundPlane()` keeps the existing streamer when `worldSeed`
+  is unchanged (same seed = same city) and replaces it only when the seed
+  changes, since a discarded streamer takes its pool with it
+  (`ChunkStreamingGroundTests` pins both sequences)
+- `GameScene` carries one `SCAFFOLDING(CYBERPUN-17-7)` artifact in
+  production code: a debug camera pan (`debugPanEnabled`,
+  `debugPanTilesPerSecond`, `advanceDebugPanIfNeeded` and the `update(_:)`
+  override, all `#if DEBUG` and off by default) that exists only so
+  multi-chunk streaming can be watched end-to-end during a manual run, since
+  there is no camera-follow yet. `CYBERPUN-17-7` deletes the block when real
+  player/camera movement lands. Deliberately **not** covered by any test, so
+  removing it cannot mean deleting a green test
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,
