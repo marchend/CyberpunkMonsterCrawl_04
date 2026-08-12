@@ -25,8 +25,14 @@ final class GameScene: SKScene {
 
     // MARK: - Layers
 
-    /// World-space content (ground, buildings, actors \u2014 future PRs). Lowest
-    /// zPosition band; never receives touches ahead of `uiLayer`.
+    /// World-space content: the streamed ground plane today (see
+    /// `groundPlane` / `startGroundPlane()`), buildings and actors in later
+    /// PRs. Lowest zPosition band; never receives touches ahead of `uiLayer`.
+    ///
+    /// Ground nodes are parented **directly** here, with the
+    /// `worldLayer`-relative `zPosition` `DepthModel.worldLayerRelativeZ`
+    /// produces \u2014 an intermediate container would add its own `zPosition` to
+    /// every descendant and shift the whole depth scheme.
     let worldLayer = SKNode()
 
     /// Particles / muzzle flashes / hit puffs (future PRs). Sandwiched
@@ -65,6 +71,26 @@ final class GameScene: SKScene {
     /// The screen currently mounted in `uiLayer`, if any.
     private(set) var activeScreen: ScreenNode?
 
+    // MARK: - World content
+
+    /// The seed the run's city is generated from.
+    ///
+    /// A fixed default so a launch is reproducible (and so the ground plane
+    /// needs no extra composition-root plumbing to exist); whichever later
+    /// story owns run setup can set this per run before `.gameplay` is
+    /// entered, and the whole world follows from it — `WorldSeed`'s contract
+    /// is that the same seed reproduces the identical city forever.
+    var worldSeed = WorldSeed(rawValue: 0x0C17_5EED)
+
+    /// The mounted ground plane, streamed into `worldLayer` while a run is in
+    /// progress (`nil` before the first `.gameplay` entry).
+    ///
+    /// This is what makes `GroundTileRenderer` observable in a real build
+    /// rather than in unit tests only: entering `.gameplay` mounts one ground
+    /// node per tile of `ChunkStreamingManager`'s resident window, so tapping
+    /// PLAY shows the generated city.
+    private(set) var groundPlane: GroundPlaneStreamer?
+
     // MARK: - Init
 
     override init(size: CGSize) {
@@ -101,8 +127,56 @@ final class GameScene: SKScene {
         uiLayer.zPosition = LayerConstants.uiLayerZ
 
         stateMachine.onChange = { [weak self] state in
-            self?.transitionScreens(to: state)
+            guard let self else { return }
+            self.transitionScreens(to: state)
+            self.updateWorldContent(for: state)
         }
+    }
+
+    // MARK: - World content
+
+    /// Brings world content in step with `state`: entering `.gameplay` starts
+    /// (or restarts) the streamed ground plane in `worldLayer`.
+    ///
+    /// The other three states leave the mounted ground alone rather than
+    /// tearing it down — their screens each carry an opaque full-bleed
+    /// backdrop precisely because they are meant to hide the world (see
+    /// `GameplayScreenNode`, the one screen that deliberately does not), so
+    /// nothing shows through, and RUN AGAIN then re-enters `.gameplay` with a
+    /// world already in place.
+    private func updateWorldContent(for state: GameState) {
+        switch state {
+        case .gameplay:
+            startGroundPlane()
+        case .menu, .death, .highScores:
+            break
+        }
+    }
+
+    /// Mounts the ground plane for `worldSeed`, centred on the camera's own
+    /// world position, replacing any previously mounted one.
+    ///
+    /// Exposed (rather than private) so tests can drive the mount directly on
+    /// a scene built without an `SKView`, the same way the screen registry is
+    /// exercised.
+    func startGroundPlane() {
+        groundPlane?.unmountAll()
+        let plane = GroundPlaneStreamer(seed: worldSeed, worldLayer: worldLayer)
+        plane.updateCamera(worldPosition: cameraWorldPosition)
+        groundPlane = plane
+        #if DEBUG
+        // Ground nodes are the first world-space content in the graph, so
+        // audit the moment they land rather than at the next touch.
+        assertSceneInvariants()
+        #endif
+    }
+
+    /// Where the camera sits in **tile space**, derived through the same
+    /// projection the ground nodes are placed with, so the resident chunk
+    /// window is centred on what the camera can actually see rather than on
+    /// the world origin.
+    var cameraWorldPosition: TilePoint {
+        IsometricProjection.screenToTile(worldLayer.convert(cameraNode.position, from: self))
     }
 
     // MARK: - Screen registry

@@ -13,8 +13,13 @@ import SpriteKit
 /// actors, bullets, pickups etc. in later PRs) enforces the same three
 /// checks instead of reproducing them ad hoc:
 ///  1. the node's texture filters `.nearest` with mipmaps disabled;
-///  2. `xScale`/`yScale` are whole integers, floored at `1` so a degenerate
-///     scale never collapses a sprite to nothing;
+///  2. `xScale`/`yScale` are whole integers whose *magnitude* is floored at
+///     `1` so a degenerate scale never collapses a sprite to nothing, while
+///     a negative scale keeps its sign: `xScale = -1` is SpriteKit's
+///     standard horizontal-mirror idiom (and a plausible one here, since the
+///     8-direction walk sheets can be halved into mirrored pairs), so
+///     clamping it to `+1` would silently render the sprite facing the wrong
+///     way with no error;
 ///  3. `position` is snapped to the nearest whole point — this game's world
 ///     runs at integer isometric tile coordinates, so any drift off a whole
 ///     point is exactly the sub-pixel seam/blur nearest filtering exists to
@@ -35,8 +40,20 @@ enum PixelCrispness {
         )
     }
 
-    /// Rounds to the nearest whole integer, floored at `1`.
+    /// Rounds `scale`'s **magnitude** to the nearest whole integer, floored
+    /// at `1`, and re-applies the original sign.
+    ///
+    /// Clamping the signed value (`max(1, scale.rounded())`) would discard
+    /// the sign, not just the fractional part: a mirrored sprite
+    /// (`xScale = -1`) would come back as `+1` and render un-mirrored. The
+    /// integer-scaling rule this helper enforces is about *magnitude*
+    /// (mirroring is exact and resamples nothing), so sign is preserved and
+    /// only the magnitude is rounded and floored.
+    ///
+    /// A scale of exactly `0` has no sign to preserve and would collapse the
+    /// sprite, so it takes the floor's `+1`.
     private static func wholeScale(_ scale: CGFloat) -> CGFloat {
-        max(1, scale.rounded())
+        let magnitude = max(1, abs(scale).rounded())
+        return scale < 0 ? -magnitude : magnitude
     }
 }
