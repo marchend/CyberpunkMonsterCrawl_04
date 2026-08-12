@@ -1,12 +1,16 @@
 import SpriteKit
 
 /// Bootstrap-only scene: proves the SpriteKit render path works by showing
-/// the project name on screen. CYBERPUN-17-2-t2 replaces this with the real
-/// menu/gameplay/death/highScores scene driven by `GameStateMachine` and the
-/// layered scene graph (worldLayer < effectsLayer < uiLayer, uiLayer pinned
-/// to the camera with UI-first touch routing) described in
-/// docs/bootstrap.md. Until then this scene has no state machine, no menu
-/// and no PLAY button — the shipped shell is still the bootstrap label.
+/// the project name on screen.
+///
+/// **No longer presented.** `GameViewController` presents `GameScene`
+/// (CYBERPUN-17-2-t2), which implements the layered scene graph
+/// (worldLayer < effectsLayer < uiLayer, uiLayer pinned to the camera with
+/// UI-first touch dispatch), the `GameStateMachine`-driven screen registry
+/// described in docs/bootstrap.md, and a `MenuScreen` whose PLAY button
+/// drives menu → gameplay. This scene is retained only as the minimal
+/// render-path smoke target; CYBERPUN-17-2-t3 removes it once the
+/// gameplay/death/highScores screens make it redundant.
 final class BootScene: SKScene {
     override func didMove(to view: SKView) {
         backgroundColor = .black
