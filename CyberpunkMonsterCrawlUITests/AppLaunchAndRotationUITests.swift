@@ -27,13 +27,18 @@ final class AppLaunchAndRotationUITests: XCTestCase {
         app.descendants(matching: .any)["menu.container"]
     }
 
-    /// True when `element`'s frame lies entirely within `bounds` \u2014 the
-    /// "nothing lands under the notch/home indicator or off the edge of the
-    /// screen" half of AC5. Zero-sized elements (e.g. a non-visual
-    /// accessibility anchor) trivially satisfy this and are only used here
-    /// for presence checks, never for the off-screen assertion.
+    /// True when `element` has a real, non-empty frame that lies entirely
+    /// within `bounds` \u2014 the "nothing lands under the notch/home indicator
+    /// or off the edge of the screen" half of AC5.
+    ///
+    /// The emptiness guard is load-bearing: `CGRect.contains(_:)` returns
+    /// `true` for a zero-sized rect, so if SpriteKit's accessibility bridge
+    /// ever stops surfacing a real frame for a `ButtonNode`, a bare
+    /// containment check would keep passing vacuously over a button that is
+    /// entirely off-screen.
     private func isFullyOnScreen(_ element: XCUIElement, within bounds: CGRect) -> Bool {
-        bounds.contains(element.frame)
+        let frame = element.frame
+        return !frame.isEmpty && bounds.contains(frame)
     }
 
     func test_launchPortrait_rotateToLandscape_playStillWorks() {

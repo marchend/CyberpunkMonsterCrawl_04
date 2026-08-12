@@ -82,6 +82,14 @@ final class GameScene: SKScene {
     /// structured before `didMove(to:)` \u2014 tests construct a `GameScene`
     /// directly (no `SKView`) and rely on this having already happened.
     private func commonInit() {
+        // The dark "Pixel Grit" base every screen sits on. The menu, death
+        // and high-scores screens each add their own opaque full-bleed
+        // backdrop (they are meant to hide the world), but `GameplayScreenNode`
+        // deliberately does not - the world must show *through* it - so the
+        // scene itself supplies the fill rather than leaving SpriteKit's
+        // lighter default showing behind gameplay.
+        backgroundColor = PixelGritPalette.background
+
         addChild(worldLayer)
         addChild(effectsLayer)
         addChild(cameraNode)

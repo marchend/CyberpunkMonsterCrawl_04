@@ -53,7 +53,7 @@ CyberpunkMonsterCrawl/
   Layers/SceneInvariants.swift             runtime audits: cumulative-z band escapes, nodes bypassing scene touch dispatch
   Layers/PixelGritPalette.swift            shared dark-background / neon-accent colors for every screen
   Screens/MenuScreenNode.swift             the menu: title + neon PLAY button + placeholder HIGH SCORES entry, registered for .menu
-  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; SCAFFOLDING(CYBERPUN-17-7) placeholder content
+  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; no full-bleed backdrop so world touches fall through; SCAFFOLDING(CYBERPUN-17-7) placeholder content
   Screens/DeathScreenNode.swift            skeleton .death screen; real RUN AGAIN / back-to-menu buttons, SCAFFOLDING(CYBERPUN-17-16) placeholder run-summary content
   Screens/HighScoresScreenNode.swift       skeleton .highScores screen; real back-to-menu button, SCAFFOLDING(CYBERPUN-17-16) placeholder scores content
   PrivacyInfo.xcprivacy, *.entitlements
@@ -179,7 +179,15 @@ docs/bootstrap.md                          original spec (source of truth)
   scene's `touchesBegan` and bypass UI-first routing) — both audited by
   `GameScene.nodesEscapingTheirLayerBand()` /
   `nodesBypassingSceneTouchDispatch()` and asserted in DEBUG whenever a
-  screen mounts, the scene is presented, or a touch is dispatched
+  screen mounts, the scene is presented, or a touch is dispatched. A third
+  rule is a screen-authoring convention rather than a runtime audit: a screen
+  that is meant to sit *over* live world content (today only
+  `GameplayScreenNode`) must not mount a node that blankets the viewport,
+  because `routeTouch(at:)` returns any non-`uiLayer` hit before it looks at
+  `worldLayer` \u2014 a full-bleed backdrop there would swallow every touch and
+  paint over `worldLayer`. Menu/death/high-scores backdrops are full-bleed on
+  purpose (they hide the world); the scene's own `backgroundColor` supplies
+  the dark base behind gameplay
 - Depth module: painter's-algorithm bands `-(tileX+tileY)*10`, ground plane
   5000 below, building content <+3 in-band, actor offsets 6.5–9.9 sampling
   rounded tile (deferred — future PR)

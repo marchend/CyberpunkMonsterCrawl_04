@@ -80,17 +80,54 @@ final class ScreensTests: XCTestCase {
         XCTAssertTrue(highScoresTapped)
     }
 
+    /// AC5: "rotation re-lays out the current screen with no clipped or
+    /// off-screen controls." The screen is camera-pinned, so its own
+    /// coordinate space is centred on `(0, 0)` and the visible viewport is
+    /// `size` centred on the origin - a control is on-screen exactly when
+    /// its accumulated frame sits inside that rect. Driven in both a
+    /// portrait and a landscape size so a layout that only holds in one
+    /// orientation fails here.
     func test_menuScreenNode_layout_resizesBackground_andKeepsButtonsWithinBounds() {
-        let menu = MenuScreenNode(onPlay: {}, onHighScores: {})
-        let size = CGSize(width: 400, height: 800)
+        let orientations: [(name: String, size: CGSize, insets: UIEdgeInsets)] = [
+            ("portrait", CGSize(width: 400, height: 800), UIEdgeInsets(top: 20, left: 0, bottom: 30, right: 0)),
+            ("landscape", CGSize(width: 800, height: 400), UIEdgeInsets(top: 0, left: 44, bottom: 21, right: 44)),
+        ]
 
-        menu.layout(for: size, safeAreaInsets: UIEdgeInsets(top: 20, left: 0, bottom: 30, right: 0))
+        for orientation in orientations {
+            let menu = MenuScreenNode(onPlay: {}, onHighScores: {})
 
-        XCTAssertLessThan(abs(menu.playButton.position.y - menu.highScoresButton.position.y), size.height)
-        XCTAssertNotEqual(
-            menu.playButton.position.y, menu.highScoresButton.position.y,
-            "PLAY and HIGH SCORES must not land on top of each other"
-        )
+            menu.layout(for: orientation.size, safeAreaInsets: orientation.insets)
+
+            let background = menu.node.children.compactMap { $0 as? SKSpriteNode }.first
+            XCTAssertEqual(
+                background?.size, orientation.size,
+                "\(orientation.name): the full-bleed backdrop must be resized to the scene size, or "
+                    + "rotation leaves SpriteKit's default background showing at the edges"
+            )
+
+            let viewport = CGRect(
+                x: -orientation.size.width / 2, y: -orientation.size.height / 2,
+                width: orientation.size.width, height: orientation.size.height
+            )
+            for button in [menu.playButton, menu.highScoresButton] {
+                let frame = button.calculateAccumulatedFrame()
+                XCTAssertFalse(
+                    frame.isEmpty,
+                    "\(orientation.name): \(button.title) has an empty frame, so containment below "
+                        + "would pass vacuously"
+                )
+                XCTAssertTrue(
+                    viewport.contains(frame),
+                    "\(orientation.name): \(button.title) at \(frame) is clipped or off-screen "
+                        + "relative to the \(viewport) viewport"
+                )
+            }
+
+            XCTAssertNotEqual(
+                menu.playButton.position.y, menu.highScoresButton.position.y,
+                "\(orientation.name): PLAY and HIGH SCORES must not land on top of each other"
+            )
+        }
     }
 
     // MARK: - GameplayScreenNode
@@ -104,14 +141,44 @@ final class ScreensTests: XCTestCase {
         )
     }
 
-    func test_gameplayScreenNode_layout_resizesBackgroundToSceneSize() {
+    /// The gameplay screen is the one screen the world must show *through*,
+    /// so unlike menu/death/high-scores it must mount nothing that blankets
+    /// the viewport: `GameScene.routeTouch(at:)` returns any non-`uiLayer`
+    /// hit before it looks at `worldLayer`, so a full-bleed backdrop here
+    /// would swallow every touch (AC4) and paint over `worldLayer` from
+    /// CYBERPUN-17-3 on.
+    /// `TouchRoutingTests.test_mountedGameplayScreen_doesNotBlockWorldTouches`
+    /// pins the routing consequence; this pins the structure.
+    func test_gameplayScreenNode_mountsNoViewportBlanketingBackdrop() {
         let gameplay = GameplayScreenNode()
         let size = CGSize(width: 800, height: 400)
 
         gameplay.layout(for: size, safeAreaInsets: .zero)
 
-        let background = gameplay.node.children.compactMap { $0 as? SKSpriteNode }.first
-        XCTAssertEqual(background?.size, size)
+        let viewport = CGRect(
+            x: -size.width / 2, y: -size.height / 2,
+            width: size.width, height: size.height
+        )
+        for child in gameplay.node.children {
+            let frame = child.calculateAccumulatedFrame()
+            XCTAssertFalse(
+                frame.contains(viewport),
+                "\(child.name ?? "\(type(of: child))") blankets the viewport; the world must stay "
+                    + "reachable behind the gameplay screen"
+            )
+        }
+    }
+
+    func test_gameplayScreenNode_layout_centresThePlaceholderWithinTheSafeArea() {
+        let gameplay = GameplayScreenNode()
+        let size = CGSize(width: 800, height: 400)
+        let insets = UIEdgeInsets(top: 20, left: 0, bottom: 40, right: 0)
+
+        gameplay.layout(for: size, safeAreaInsets: insets)
+
+        let label = gameplay.node.children.compactMap { $0 as? SKLabelNode }.first
+        XCTAssertEqual(label?.position.x, 0)
+        XCTAssertEqual(label?.position.y, (insets.bottom - insets.top) / 2)
     }
 
     func test_gameplayScreenNode_willEnterAndWillExit_areNoOps() {

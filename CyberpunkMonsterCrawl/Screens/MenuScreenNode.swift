@@ -27,8 +27,15 @@ final class MenuScreenNode: ScreenNode {
     private let titleLabel = SKLabelNode(text: "CYBERPUNK MONSTER CRAWL")
 
     /// A non-visual accessibility anchor identifying "the menu is mounted"
-    /// independent of any one button, per the UI test's "menu container is
-    /// visible" assertion.
+    /// independent of any one button.
+    ///
+    /// Unlike `GameplayScreenNode`'s `gameplay.container` (which is
+    /// `SCAFFOLDING(CYBERPUN-17-7)`-tagged scaffolding for a screen with no
+    /// real content yet), `menu.container` is a **durable accessibility
+    /// contract**: the menu is a shipping screen, and VoiceOver plus any
+    /// future UI test needs a stable way to identify it that survives the
+    /// buttons being restyled, renamed or reordered. Keep this identifier
+    /// stable; do not remove it when the menu's visuals change.
     private let containerMarker = SKNode()
 
     /// - Parameters:
