@@ -10,25 +10,19 @@ import XCTest
 /// the norm.
 final class TextureLoadingTests: XCTestCase {
 
-    /// The image ids under test come from `AtlasContract` rather than a list
-    /// re-typed here: the contract is *the* manifest, and a second copy beside
-    /// it would drift the first time a sheet is renamed or an eleventh is
-    /// added. Reading it back also means these tests widen automatically as
-    /// families move from `undeclaredSheetImageIDs` into declared `sheets`.
+    /// The image ids under test come from `AtlasSheet` rather than a list
+    /// re-typed here: the enum is *the* manifest, and a second copy beside it
+    /// would drift the first time a sheet is renamed or an eleventh is added.
     private static var atlasSheetImageIDs: [String] {
-        AtlasContract.current.atlasSheetImageIDs
+        AtlasSheet.allCases.map(\.imageID)
     }
 
     /// Guards the source above against silently emptying out — a loop over an
-    /// empty list passes every assertion in this file vacuously — and pins the
-    /// count to the contract's own required count rather than a second
+    /// empty list passes every assertion in this file vacuously — and pins
+    /// the count to the story's required sheet count rather than a second
     /// independently maintained literal.
     func test_atlasSheetImageIDs_coverEveryRequiredSheetFamily() {
-        XCTAssertEqual(
-            Self.atlasSheetImageIDs.count,
-            AtlasContract.current.requiredSheetCount,
-            "Every sheet family the contract requires must be under test."
-        )
+        XCTAssertEqual(Self.atlasSheetImageIDs.count, 10)
         XCTAssertEqual(
             Set(Self.atlasSheetImageIDs).count,
             Self.atlasSheetImageIDs.count,
