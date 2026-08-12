@@ -12,6 +12,41 @@ import UIKit
 /// this file.
 enum ImagePixelSampling {
 
+    /// `CGImageAlphaInfo` values that mean "this decoded image actually
+    /// carries an alpha channel". Anything else (`.none`, `.noneSkipFirst`,
+    /// `.noneSkipLast`) is an opaque image — the usual cause is a re-export
+    /// that flattened transparency, whose first symptom at render time is a
+    /// black box behind every sprite.
+    ///
+    /// Declared once here so the atlas gate (`AtlasCatalogTests`) and the
+    /// building gate (`BuildingCatalogTests`) measure the *same* rule rather
+    /// than keeping two copies that could drift apart.
+    static let alphaCarryingInfos: [CGImageAlphaInfo] = [
+        .first,
+        .last,
+        .premultipliedFirst,
+        .premultipliedLast,
+        .alphaOnly,
+    ]
+
+    /// The alpha info the named imageset's **source** image decodes with, or
+    /// `nil` when the imageset is missing from the catalog — callers turn
+    /// that into an explicit failure rather than a quiet skip.
+    ///
+    /// Read off the original `CGImage` on purpose: `pixels(ofImageNamed:)`
+    /// redraws into a `premultipliedLast` context, so its buffer always
+    /// *has* an alpha channel even when the imported art is flat. Container
+    /// alpha and actual transparent pixels are therefore two separate
+    /// measurements, and both matter.
+    static func sourceAlphaInfo(ofImageNamed name: String) -> CGImageAlphaInfo? {
+        guard let image = UIImage(named: name, in: .appModule, compatibleWith: nil),
+              let cgImage = image.cgImage
+        else {
+            return nil
+        }
+        return cgImage.alphaInfo
+    }
+
     /// One decoded image, addressed in the same top-left-origin pixel space
     /// `AtlasGroundDiamond.pixelRect` uses.
     struct Pixels {
@@ -31,6 +66,21 @@ enum ImagePixelSampling {
 
         func isOpaque(x: Int, y: Int) -> Bool {
             alpha(x: x, y: y) > 0
+        }
+
+        /// Number of fully transparent (alpha == 0) pixels in the image.
+        ///
+        /// Zero means the art fills its whole bounding box opaquely, which
+        /// for a sprite placed whole on the lattice is the flattened-export
+        /// failure: it draws as a solid rectangle over the ground tiles.
+        var fullyTransparentPixelCount: Int {
+            var total = 0
+            for y in 0..<height {
+                for x in 0..<width where alpha(x: x, y: y) == 0 {
+                    total += 1
+                }
+            }
+            return total
         }
 
         /// Number of rows carrying any opaque pixel in column `x`.
