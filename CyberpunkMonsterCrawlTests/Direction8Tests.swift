@@ -105,6 +105,44 @@ final class Direction8Tests: XCTestCase {
         XCTAssertEqual(Direction8.from(vector: vector(degreesFromSouth: 67.6)), .west)
     }
 
+    // MARK: - The SpriteKit (y-up) entry point
+
+    /// `from(spriteKitVector:)` exists so the y-down/y-up negation cannot be
+    /// forgotten at a call site. Pinned at the two vertical extremes and the
+    /// four diagonals, since a missing flip is silent on the purely lateral
+    /// vectors (east/west read the same in both conventions) and only shows
+    /// up as north and south swapping.
+    func test_fromSpriteKitVector_readsYAsUpwards() {
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: 0, dy: 1)), .north)
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: 0, dy: -1)), .south)
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: 1, dy: 1)), .northeast)
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: -1, dy: 1)), .northwest)
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: 1, dy: -1)), .southeast)
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: -1, dy: -1)), .southwest)
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: 1, dy: 0)), .east)
+        XCTAssertEqual(Direction8.from(spriteKitVector: CGVector(dx: -1, dy: 0)), .west)
+    }
+
+    /// The y-up entry point must be exactly the y-down one with `dy`
+    /// negated - swept all the way round rather than checked at the 8
+    /// centers, so a partial flip (e.g. mirroring the sector order instead)
+    /// cannot pass.
+    func test_fromSpriteKitVector_isTheYDownEntryPointWithDyNegated_allTheWayRound() {
+        for degrees in stride(from: 0.0, to: 360.0, by: 7.5) {
+            let yDown = vector(degreesFromSouth: degrees)
+            let yUp = CGVector(dx: yDown.dx, dy: -yDown.dy)
+            XCTAssertEqual(
+                Direction8.from(spriteKitVector: yUp),
+                Direction8.from(vector: yDown),
+                "at \(degrees)\u{00b0} from south the two entry points must agree once dy is negated."
+            )
+        }
+    }
+
+    func test_fromSpriteKitVector_zeroVector_returnsNil() {
+        XCTAssertNil(Direction8.from(spriteKitVector: CGVector(dx: 0, dy: 0)))
+    }
+
     // MARK: - No player-specific coupling
 
     /// `Direction8` must be importable by future actor code (raccoons,

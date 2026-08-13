@@ -26,8 +26,9 @@ enum Direction8: CaseIterable, Equatable {
     /// convention every pixel-space rect in this codebase already uses
     /// (`SpriteSheet`'s top-left-origin pixel rects, `AtlasSheet`'s cell
     /// geometry). A caller sitting on top of SpriteKit's own coordinate
-    /// space (where `y` increases **upward**) must negate `dy` before
-    /// calling.
+    /// space (where `y` increases **upward**) must not call this directly:
+    /// `from(spriteKitVector:)` below owns that flip, so no call site has to
+    /// remember to negate `dy` itself.
     ///
     /// `atan2(dy, dx)` is `0` at screen-east and *increases clockwise* in
     /// that y-down space (east \u2192 south \u2192 west \u2192 north \u2192 east, since
@@ -68,6 +69,27 @@ enum Direction8: CaseIterable, Equatable {
         let sectorIndex = Int(floor(ratio + 0.5 + epsilon)) % clockwiseFromSouth.count
 
         return clockwiseFromSouth[sectorIndex]
+    }
+
+    /// Bins a **SpriteKit** movement vector (y-up: a node velocity, a scene
+    /// coordinate delta, a stick reading in scene space) into one of the 8
+    /// sectors.
+    ///
+    /// Every gameplay consumer of this type holds a y-up vector - the player
+    /// node in this story, the raccoons in CYBERPUN-17-8 - while
+    /// `from(vector:)` reads the y-down pixel-space convention the asset
+    /// side of this codebase uses. Leaving the two call sites to remember
+    /// "negate `dy` first" is an unenforced convention of exactly the kind
+    /// that produced this repo's lane-orientation saga, and forgetting it is
+    /// silent: north/south flip while east/west stay right, so a
+    /// facing-vs-movement bug looks like an art problem. The flip therefore
+    /// lives here, once, where a call site cannot skip it.
+    ///
+    /// Returns `nil` for a zero-magnitude vector for the same reason
+    /// `from(vector:)` does: no facing information, so the caller keeps its
+    /// current facing.
+    static func from(spriteKitVector vector: CGVector) -> Direction8? {
+        from(vector: CGVector(dx: vector.dx, dy: -vector.dy))
     }
 
     /// The 8 cases in the exact clockwise-from-south order `from(vector:)`

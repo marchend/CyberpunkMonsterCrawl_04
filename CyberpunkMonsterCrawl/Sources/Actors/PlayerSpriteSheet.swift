@@ -21,13 +21,36 @@ enum PlayerSpriteSheet {
     static var pixelSize: CGSize { sheet.pixelSize }
 
     /// 36\u00d740px \u2014 see `AtlasSheet.playerWalk`.
-    static var cellSize: CGSize { sheet.cellSize ?? CGSize(width: 36, height: 40) }
+    ///
+    /// Read straight off the atlas contract with **no fallback literal**: a
+    /// `?? CGSize(width: 36, height: 40)` here would be exactly the second
+    /// copy of the numbers this file's header promises it does not keep, and
+    /// if `AtlasSheet.playerWalk` ever dropped to `cellSize: nil` (the way
+    /// `AtlasSheet.groundTiles` already does for its non-uniform sheet) it
+    /// would quietly serve stale geometry with every test here still green.
+    /// A non-uniform player sheet is a contract change that has to be seen,
+    /// so it traps instead.
+    static var cellSize: CGSize {
+        guard let cellSize = sheet.cellSize else {
+            preconditionFailure(
+                "AtlasSheet.playerWalk declares no cellSize, so PlayerSpriteSheet has no cell "
+                    + "geometry to read. The player sheet must stay a uniform grid; if it becomes "
+                    + "a non-uniform sheet like AtlasSheet.groundTiles, the anchor/hitbox geometry "
+                    + "below needs re-deriving rather than defaulting to the old 36x40 cell."
+            )
+        }
+        return cellSize
+    }
 
     /// 4 columns (walk-cycle frames) \u2014 see `AtlasSheet.playerWalk`.
     static var columns: Int { sheet.columns }
 
-    /// 8 rows (only 5 are directly authored; the other 3 facings reuse a
-    /// row mirrored \u2014 see `rowMapping(for:)`) \u2014 see `AtlasSheet.playerWalk`.
+    /// 8 rows. `rowMapping(for:)` only ever reads rows 0-4; the other 3
+    /// facings reuse one of those rows mirrored. That "rows 5-7 carry no art
+    /// of their own" claim is **measured**, not taken from the ticket: see
+    /// `PlayerSpriteSheetTests`
+    /// `.test_theRowsTheTableNeverReads_carryNoArtBeyondTheMirrorOfTheirSourceRow`,
+    /// which re-decodes the shipped `sprite_player_walk` pixels at test time.
     static var rows: Int { sheet.rows }
 
     /// One row's placement in the sheet, plus whether that row must be
@@ -57,6 +80,22 @@ enum PlayerSpriteSheet {
     /// \u2014 mirroring across any other pairing would show the wrong vertical
     /// pose (e.g. an up-facing pose mirrored into a direction that should
     /// be moving down).
+    ///
+    /// **Measured, not inferred from the sheet's name or the ticket.** The
+    /// sheet ships 8 rows and `AtlasCellIndex.playerWalk` declares all 32
+    /// cells valid, so "only 5 facings are authored" is a claim about the
+    /// art that has to be checked against the art: if rows 5-7 held real
+    /// west-side drawings (asymmetric detail such as a weapon hand), this
+    /// table would render mirrored east art for half the compass and leave
+    /// 12 shipped cells dead, with a fully green suite.
+    /// `PlayerSpriteSheetTests`
+    /// `.test_theRowsTheTableNeverReads_carryNoArtBeyondTheMirrorOfTheirSourceRow`
+    /// therefore re-decodes `sprite_player_walk` and requires each row this
+    /// table never reads (sheet rows 5/6/7, the compass sweep's northwest /
+    /// west / southwest continuation) to be either empty or the horizontal
+    /// flip of the row mirrored in its place (3/2/1). It fails - rather than
+    /// being satisfiable by a copy of this table - if the west side turns
+    /// out to be authored after all.
     static let rowMappingTable: [Direction8: RowMapping] = [
         .south: RowMapping(row: 0, mirrored: false),
         .southeast: RowMapping(row: 1, mirrored: false),

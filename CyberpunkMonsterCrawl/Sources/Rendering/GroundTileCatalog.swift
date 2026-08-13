@@ -49,14 +49,12 @@ enum GroundTileKind: CaseIterable {
 /// stays the single source of truth for the pixel arithmetic.
 ///
 /// The six-way mapping itself, from the story's asset contract. The lane
-/// pair is the *inverse* of `AtlasGroundDiamond`'s own case order (pinned by
-/// `GroundTileSemanticsTests`, which re-measures the shipped pixels rather
-/// than trusting the case names): `.asphaltEastWest` takes `laneNorthSouth`,
-/// whose `pixelRect` is the crop at **x:96**, and `.asphaltNorthSouth` takes
-/// `laneEastWest` at **x:0** (both numbers read off
-/// `AtlasGroundDiamond.pixelRect` in `Sources/Assets/AtlasSheet.swift`,
-/// which stays the one source of truth for the pixel arithmetic \u2014 only
-/// the *semantic* pairing lives here).
+/// pair follows `AtlasGroundDiamond`'s own case order: `.asphaltEastWest`
+/// takes `laneEastWest`, whose `pixelRect` is the crop at **x:0**, and
+/// `.asphaltNorthSouth` takes `laneNorthSouth` at **x:96** (both numbers
+/// read off `AtlasGroundDiamond.pixelRect` in
+/// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth
+/// for the pixel arithmetic — only the *semantic* pairing lives here).
 ///
 /// That pairing is not left as prose either.
 /// `GroundTileSemanticsTests
@@ -74,8 +72,8 @@ enum GroundTileKind: CaseIterable {
 /// below — do not edit this comment to match the art.** The mapping is the
 /// thing under test, and prose disagreeing with `diamond(for:)` is how a
 /// later reader ends up inverting every street in the city:
-/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
-/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
+/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
+/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
 /// - `.lot`               -> `AtlasGroundDiamond.plainLot`       (x:192, 96x60)
 /// - `.junctionStopLine`  -> `AtlasGroundDiamond.intersection`   (x:288, 96x60)
 /// - `.kerbSidewalk`      -> `AtlasGroundDiamond.kerbTransition` (x:384, 96x60)
