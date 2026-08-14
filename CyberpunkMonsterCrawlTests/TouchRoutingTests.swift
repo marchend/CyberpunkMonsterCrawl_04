@@ -91,7 +91,38 @@ final class TouchRoutingTests: XCTestCase {
         // test scene, so scene coordinates map straight through to uiLayer.
         for worldPoint in [CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 400), CGPoint(x: 350, y: 700)] {
             let worldNode = makeHitTestableNode(at: worldPoint)
+            // Entering `.gameplay` above also starts the real streamed ground
+            // plane (`GameScene.updateWorldContent(for:)`), so `worldLayer`
+            // already holds real ground tiles under these points by the time
+            // this loop runs. Ground's zPosition (`DepthModel.groundOffset`,
+            // always *below* its own band) is real world content and must
+            // stay reachable too - it is simply not what this assertion is
+            // about. Give this synthetic node the *ceiling of the world
+            // band itself*, expressed as a relative offset off `worldLayer`:
+            // `worldMaxZ - worldLayerZ` puts its cumulative zPosition
+            // exactly on `LayerConstants.worldMaxZ`, which is strictly above
+            // every legitimate ground/building/actor offset (the actor band
+            // offsets this story adds sit well inside the band) yet still
+            // *inside* `LayerConstants.worldBand`, which is closed on both
+            // bounds. One step higher would land on `effectsMinZ` and make
+            // this node exactly the escape `SceneInvariants` /
+            // `GameScene.nodesEscapingTheirLayerBand()` /
+            // `DepthModel.isWithinWorldBand(_:)` audit for - a bad precedent
+            // to seed for the actor z-work in the follow-up PRs. So the hit
+            // test still prefers this stand-in "on top of the ground" node -
+            // exactly like a real actor, which always draws in front of the
+            // ground beneath it - rather than depending on incidental
+            // z-order against whatever ground tile shares the point.
+            worldNode.zPosition = LayerConstants.worldMaxZ - LayerConstants.worldLayerZ
             scene.worldLayer.addChild(worldNode)
+
+            XCTAssertTrue(
+                DepthModel.isWithinWorldBand(scene.worldLayer.zPosition + worldNode.zPosition),
+                "the stand-in world node's cumulative zPosition "
+                    + "(\(scene.worldLayer.zPosition + worldNode.zPosition)) must stay inside "
+                    + "LayerConstants.worldBand: a routing test that seeds a node in the effects "
+                    + "band models the very escape SceneInvariants audits against."
+            )
 
             XCTAssertTrue(
                 scene.routeTouch(at: worldPoint) === worldNode,

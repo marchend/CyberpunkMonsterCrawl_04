@@ -54,7 +54,7 @@ enum GroundTileKind: CaseIterable {
 /// `.asphaltNorthSouth` takes `laneNorthSouth` at **x:96** (both numbers
 /// read off `AtlasGroundDiamond.pixelRect` in
 /// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth
-/// for the pixel arithmetic).
+/// for the pixel arithmetic — only the *semantic* pairing lives here).
 ///
 /// That pairing is not left as prose either.
 /// `GroundTileSemanticsTests
