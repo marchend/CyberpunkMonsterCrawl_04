@@ -49,12 +49,18 @@ enum GroundTileKind: CaseIterable {
 /// stays the single source of truth for the pixel arithmetic.
 ///
 /// The six-way mapping itself, from the story's asset contract. The lane
-/// pair follows `AtlasGroundDiamond`'s own case order: `.asphaltEastWest`
-/// takes `laneEastWest`, whose `pixelRect` is the crop at **x:0**, and
-/// `.asphaltNorthSouth` takes `laneNorthSouth` at **x:96** (both numbers
-/// read off `AtlasGroundDiamond.pixelRect` in
+/// pair does **not** follow `AtlasGroundDiamond`'s own case order: measuring
+/// the shipped pixels (`GroundTileSemanticsTests`) confirms the crop at
+/// **x:0** (`laneEastWest`) is actually painted with its lane markings
+/// elongated along tile Y, i.e. it depicts a north-south corridor, and the
+/// crop at **x:96** (`laneNorthSouth`) is elongated along tile X, depicting
+/// the east-west corridor \u2014 the sheet's own case names name the *diamond's
+/// position*, not the axis its paint is elongated along. So
+/// `.asphaltEastWest` takes `laneNorthSouth` (the crop at x:96) and
+/// `.asphaltNorthSouth` takes `laneEastWest` (the crop at x:0) \u2014 both rects
+/// still read off `AtlasGroundDiamond.pixelRect` in
 /// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth
-/// for the pixel arithmetic — only the *semantic* pairing lives here).
+/// for the pixel arithmetic; only the *semantic* pairing lives here.
 ///
 /// That pairing is not left as prose either.
 /// `GroundTileSemanticsTests
@@ -72,8 +78,8 @@ enum GroundTileKind: CaseIterable {
 /// below — do not edit this comment to match the art.** The mapping is the
 /// thing under test, and prose disagreeing with `diamond(for:)` is how a
 /// later reader ends up inverting every street in the city:
-/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
-/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
+/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
+/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
 /// - `.lot`               -> `AtlasGroundDiamond.plainLot`       (x:192, 96x60)
 /// - `.junctionStopLine`  -> `AtlasGroundDiamond.intersection`   (x:288, 96x60)
 /// - `.kerbSidewalk`      -> `AtlasGroundDiamond.kerbTransition` (x:384, 96x60)
@@ -119,9 +125,9 @@ enum GroundTileCatalog {
     static func diamond(for kind: GroundTileKind) -> AtlasGroundDiamond {
         switch kind {
         case .asphaltEastWest:
-            return .laneEastWest
-        case .asphaltNorthSouth:
             return .laneNorthSouth
+        case .asphaltNorthSouth:
+            return .laneEastWest
         case .junctionStopLine:
             return .intersection
         case .kerbSidewalk:

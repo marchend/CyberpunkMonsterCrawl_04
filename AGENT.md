@@ -417,6 +417,32 @@ docs/bootstrap.md                          original spec (source of truth)
   (`-t1`/`-t2`/`-t3`) have landed, but no production consumer streams or
   draws chunks — treat it as shipped data-layer work awaiting the
   ground-plane/renderer story, not as a finished on-screen feature
+- Building & rooftop-sign placement generation, pure logic, no SpriteKit
+  (implemented — `Sources/World/BuildingCatalog.swift`,
+  `BuildingFootprintReservation.swift`, `BuildingPlacement.swift`,
+  `RooftopSignPlacement.swift`; `BuildingPlacementTests`,
+  `BuildingFootprintOverlapTests`, `RooftopSignPlacementTests` —
+  `CYBERPUN-17-5-t1`). `BuildingCatalog` restates `BuildingSprite`'s asset
+  name/footprint/height-class table without importing SpriteKit, so the
+  `World` layer stays SpriteKit-free. `BuildingPlacement.generate(forBlock:
+  seed:)` walks a block's 3x3 interior in row-major order and, for a
+  building block (`!CityLatticeGenerator.isEmptyLotBlock`), fills every lot
+  with a seeded-hash-chosen building — a 2x2 pick that wouldn't fit falls
+  back to a 1x1 from the same hash, so the interior always ends up fully
+  covered; an empty-lot block gets `[]`. `BuildingFootprintReservation` is
+  the per-block, per-call no-overlap grid the walk consults before
+  committing each placement (independent of the world-lifetime
+  `LotReservationStore`). `RooftopSignPlacement.generate(forBlock:
+  placements:seed:)` runs on its own salted hash stream (~1-in-3 signed
+  blocks) and only ever names a carrier lot that `placements` actually
+  contains, returning `nil` unconditionally for an empty block.
+  `ChunkGenerator.generate` aggregates both onto `Chunk.buildingPlacements`
+  / `Chunk.roofSigns`, but only for blocks whose whole 3x3 interior is
+  fully contained in that chunk
+  (`BuildingPlacement.blockCoordinates(fullyContainedInChunk:)`) — the same
+  no-cross-chunk-lookup limit `reservableFootprints(in:)` already accepts.
+  Still nothing renders any of this; a later story mounts the records as
+  sprites
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid (deferred — future PR; `TileKind.isWalkable` is the data
   this will consume)

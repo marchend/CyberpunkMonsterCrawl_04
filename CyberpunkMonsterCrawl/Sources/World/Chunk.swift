@@ -192,10 +192,30 @@ final class Chunk {
         reservations.reservedTiles(inChunk: origin)
     }
 
+    /// The buildings `ChunkGenerator.generate` placed on this chunk's own
+    /// blocks (`BuildingPlacement.blockCoordinates(fullyContainedInChunk:)`
+    /// — only blocks whose entire 3x3 interior lies inside this chunk, the
+    /// same chunk-local discipline `reservableFootprints(in:)` already
+    /// applies).
+    ///
+    /// Unlike `reservations`, this is *derived*, not decided: it is a pure
+    /// function of `(origin, seed)` via `BuildingPlacement.generate`, so
+    /// storing it directly on this (evictable) instance is safe — a chunk
+    /// regenerated after eviction reproduces the identical records, the same
+    /// way its `tiles` do.
+    let buildingPlacements: [BuildingPlacementRecord]
+
+    /// The rooftop signs `ChunkGenerator.generate` placed on this chunk's
+    /// own blocks, one per signed block among `buildingPlacements`'s
+    /// blocks. Derived the same way `buildingPlacements` is.
+    let roofSigns: [RooftopSignRecord]
+
     init(
         origin: ChunkCoordinate,
         tiles: [[TileInfo]],
-        reservations: LotReservationStore = LotReservationStore()
+        reservations: LotReservationStore = LotReservationStore(),
+        buildingPlacements: [BuildingPlacementRecord] = [],
+        roofSigns: [RooftopSignRecord] = []
     ) {
         precondition(tiles.count == Chunk.size, "Chunk must have exactly \(Chunk.size) columns, got \(tiles.count)")
         precondition(
@@ -205,6 +225,8 @@ final class Chunk {
         self.origin = origin
         self.tiles = tiles
         self.reservations = reservations
+        self.buildingPlacements = buildingPlacements
+        self.roofSigns = roofSigns
     }
 
     /// The tile at local grid position `(localX, localY)`, both expected in
