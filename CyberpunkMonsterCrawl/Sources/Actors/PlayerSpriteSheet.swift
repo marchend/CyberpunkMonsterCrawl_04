@@ -51,6 +51,21 @@ enum PlayerSpriteSheet {
     /// `PlayerSpriteSheetTests`
     /// `.test_theRowsTheTableNeverReads_carryNoArtBeyondTheMirrorOfTheirSourceRow`,
     /// which re-decodes the shipped `sprite_player_walk` pixels at test time.
+    ///
+    /// What that scan admits, stated as the measurement rather than as a
+    /// restatement of the ticket: every cell of sheet rows 5/6/7 must come
+    /// back with **either zero opaque pixels** (the west side is unauthored,
+    /// so mirroring is *required*) **or an opaque silhouette identical to
+    /// the horizontal flip of the cell above it in rows 3/2/1** (the west
+    /// side duplicates the east, so mirroring is *equivalent*). Any third
+    /// result - authored west-side art that is not a flip - fails.
+    ///
+    /// The count is deliberately not written here as a literal. A number in
+    /// this comment would be exactly the second copy of a measurement that
+    /// this file's header promises it does not keep, and it would go stale
+    /// silently on the next art re-export; the assertion instead prints the
+    /// per-row opaque-pixel count and the cells-matched tally in its failure
+    /// message, so a red run reports the measured numbers itself.
     static var rows: Int { sheet.rows }
 
     /// One row's placement in the sheet, plus whether that row must be
