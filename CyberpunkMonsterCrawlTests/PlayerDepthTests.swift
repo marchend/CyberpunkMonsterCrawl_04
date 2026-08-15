@@ -112,6 +112,58 @@ final class PlayerDepthTests: XCTestCase {
         }
     }
 
+    // MARK: - Supported-depth-range guard (what the DEBUG assert protects)
+
+    /// `DepthBanding.actorZPosition` now asserts in DEBUG that the actor's
+    /// **rounded** tile is still inside `DepthModel`'s supported depth range,
+    /// the same contract `GroundTileRenderer.configure` already honours. A
+    /// tripped `assert` aborts the process, so the assert itself cannot be
+    /// exercised from a test; what is pinned here is the property it
+    /// protects and the condition it reads. Right up to the edge of the
+    /// supported range the player's zPosition is still inside
+    /// `LayerConstants.worldBand`, and one tile past it `DepthModel` itself
+    /// reports the tile as unsupported -- so the guard fires exactly where
+    /// the depth scheme actually runs out of band, and not before.
+    func test_playerZPosition_atTheEdgeOfTheSupportedDepthRange_staysInsideTheWorldBand() {
+        let maxSum = DepthModel.maxSupportedTileSumMagnitude
+
+        for sum in [maxSum, -maxSum] {
+            let tile = TileCoordinate(tileX: sum, tileY: 0)
+            XCTAssertTrue(
+                DepthModel.isWithinSupportedDepthRange(forTile: tile),
+                "Tile sum \(sum) must be inside the supported range, or this test pins nothing."
+            )
+            XCTAssertTrue(
+                DepthModel.isWithinWorldBand(DepthBanding.playerZPosition(at: TilePoint(x: Double(sum), y: 0))),
+                "The player's zPosition at tile sum \(sum) escaped LayerConstants.worldBand."
+            )
+        }
+
+        let beyond = maxSum + 1
+        XCTAssertFalse(
+            DepthModel.isWithinSupportedDepthRange(forTile: TileCoordinate(tileX: beyond, tileY: 0)),
+            "One tile past the supported range must read as unsupported -- that is what the DEBUG assert checks."
+        )
+        XCTAssertFalse(
+            DepthModel.isWithinSupportedDepthRange(forTile: TileCoordinate(tileX: -beyond, tileY: 0)),
+            "The supported range is symmetric, so the negative edge must report the same way."
+        )
+    }
+
+    /// The guard samples the same rounded tile the band itself is resolved
+    /// from, so a fractional position just inside the range is judged by the
+    /// tile it rounds *to* -- not by its raw coordinates.
+    func test_theSupportedRangeGuard_samplesTheSameRoundedTile_asTheBandItself() {
+        let position = TilePoint(x: 12.6, y: -3.4)
+        let rounded = IsometricProjection.tile(containing: position)
+
+        XCTAssertEqual(
+            DepthBanding.playerZPosition(at: position),
+            DepthBanding.playerZPosition(at: TilePoint(x: Double(rounded.tileX), y: Double(rounded.tileY))),
+            accuracy: 1e-9
+        )
+    }
+
     // MARK: - Production wiring: PlayerNode actually uses DepthBanding
 
     func test_playerNode_updateDepth_setsZPosition_toDepthBandingsWorldLayerRelativeValue() {

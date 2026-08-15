@@ -32,10 +32,6 @@ import SpriteKit
 /// this type needing to know the actor's absolute depth.
 final class ActorShadowNode: SKShapeNode {
 
-    /// Default shadow width in points, used when a caller does not need a
-    /// size tied to a specific actor's own footprint.
-    static let defaultWidth: CGFloat = 20
-
     /// Width:height ratio every shadow this type draws is drawn at -- the
     /// same 2:1 ratio as the world's isometric tile diamonds.
     static let aspectRatio: CGFloat = 2
@@ -54,8 +50,21 @@ final class ActorShadowNode: SKShapeNode {
     static let shadowFillColor = SKColor.black.withAlphaComponent(0.35)
 
     /// - Parameter width: This shadow's width in points; height is derived
-    ///   from `aspectRatio`. Defaults to `defaultWidth`.
-    init(width: CGFloat = ActorShadowNode.defaultWidth) {
+    ///   from `aspectRatio`.
+    ///
+    /// **Required, with no default.** There was a `defaultWidth = 20` here,
+    /// and it was the one number in this actor stack that came from nowhere:
+    /// `PlayerSpriteSheet` reads its cell size straight off `AtlasSheet` and
+    /// refuses even a fallback literal, and the 2:1 ratio above is justified
+    /// against the measured 96x48 diamond, but a 20pt shadow overhung the
+    /// player's measured 14x10 ground footprint by ~40% on the strength of
+    /// nothing. A shadow's size is a property of *the actor casting it*, and
+    /// this type deliberately knows nothing about any particular actor, so
+    /// the only honest place for that number is the caller: `PlayerNode`
+    /// passes `PlayerSpriteSheet.hitboxSize.width` (its measured ground
+    /// footprint), and the raccoon swarm (`CYBERPUN-17-8`) will pass its own.
+    /// A default here would only ever be a literal nobody had to justify.
+    init(width: CGFloat) {
         self.width = width
         super.init()
 
@@ -65,6 +74,14 @@ final class ActorShadowNode: SKShapeNode {
         fillColor = Self.shadowFillColor
         strokeColor = .clear
         lineWidth = 0
+        // `SKShapeNode.isAntialiased` defaults to `true`, which would give
+        // this ellipse soft, resampled edges in a game whose whole rendering
+        // rule is hard pixel edges (`PixelCrispness`, `docs/bootstrap.md`
+        // section 1). `PixelCrispness.apply(to:)` only takes `SKSpriteNode`s
+        // (it is about texture filtering and integer scaling), so a shape
+        // node has to opt out here explicitly -- the default was not
+        // deliberate, and it is off now.
+        isAntialiased = false
         // No physics body, no user interaction -- purely decorative.
         isUserInteractionEnabled = false
     }

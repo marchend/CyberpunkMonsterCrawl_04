@@ -6,18 +6,39 @@ import SpriteKit
 /// state machine (`PlayerAnimator` + `Direction8` + `PlayerSpriteSheet`,
 /// `CYBERPUN-17-6-t1`) that drives the body's texture and mirroring.
 ///
+/// **Who mounts this in a real build:** `GameScene.startPlayer()` parents
+/// one of these directly under `GameScene.worldLayer` on entry to
+/// `.gameplay`, at the camera's tile and with its depth resolved through
+/// `DepthBanding`, and `GameScene.update(_:)` drives
+/// `update(deltaTime:movementVector:)` once per frame. This follows the rule
+/// `GroundTileRenderer`'s type doc writes down for this repo -- *"a factory
+/// with no production caller is exactly the shape of feature that never gets
+/// switched on"* -- so the anchor, shadow and depth integration is
+/// observable on a device from this PR rather than from the next one.
+///
 /// **Scope of this PR (`CYBERPUN-17-6-t2`):** node assembly and per-frame
 /// visual state only. There is no physics body and no movement of this
 /// node's own `position` -- `update(deltaTime:movementVector:)` only reads
-/// the vector to resolve facing/animation, it never applies it. Movement,
-/// the floating thumbstick and camera-follow land with `CYBERPUN-17-7`,
-/// which is expected to call `update(deltaTime:movementVector:)` once per
-/// frame with the resolved input vector and separately update `position`.
+/// the vector to resolve facing/animation, it never applies it. The scene
+/// therefore passes `.zero` today and the mounted player stands idle on
+/// frame 0. Movement, the floating thumbstick and camera-follow land with
+/// `CYBERPUN-17-7`, which replaces that `.zero` with the resolved input
+/// vector and separately updates `position` (and this node's depth as the
+/// player crosses tiles).
 final class PlayerNode: SKNode {
 
     /// The player's ground-collision hitbox size -- delegated to
     /// `PlayerSpriteSheet` rather than a second copy of the numbers.
     static let hitboxSize = PlayerSpriteSheet.hitboxSize
+
+    /// The width of the player's ground shadow: the player's **measured**
+    /// ground footprint (`PlayerSpriteSheet.hitboxSize.width`), not a
+    /// hand-picked shadow size. `ActorShadowNode` is deliberately
+    /// actor-agnostic, so the actor is the only place that knows which
+    /// measurement its shadow should match -- and matching the footprint is
+    /// what keeps the ellipse under the character's feet instead of
+    /// overhanging them by an unexplained margin.
+    static let shadowWidth = PlayerSpriteSheet.hitboxSize.width
 
     /// Small, strictly-ordered relative zPosition offsets for the two
     /// children below, both well inside `DepthModel.bandSpacing` (10) so
@@ -57,7 +78,7 @@ final class PlayerNode: SKNode {
         body.anchorPoint = PlayerSpriteSheet.anchorPointNormalized
         body.zPosition = Self.bodyRelativeZ
 
-        shadow = ActorShadowNode()
+        shadow = ActorShadowNode(width: Self.shadowWidth)
         shadow.zPosition = Self.shadowRelativeZ
 
         super.init()
@@ -149,10 +170,39 @@ final class PlayerNode: SKNode {
 
     // MARK: - Texture slicing (cached)
 
+    /// The player's measured sheet contract, resolved **once**.
+    ///
+    /// `PlayerSpriteSheet.sheet` is a computed `var` over
+    /// `AtlasSheet.playerWalk.sheet`, so *every* read constructs a fresh
+    /// `SpriteSheet`, which re-runs `SpriteSheet.init`'s measurement
+    /// `precondition` -- an asset-catalog lookup plus a `UIImage`/`.cgImage`
+    /// decode. That is the right amount of paranoia for a one-off contract
+    /// check and the wrong amount for a path `update(deltaTime:
+    /// movementVector:)` runs ~60x/second, so the invariant is hoisted off
+    /// the hot path here: the sheet is measured once, on first use, and the
+    /// per-frame path below is a pure dictionary lookup.
+    private static let cachedSheet: SpriteSheet = PlayerSpriteSheet.sheet
+
+    /// `cachedSheet`'s column count -- the cache key's stride. Read off the
+    /// already-measured sheet rather than through `PlayerSpriteSheet.columns`
+    /// (which re-enters the atlas contract, and so would re-measure the image
+    /// on every cache *hit*, which is precisely the work the cache exists to
+    /// avoid).
+    private static let cachedColumns: Int = PlayerNode.cachedSheet.columns
+
     /// One `SKTexture` per `(row, column)` cell of `sprite_player_walk`,
     /// sliced on first use and reused thereafter -- slicing on every
     /// `update` call would allocate a fresh `SKTexture` many times a
     /// second for no visual benefit, since the sheet's cells never change.
+    ///
+    /// **Isolation:** this is mutable static state with no synchronisation,
+    /// and it is safe only because every access happens on SpriteKit's
+    /// main-thread update loop (`SKScene.update(_:)` and node construction);
+    /// nothing here may be touched from a background queue. Moving this
+    /// target to Swift 6 strict concurrency will require `@MainActor` (or an
+    /// equivalent isolation) on this property and on `texture(row:column:)`
+    /// rather than a lock, since the single-threaded access pattern is the
+    /// actual invariant.
     private static var textureCache: [Int: SKTexture] = [:]
 
     /// Cuts (and caches) the `(row, column)` cell of `PlayerSpriteSheet` as
@@ -161,11 +211,11 @@ final class PlayerNode: SKNode {
     /// same cache this node's production path uses, rather than
     /// constructing a second, possibly-drifting crop of their own.
     static func texture(row: Int, column: Int) -> SKTexture {
-        let key = row * PlayerSpriteSheet.columns + column
+        let key = row * cachedColumns + column
         if let cached = textureCache[key] {
             return cached
         }
-        let texture = PlayerSpriteSheet.sheet.texture(col: column, row: row)
+        let texture = cachedSheet.texture(col: column, row: row)
         texture.filteringMode = .nearest
         texture.usesMipmaps = false
         textureCache[key] = texture

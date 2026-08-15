@@ -61,6 +61,33 @@ enum DepthBanding {
             "DepthBanding.actorZPosition received offset \(offset), outside "
                 + "DepthModel.actorOffsetRange (\(DepthModel.actorOffsetRange))."
         )
+        #if DEBUG
+        // The offset assert above only says the *in-band* slot is legal; it
+        // says nothing about whether the band itself still exists. Beyond
+        // `DepthModel.maxSupportedTileSumMagnitude` the depth scheme has run
+        // out of band, and the failure surfaces far from its cause -- as a
+        // `GameScene.nodesEscapingTheirLayerBand()` trip with no indication
+        // of which actor walked out of range.
+        //
+        // `DepthModel.isWithinSupportedDepthRange(forTile:)` asks consumers
+        // placing nodes far from the origin to assert on it in DEBUG, and
+        // `GroundTileRenderer.configure` already does; an actor is the node
+        // that can reach it by *walking* (the world is endless and
+        // `CYBERPUN-17-7` gives the player a thumbstick) rather than only by
+        // a coding error, so both consumers of `DepthModel` honour the same
+        // contract. Sampled on the **rounded** tile, the same coordinate
+        // `DepthModel.band(forActorAt:)` itself resolves the band from.
+        let owningTile = IsometricProjection.tile(containing: position)
+        assert(
+            DepthModel.isWithinSupportedDepthRange(
+                forTile: TileCoordinate(tileX: owningTile.tileX, tileY: owningTile.tileY)
+            ),
+            "Actor at tile-space \(position) rounds to tile "
+                + "(\(owningTile.tileX), \(owningTile.tileY)), whose |tileX + tileY| is past "
+                + "DepthModel.maxSupportedTileSumMagnitude "
+                + "(\(DepthModel.maxSupportedTileSumMagnitude)); its zPosition would escape the world band."
+        )
+        #endif
         return DepthModel.band(forActorAt: position) + offset
     }
 
