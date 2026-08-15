@@ -48,13 +48,12 @@ enum GroundTileKind: CaseIterable {
 /// index" (what the sheet measurement is keyed by) — so `AtlasSheet.swift`
 /// stays the single source of truth for the pixel arithmetic.
 ///
-/// The six-way mapping itself, from the story's asset contract. The lane
-/// pair follows `AtlasGroundDiamond`'s own case order: `.asphaltEastWest`
-/// takes `laneEastWest`, whose `pixelRect` is the crop at **x:0**, and
-/// `.asphaltNorthSouth` takes `laneNorthSouth` at **x:96** (both numbers
-/// read off `AtlasGroundDiamond.pixelRect` in
-/// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth
-/// for the pixel arithmetic — only the *semantic* pairing lives here).
+/// The six-way mapping itself, from the story's asset contract: each kind
+/// takes the diamond its own name claims, `AtlasGroundDiamond`'s case order
+/// straight through. Both rects still read off
+/// `AtlasGroundDiamond.pixelRect` in `Sources/Assets/AtlasSheet.swift`,
+/// which stays the one source of truth for the pixel arithmetic; only the
+/// *semantic* pairing lives here.
 ///
 /// That pairing is not left as prose either.
 /// `GroundTileSemanticsTests
@@ -71,7 +70,14 @@ enum GroundTileKind: CaseIterable {
 /// **If it does go red, swap the two `case` returns in `diamond(for:)`
 /// below — do not edit this comment to match the art.** The mapping is the
 /// thing under test, and prose disagreeing with `diamond(for:)` is how a
-/// later reader ends up inverting every street in the city:
+/// later reader ends up inverting every street in the city. Note the fix is
+/// a swap *here*, in `GroundTileCatalog`, only if the catalog is the
+/// inverted layer: `GroundTileRenderer.asphaltOrientation(at:)` picks the
+/// `GroundTileKind` from the lattice band, so if that mapping is the
+/// inverted one, swapping these two returns corrects the pixels while
+/// leaving the kind names lying about what they depict. Establish which
+/// layer is wrong — and record the measured `paintSpread()` numbers, not
+/// the conclusion — before re-pinning this table.
 /// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
 /// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
 /// - `.lot`               -> `AtlasGroundDiamond.plainLot`       (x:192, 96x60)

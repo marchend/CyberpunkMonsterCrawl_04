@@ -280,26 +280,47 @@ final class ChunkStreamingManagerTests: XCTestCase {
         // `CYBERPUN-17-5` would pop out whenever the camera circled away and
         // back. This asserts survival, not just tile equality.
         let manager = ChunkStreamingManager(seed: seed)
-        let originChunkCoordinate = ChunkCoordinate(x: 0, y: 0)
 
         manager.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
-        guard let chunk = manager.residentChunks[originChunkCoordinate] else {
-            XCTFail("Expected the origin chunk to load initially")
+
+        // `ChunkGenerator.generate` now folds every placed building's
+        // footprint into the manager-owned store (`CYBERPUN-17-5-t1`), so the
+        // reservations whose survival matters are the placed ones — and a
+        // generated chunk no longer leaves a free placement-surface tile to
+        // claim by hand, because buildings fill every lot of the blocks it
+        // owns. Pick the first resident chunk that actually carries
+        // footprints (deterministically, in chunk-coordinate order): the
+        // lattice leaves ~1-in-4 blocks empty, so no single chunk is
+        // guaranteed to hold buildings under every seed, and this test is
+        // about survival rather than about which chunk.
+        let residentInCoordinateOrder = manager.residentChunks
+            .sorted { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }
+        guard let entry = residentInCoordinateOrder.first(where: { !$0.value.reservedTiles.isEmpty }) else {
+            XCTFail("Expected at least one resident chunk to carry a placed building footprint")
             return
         }
-        guard let footprintOrigin = chunk.reservableFootprints(in: .oneByOne).sorted(by: {
+        let originChunkCoordinate = entry.key
+        let chunk = entry.value
+
+        guard let footprintTile = chunk.reservedTiles.sorted(by: {
             ($0.tileX, $0.tileY) < ($1.tileX, $1.tileY)
         }).first else {
-            XCTFail("Expected the origin chunk to offer at least one reservable footprint under this seed")
+            XCTFail("Expected the chosen chunk to place at least one building footprint")
             return
         }
-        XCTAssertTrue(chunk.reserve(footprint: .oneByOne, at: footprintOrigin))
-        XCTAssertTrue(chunk.reservedTiles.contains(footprintOrigin))
+        XCTAssertFalse(
+            chunk.reserve(footprint: .oneByOne, at: footprintTile),
+            "A tile a placed building stands on must not be reservable by anyone else"
+        )
 
         // Evict it by moving well beyond the resident radius, then come back.
         let farOffset = Double((ChunkStreamingManager.residentRadius + 10) * Chunk.size)
         manager.updateCamera(worldPosition: TilePoint(x: farOffset, y: farOffset))
         XCTAssertNil(manager.residentChunks[originChunkCoordinate], "Expected the origin chunk to be evicted")
+        XCTAssertTrue(
+            manager.reservations.isReserved(footprintTile),
+            "The store outlives the chunk instance — an evicted chunk must not take its reservations with it"
+        )
 
         manager.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
         guard let revisited = manager.residentChunks[originChunkCoordinate] else {
@@ -308,15 +329,20 @@ final class ChunkStreamingManagerTests: XCTestCase {
         }
 
         XCTAssertTrue(
-            revisited.reservedTiles.contains(footprintOrigin),
+            revisited.reservedTiles.contains(footprintTile),
             "A footprint reserved before eviction must still be reserved after the chunk is regenerated"
         )
+        XCTAssertEqual(
+            revisited.reservedTiles,
+            chunk.reservedTiles,
+            "Regenerating an evicted chunk must re-fold exactly the same footprints, never a different set"
+        )
         XCTAssertFalse(
-            revisited.reserve(footprint: .oneByOne, at: footprintOrigin),
+            revisited.reserve(footprint: .oneByOne, at: footprintTile),
             "Re-reserving a surviving reservation must be refused, or two buildings could claim the same tile"
         )
         XCTAssertFalse(
-            revisited.reservableFootprints(in: .oneByOne).contains(footprintOrigin),
+            revisited.reservableFootprints(in: .oneByOne).contains(footprintTile),
             "A surviving reservation must not be offered as reservable again after a revisit"
         )
     }
@@ -326,18 +352,25 @@ final class ChunkStreamingManagerTests: XCTestCase {
         // chunk instance, is where reservations live.
         let manager = ChunkStreamingManager(seed: seed)
         manager.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
-        XCTAssertTrue(manager.reservations.allReservedTiles.isEmpty)
 
-        guard let chunk = manager.residentChunks[ChunkCoordinate(x: 0, y: 0)],
-              let footprintOrigin = chunk.reservableFootprints(in: .oneByOne).first else {
-            XCTFail("Expected a resident origin chunk with a reservable footprint")
+        let residentInCoordinateOrder = manager.residentChunks
+            .sorted { ($0.key.x, $0.key.y) < ($1.key.x, $1.key.y) }
+        guard
+            let entry = residentInCoordinateOrder.first(where: { !$0.value.buildingPlacements.isEmpty }),
+            let footprintOrigin = entry.value.buildingPlacements.first?.footprintTiles.first
+        else {
+            XCTFail("Expected at least one resident chunk to have placed a building")
             return
         }
-        XCTAssertTrue(chunk.reserve(footprint: .oneByOne, at: footprintOrigin))
 
+        XCTAssertFalse(
+            manager.reservations.allReservedTiles.isEmpty,
+            "Generation folds placed footprints into the manager-owned store, so it cannot be empty "
+                + "once a chunk full of buildings is resident"
+        )
         XCTAssertTrue(
             manager.reservations.isReserved(footprintOrigin),
-            "A reservation made through a chunk must be visible in the manager-owned store"
+            "A footprint placed while generating a chunk must be visible in the manager-owned store"
         )
 
         let farOffset = Double((ChunkStreamingManager.residentRadius + 10) * Chunk.size)
