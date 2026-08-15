@@ -48,19 +48,12 @@ enum GroundTileKind: CaseIterable {
 /// index" (what the sheet measurement is keyed by) — so `AtlasSheet.swift`
 /// stays the single source of truth for the pixel arithmetic.
 ///
-/// The six-way mapping itself, from the story's asset contract. The lane
-/// pair does **not** follow `AtlasGroundDiamond`'s own case order: measuring
-/// the shipped pixels (`GroundTileSemanticsTests`) confirms the crop at
-/// **x:0** (`laneEastWest`) is actually painted with its lane markings
-/// elongated along tile Y, i.e. it depicts a north-south corridor, and the
-/// crop at **x:96** (`laneNorthSouth`) is elongated along tile X, depicting
-/// the east-west corridor \u2014 the sheet's own case names name the *diamond's
-/// position*, not the axis its paint is elongated along. So
-/// `.asphaltEastWest` takes `laneNorthSouth` (the crop at x:96) and
-/// `.asphaltNorthSouth` takes `laneEastWest` (the crop at x:0) \u2014 both rects
-/// still read off `AtlasGroundDiamond.pixelRect` in
-/// `Sources/Assets/AtlasSheet.swift`, which stays the one source of truth
-/// for the pixel arithmetic; only the *semantic* pairing lives here.
+/// The six-way mapping itself, from the story's asset contract: each kind
+/// takes the diamond its own name claims, `AtlasGroundDiamond`'s case order
+/// straight through. Both rects still read off
+/// `AtlasGroundDiamond.pixelRect` in `Sources/Assets/AtlasSheet.swift`,
+/// which stays the one source of truth for the pixel arithmetic; only the
+/// *semantic* pairing lives here.
 ///
 /// That pairing is not left as prose either.
 /// `GroundTileSemanticsTests
@@ -77,9 +70,16 @@ enum GroundTileKind: CaseIterable {
 /// **If it does go red, swap the two `case` returns in `diamond(for:)`
 /// below — do not edit this comment to match the art.** The mapping is the
 /// thing under test, and prose disagreeing with `diamond(for:)` is how a
-/// later reader ends up inverting every street in the city:
-/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
-/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
+/// later reader ends up inverting every street in the city. Note the fix is
+/// a swap *here*, in `GroundTileCatalog`, only if the catalog is the
+/// inverted layer: `GroundTileRenderer.asphaltOrientation(at:)` picks the
+/// `GroundTileKind` from the lattice band, so if that mapping is the
+/// inverted one, swapping these two returns corrects the pixels while
+/// leaving the kind names lying about what they depict. Establish which
+/// layer is wrong — and record the measured `paintSpread()` numbers, not
+/// the conclusion — before re-pinning this table.
+/// - `.asphaltEastWest`   -> `AtlasGroundDiamond.laneEastWest`   (x:0,   96x60)
+/// - `.asphaltNorthSouth` -> `AtlasGroundDiamond.laneNorthSouth` (x:96,  96x60)
 /// - `.lot`               -> `AtlasGroundDiamond.plainLot`       (x:192, 96x60)
 /// - `.junctionStopLine`  -> `AtlasGroundDiamond.intersection`   (x:288, 96x60)
 /// - `.kerbSidewalk`      -> `AtlasGroundDiamond.kerbTransition` (x:384, 96x60)
@@ -125,9 +125,9 @@ enum GroundTileCatalog {
     static func diamond(for kind: GroundTileKind) -> AtlasGroundDiamond {
         switch kind {
         case .asphaltEastWest:
-            return .laneNorthSouth
-        case .asphaltNorthSouth:
             return .laneEastWest
+        case .asphaltNorthSouth:
+            return .laneNorthSouth
         case .junctionStopLine:
             return .intersection
         case .kerbSidewalk:

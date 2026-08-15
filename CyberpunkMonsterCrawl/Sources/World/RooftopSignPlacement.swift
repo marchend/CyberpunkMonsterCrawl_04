@@ -30,8 +30,17 @@ enum RooftopSignPlacement {
     /// among *building* blocks.)
     static let signedBlockModulus: UInt64 = 3
 
-    /// Number of sign variants in the `sprite_signs` atlas
-    /// (`AtlasCellIndex.signs`: 4 cols x 3 rows = 12 cells).
+    /// Number of sign variants in the `sprite_signs` atlas.
+    ///
+    /// `AtlasCellIndex.signs` (4 cols x 3 rows = 12 cells) is the owning
+    /// index list for that family — this is a restatement of its count, not a
+    /// second owner, kept here only so the `World` layer never imports
+    /// `Sources/Assets`. The restatement is pinned to its owner by
+    /// `RooftopSignPlacementTests
+    /// .test_signCellCount_matchesTheOwningAtlasCellIndexList`, which the
+    /// test target can assert because it sees both layers; re-grid the sign
+    /// atlas and that test fails instead of this constant silently indexing
+    /// past the end.
     static let signCellCount = 12
 
     /// Distinct salts XORed into `WorldSeed.rawValue` before hashing, one

@@ -5,15 +5,29 @@ import Foundation
 /// claimed by a placed building, so `BuildingPlacement.generate` can ask
 /// "would this footprint fit and is it free" before committing.
 ///
-/// Deliberately independent of `LotReservationStore` (`Chunk.swift`): that
-/// store is scoped to the whole world's lifetime, owned above the chunk
-/// cache, and exists to survive a chunk being evicted and regenerated.
-/// `BuildingFootprintReservation` is scoped to a single
+/// A *scratch* grid, not a second source of truth. It is scoped to a single
 /// `BuildingPlacement.generate` call — one block, one walk over its 3x3
-/// interior — mirroring `LotReservationStore`'s no-overlap contract at a
-/// smaller grain, using the same `TileCoordinate` currency so a caller that
-/// later folds these decisions into the world-lifetime store never has to
-/// translate coordinate spaces.
+/// interior — and is thrown away when that call returns;
+/// `LotReservationStore` (`Chunk.swift`) remains the world's one owner of
+/// "which tiles are occupied", scoped to the whole world's lifetime and
+/// held above the chunk cache so it survives eviction and regeneration.
+///
+/// The two are joined, not independent: `ChunkGenerator.generate` folds
+/// every resulting `BuildingPlacementRecord.footprintTiles` into that
+/// world-lifetime store. That fold is what keeps the two systems from
+/// disagreeing — without it `chunk.reservedTiles` would stay empty even for
+/// a chunk full of buildings, and `Chunk.reservableFootprints(in:)` would
+/// offer tile origins a placed building is standing on. The fold is
+/// idempotent: placement is a pure function of `(block, seed)` and
+/// `LotReservationStore.reserve` is a set union, so re-generating an evicted
+/// chunk re-folds exactly the same tiles and changes nothing.
+///
+/// This type exists because the store cannot answer the *mid-walk* question
+/// — "has the lot two steps back in this same interior already claimed this
+/// tile?" — before the block's decisions are committed. It mirrors
+/// `LotReservationStore`'s no-overlap contract at that smaller grain, in the
+/// same `TileCoordinate` currency, so the fold needs no coordinate
+/// translation.
 struct BuildingFootprintReservation: Equatable {
     private var reserved: Set<TileCoordinate> = []
 

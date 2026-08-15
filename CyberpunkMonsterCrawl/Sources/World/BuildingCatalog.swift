@@ -15,6 +15,25 @@ import Foundation
 /// consumer (a later story) is the piece that translates a
 /// `BuildingCatalog.Entry.index` into the matching `BuildingSprite` case
 /// (`BuildingSprite(rawValue: index)`).
+///
+/// **The copy is not left unverified.** `BuildingSprite` is the owning
+/// manifest and backs its own table with a hard `precondition` against the
+/// *measured* shipped pixels (`declaredPixelSize` vs
+/// `SpriteSheet.measuredPixelSize`); this table inherits none of that on its
+/// own, so the parity gate lives in the test target — which, unlike either
+/// production layer, sees both:
+/// - `BuildingCatalogTests.test_buildingCatalog_matchesBuildingSprite_entryForEntry`
+///   asserts, for every index `0...11`, that this table agrees with
+///   `BuildingSprite(rawValue:)` on `imageID`/`assetName`, footprint and
+///   height class;
+/// - `BuildingCatalogTests.test_buildingCatalogFootprints_followTheMeasuredSpriteWidth`
+///   ties the footprint column here to the measured art (a lot is one 96px
+///   cell wide, so anything wider reserves 2x2).
+///
+/// So re-exporting the art at a different base width trips `BuildingSprite`'s
+/// measurement precondition *and* tells you this placement table needs
+/// updating too — instead of a drifted footprint surfacing as buildings
+/// silently overlapping their neighbours with every test still green.
 enum BuildingCatalog {
     /// Coarse height category, straight from the story's building table —
     /// mirrors `BuildingSprite.HeightClass` case-for-case.

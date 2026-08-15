@@ -79,6 +79,72 @@ final class BuildingPlacementTests: XCTestCase {
         )
     }
 
+    /// The test above proves full 3x3 coverage for exactly one
+    /// `(seed, block)` pair, and the invariant it checks is held up entirely
+    /// by the 2x2-doesn't-fit fallback — the path most likely to leave a lot
+    /// uncovered, and the one a single sample is least likely to exercise.
+    /// So sweep it across the same seed/block matrix
+    /// `BuildingFootprintOverlapTests` already uses.
+    func test_generate_everyBuildingBlock_fillsAllNineLots_acrossTheSameSeedAndBlockMatrixAsTheOverlapSweep() {
+        let seeds: [WorldSeed] = [
+            WorldSeed(rawValue: 0), WorldSeed(rawValue: 1), WorldSeed(rawValue: 7), WorldSeed(rawValue: 42),
+            WorldSeed(rawValue: 999), WorldSeed(rawValue: 123_456), WorldSeed(rawValue: 31_337),
+            WorldSeed(rawValue: 2_024)
+        ]
+        let blockRange = -6...6
+        let interiorSize = CityLatticeGenerator.blockSize
+
+        var buildingBlockCount = 0
+        var observedFootprintSizes: Set<BuildingFootprintSize> = []
+
+        for seed in seeds {
+            for blockX in blockRange {
+                for blockY in blockRange {
+                    let block = BlockCoordinate(x: blockX, y: blockY)
+                    let placements = BuildingPlacement.generate(forBlock: block, seed: seed)
+
+                    guard !placements.isEmpty else {
+                        XCTAssertTrue(
+                            CityLatticeGenerator.isEmptyLotBlock(blockX: blockX, blockY: blockY, seed: seed),
+                            "Block \(block) under seed \(seed.rawValue) got no buildings but is not an empty-lot "
+                                + "block — a building block with no buildings is a hole in the city."
+                        )
+                        continue
+                    }
+                    buildingBlockCount += 1
+                    observedFootprintSizes.formUnion(placements.map(\.building.footprintSize))
+
+                    let interiorOrigin = block.interiorOrigin
+                    var expectedTiles: Set<TileCoordinate> = []
+                    for localX in 0..<interiorSize {
+                        for localY in 0..<interiorSize {
+                            expectedTiles.insert(
+                                TileCoordinate(
+                                    tileX: interiorOrigin.tileX + localX,
+                                    tileY: interiorOrigin.tileY + localY
+                                )
+                            )
+                        }
+                    }
+
+                    XCTAssertEqual(
+                        Set(placements.flatMap(\.footprintTiles)),
+                        expectedTiles,
+                        "Block \(block) under seed \(seed.rawValue) does not have its 3x3 interior covered "
+                            + "exactly — the 2x2 fallback left a lot empty or a footprint escaped the interior."
+                    )
+                }
+            }
+        }
+
+        XCTAssertGreaterThan(buildingBlockCount, 500, "Sample too small to claim the invariant sweeps.")
+        XCTAssertEqual(
+            observedFootprintSizes,
+            Set(BuildingFootprintSize.allCases),
+            "The sweep never placed one of the two footprint sizes, so it did not exercise both paths."
+        )
+    }
+
     // MARK: - Footprint bookkeeping
 
     func test_generate_farCornerAndFootprintTiles_agreeWithTheChosenBuildingsSpan() {

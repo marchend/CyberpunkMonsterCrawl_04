@@ -27,8 +27,8 @@ final class GroundTileCatalogTests: XCTestCase {
     /// The exhaustive `GroundTileKind` -> `AtlasGroundDiamond` mapping the
     /// story's asset contract specifies.
     private static let expectedDiamondByKind: [GroundTileKind: AtlasGroundDiamond] = [
-        .asphaltEastWest: .laneNorthSouth,
-        .asphaltNorthSouth: .laneEastWest,
+        .asphaltEastWest: .laneEastWest,
+        .asphaltNorthSouth: .laneNorthSouth,
         .junctionStopLine: .intersection,
         .kerbSidewalk: .kerbTransition,
         .lot: .plainLot,

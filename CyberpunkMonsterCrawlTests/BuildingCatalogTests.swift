@@ -76,6 +76,123 @@ final class BuildingCatalogTests: XCTestCase {
         }
     }
 
+    // MARK: - Parity with the World layer's restated manifest
+
+    /// `BuildingCatalog` (`Sources/World`) restates `BuildingSprite`'s asset
+    /// name, footprint and height class by hand so the world-generation layer
+    /// can stay SpriteKit-free. Nothing in the production code can check that
+    /// copy — the two layers deliberately do not import each other — but the
+    /// test target sees both, so the parity gate lives here.
+    ///
+    /// Without it, a footprint that drifted out of sync would surface only as
+    /// buildings silently overlapping their neighbours in the placed city,
+    /// with every existing test still green.
+    func test_buildingCatalog_matchesBuildingSprite_entryForEntry() {
+        XCTAssertEqual(
+            BuildingCatalog.entries.count,
+            BuildingSprite.allCases.count,
+            "The two manifests declare a different number of buildings."
+        )
+
+        for index in 0...11 {
+            let entry = BuildingCatalog.entry(atIndex: index)
+            guard let sprite = BuildingSprite(rawValue: index) else {
+                XCTFail("BuildingCatalog declares index \(index) but BuildingSprite has no such case.")
+                continue
+            }
+
+            XCTAssertEqual(entry.index, index, "BuildingCatalog entry \(index) reports the wrong index.")
+            XCTAssertEqual(
+                entry.assetName,
+                sprite.imageID,
+                "BuildingCatalog entry \(index) names \(entry.assetName) but BuildingSprite names \(sprite.imageID)."
+            )
+            XCTAssertEqual(
+                entry.footprintSize,
+                Self.footprintSize(matching: sprite.footprint),
+                "BuildingCatalog entry \(index) (\(entry.assetName)) declares footprint \(entry.footprintSize) "
+                    + "but BuildingSprite declares \(sprite.footprint). The World layer's copy has drifted."
+            )
+            XCTAssertEqual(
+                entry.heightClass,
+                Self.heightClass(matching: sprite.heightClass),
+                "BuildingCatalog entry \(index) (\(entry.assetName)) declares height class \(entry.heightClass) "
+                    + "but BuildingSprite declares \(sprite.heightClass)."
+            )
+        }
+    }
+
+    /// The parity check above compares two hand-written tables, so this ties
+    /// the footprint column of *both* to the measured art: resolving
+    /// `measuredPixelSize` runs `BuildingSprite`'s declared-vs-shipped
+    /// `precondition`, and a lot is one 96px grid cell wide, so anything
+    /// wider than 96px reserves 2x2 regardless of height.
+    ///
+    /// Re-export `building_08`/`09`/`11` at a different base width and this
+    /// fails alongside `BuildingSpriteTests`, telling you the placement table
+    /// needs updating too rather than leaving `BuildingCatalog` silently wrong.
+    func test_buildingCatalogFootprints_followTheMeasuredSpriteWidth() {
+        for index in 0...11 {
+            let entry = BuildingCatalog.entry(atIndex: index)
+            guard let sprite = BuildingSprite(rawValue: index) else {
+                XCTFail("BuildingSprite has no case for index \(index).")
+                continue
+            }
+
+            let measuredWidth = sprite.measuredPixelSize.width
+            let expected: BuildingFootprintSize = measuredWidth > 96 ? .twoByTwo : .oneByOne
+
+            XCTAssertEqual(
+                entry.footprintSize,
+                expected,
+                "\(entry.assetName) measures \(measuredWidth)px wide but BuildingCatalog declares "
+                    + "\(entry.footprintSize). A lot is 96px wide: anything wider reserves 2x2."
+            )
+        }
+    }
+
+    /// `BuildingPlacement`'s 2x2-doesn't-fit fallback picks from
+    /// `oneByOneEntries`, so that subset must be exactly the nine
+    /// parity-checked 1x1 entries — never a hand-maintained second list.
+    func test_oneByOneEntries_areExactlyTheNonTwoByTwoEntries() {
+        XCTAssertEqual(BuildingCatalog.oneByOneEntries.count, 9)
+        XCTAssertEqual(
+            Set(BuildingCatalog.oneByOneEntries.map(\.index)),
+            Set(0...11).subtracting([8, 9, 11]),
+            "oneByOneEntries must hold every building except the three 2x2 towers."
+        )
+        for entry in BuildingCatalog.oneByOneEntries {
+            XCTAssertEqual(entry.footprintSize, .oneByOne, "\(entry.assetName) is not a 1x1 building.")
+        }
+    }
+
+    /// Case-for-case translations between the two layers' parallel enums.
+    /// Deliberately exhaustive `switch`es: adding a case on either side fails
+    /// to compile here rather than silently skipping the new value.
+    private static func footprintSize(matching footprint: BuildingSprite.Footprint) -> BuildingFootprintSize {
+        switch footprint {
+        case .oneByOne:
+            return .oneByOne
+        case .twoByTwo:
+            return .twoByTwo
+        }
+    }
+
+    private static func heightClass(matching heightClass: BuildingSprite.HeightClass) -> BuildingCatalog.HeightClass {
+        switch heightClass {
+        case .lowest:
+            return .lowest
+        case .low:
+            return .low
+        case .mid:
+            return .mid
+        case .tall:
+            return .tall
+        case .large:
+            return .large
+        }
+    }
+
     /// The 12 buildings must be 12 pieces of art — not the same PNG imported
     /// twice, and not six originals plus six horizontal flips. Both are
     /// measured off decoded pixels: a content fingerprint per building, and a

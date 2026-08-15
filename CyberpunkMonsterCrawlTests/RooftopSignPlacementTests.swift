@@ -14,6 +14,25 @@ import XCTest
 ///   signed decision, carrier lot and sign cell.
 final class RooftopSignPlacementTests: XCTestCase {
 
+    // MARK: - The sign-variant count has one owner
+
+    /// `RooftopSignPlacement.signCellCount` restates the size of the
+    /// `sprite_signs` family so the `World` layer never imports
+    /// `Sources/Assets`. `AtlasCellIndex` is that family's owning index list
+    /// (`docs/bootstrap.md` §2: "one owning index list per family — no magic
+    /// numbers scattered across consumers"), so the restated number has to be
+    /// pinned to it; the test target sees both layers even though the
+    /// production code deliberately does not.
+    func test_signCellCount_matchesTheOwningAtlasCellIndexList() {
+        XCTAssertEqual(
+            RooftopSignPlacement.signCellCount,
+            AtlasCellIndex.signs.count,
+            "RooftopSignPlacement.signCellCount (\(RooftopSignPlacement.signCellCount)) has drifted from "
+                + "AtlasCellIndex.signs (\(AtlasCellIndex.signs.count) cells), the owning index list for "
+                + "the sprite_signs atlas."
+        )
+    }
+
     // MARK: - ~1-in-3 signed-block ratio
 
     func test_signedBlockRatio_isCloseToOneInThree_amongBuildingBlocks() {
