@@ -34,6 +34,29 @@ final class ChunkStreamingGroundTests: XCTestCase {
     private var tilesPerChunk: Int { Chunk.size * Chunk.size }
     private var boundedNodeCount: Int { ChunkStreamingManager.residentWindowSize * tilesPerChunk }
 
+    /// The mounted **ground** nodes among `worldLayer`'s children.
+    ///
+    /// Since CYBERPUN-17-5-t2 the same layer also carries one building node
+    /// per `Chunk.buildingPlacements` record, so every claim in this suite
+    /// about "one node per resident tile" has to name which population it
+    /// means rather than taking every child \u{2014} a chunk's building count
+    /// varies with how many block interiors it owns, so counting both
+    /// together against `boundedNodeCount` measures the wrong thing.
+    /// Filtered by `GroundPlaneStreamer.nodeName`, the name the mount stamps
+    /// for exactly this purpose.
+    private func groundSprites(in worldLayer: SKNode) -> [SKSpriteNode] {
+        worldLayer.children
+            .compactMap { $0 as? SKSpriteNode }
+            .filter { $0.name == GroundPlaneStreamer.nodeName }
+    }
+
+    /// The object identities of the currently mounted ground nodes \u{2014} the
+    /// population the recycle-pool claims below are about (`pool` is
+    /// ground-only; building nodes have their own `buildingPool`).
+    private func groundIdentities(in worldLayer: SKNode) -> Set<ObjectIdentifier> {
+        Set(groundSprites(in: worldLayer).map(ObjectIdentifier.init))
+    }
+
     /// Brings `streamer` to the fully-mounted steady state the way the
     /// shipped code does: repeated `advanceIncrementalMount()` ticks, which
     /// is exactly what `GameScene.update(_:)` drives once per frame.

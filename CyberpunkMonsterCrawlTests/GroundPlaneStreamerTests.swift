@@ -99,7 +99,7 @@ final class GroundPlaneStreamerTests: XCTestCase {
         XCTAssertEqual(
             worldLayer.children.count,
             streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
-            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports \u2014 "
+            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports — "
                 + "any extra child is an orphan the eviction bookkeeping lost track of."
         )
     }

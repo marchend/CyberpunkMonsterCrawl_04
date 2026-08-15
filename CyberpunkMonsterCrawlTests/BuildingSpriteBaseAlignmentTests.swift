@@ -99,7 +99,7 @@ final class BuildingSpriteBaseAlignmentTests: XCTestCase {
             XCTAssertEqual(
                 contentCentre, spriteCentre, accuracy: 8,
                 "\(building.imageID)'s opaque content spans columns \(measured.bounds.x) of a "
-                    + "\(measured.pixels.width)px image \u2014 centred at x:\(contentCentre), not x:\(spriteCentre). "
+                    + "\(measured.pixels.width)px image — centred at x:\(contentCentre), not x:\(spriteCentre). "
                     + "TileFieldRenderer anchors these at (0.5, 0), so off-centre art draws off its own lot."
             )
         }
@@ -156,13 +156,13 @@ final class BuildingSpriteBaseAlignmentTests: XCTestCase {
                 twoByTwoCount += 1
                 XCTAssertGreaterThan(
                     imageWidth, Self.tilePixelWidth,
-                    "\(building.imageID) declares a 2x2 footprint but its image is only \(imageWidth)px wide \u2014 "
+                    "\(building.imageID) declares a 2x2 footprint but its image is only \(imageWidth)px wide — "
                         + "one lot is \(Self.tilePixelWidth)px."
                 )
                 XCTAssertGreaterThan(
                     contentWidth, Self.tilePixelWidth,
                     "\(building.imageID) declares a 2x2 footprint but its opaque art spans only "
-                        + "\(contentWidth)px \u2014 it does not actually cover more than one \(Self.tilePixelWidth)px "
+                        + "\(contentWidth)px — it does not actually cover more than one \(Self.tilePixelWidth)px "
                         + "lot, so anchoring it bottom-centre on the base tile is not a 2x2 building."
                 )
             case .oneByOne:
