@@ -244,9 +244,17 @@ final class GroundPlaneStreamerTests: XCTestCase {
 
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
 
-        let plane = scene.groundPlane
-        XCTAssertNotNil(plane, "Entering .gameplay must start the ground plane.")
-        XCTAssertEqual(scene.worldLayer.children.count, plane?.mountedNodeCount)
+        guard let plane = scene.groundPlane else {
+            return XCTFail("Entering .gameplay must start the ground plane.")
+        }
+        XCTAssertEqual(groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount)
+        XCTAssertEqual(buildingSprites(in: scene.worldLayer).count, plane.mountedBuildingNodeCount)
+        XCTAssertEqual(
+            scene.worldLayer.children.count,
+            plane.mountedNodeCount + plane.mountedBuildingNodeCount,
+            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports — "
+                + "any extra child is an orphan the mount lost track of."
+        )
         XCTAssertGreaterThan(scene.worldLayer.children.count, 0)
     }
 
@@ -282,8 +290,17 @@ final class GroundPlaneStreamerTests: XCTestCase {
         // the transition itself.
         drainIncrementalMount(scene.groundPlane)
 
+        guard let plane = scene.groundPlane else {
+            return XCTFail("Re-entering .gameplay must leave a ground plane mounted.")
+        }
         XCTAssertEqual(scene.worldLayer.children.count, firstCount)
-        XCTAssertEqual(scene.worldLayer.children.count, scene.groundPlane?.mountedNodeCount)
+        XCTAssertEqual(groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount)
+        XCTAssertEqual(
+            scene.worldLayer.children.count,
+            plane.mountedNodeCount + plane.mountedBuildingNodeCount,
+            "A restart stacked a second ground plane's nodes on top of the first — worldLayer must hold "
+                + "exactly one mount's ground plus building nodes."
+        )
     }
 
     // MARK: - Incremental mount (CYBERPUN-17-4-t4)
@@ -315,7 +332,14 @@ final class GroundPlaneStreamerTests: XCTestCase {
             streamer.mountedNodeCount, 0,
             "The very first rendered frame must already show a street, not an empty world."
         )
-        XCTAssertEqual(worldLayer.children.count, streamer.mountedNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, streamer.mountedNodeCount)
+        XCTAssertEqual(buildingSprites(in: worldLayer).count, streamer.mountedBuildingNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+            "The synchronous quickstart mount put a child into worldLayer that neither the ground nor "
+                + "the building bookkeeping knows about."
+        )
     }
 
     /// The remainder of the resident window (everything outside the
@@ -340,13 +364,22 @@ final class GroundPlaneStreamerTests: XCTestCase {
 
         XCTAssertLessThan(ticks, generousTickBound, "Incremental mount did not converge within the generous tick bound.")
         XCTAssertEqual(streamer.mountedNodeCount, fullWindowNodeCount)
-        XCTAssertEqual(worldLayer.children.count, fullWindowNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, fullWindowNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+            "The drained window must hold exactly the ground nodes plus the building nodes the mount "
+                + "reports — any extra child is an orphan."
+        )
         XCTAssertEqual(streamer.mountedChunks, Set(streamer.streaming.residentChunks.keys))
 
-        // No double-mount or drop: every mounted sprite maps to a distinct
-        // tile, and the set of mounted tiles matches the resident window
-        // exactly.
-        let sprites = worldLayer.children.compactMap { $0 as? SKSpriteNode }
+        // No double-mount or drop: every mounted ground sprite maps to a
+        // distinct tile, and the set of mounted tiles matches the resident
+        // window exactly. Buildings are excluded deliberately — several may
+        // legitimately share a tile's screen point with the ground under
+        // them, so counting them here would report a "duplicate" that is
+        // nothing of the sort.
+        let sprites = groundSprites(in: worldLayer)
         let mountedTiles = sprites.map { sprite -> TileCoordinate in
             let owningTile = IsometricProjection.tile(containing: sprite.position)
             return TileCoordinate(tileX: owningTile.tileX, tileY: owningTile.tileY)
@@ -405,7 +438,11 @@ final class GroundPlaneStreamerTests: XCTestCase {
         // the full window mounted.
         drainIncrementalMount(streamer)
         XCTAssertEqual(streamer.mountedNodeCount, fullWindowNodeCount)
-        XCTAssertEqual(worldLayer.children.count, fullWindowNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, fullWindowNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount
+        )
     }
 
     /// The same property under a per-frame camera-follow (`CYBERPUN-17-7`'s
