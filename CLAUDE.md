@@ -80,6 +80,9 @@ CyberpunkMonsterCrawl/
   Sources/World/Chunk.swift                 8x8 tile data container (ChunkCoordinate origin, tiles[[TileInfo]]) + building-footprint reservation: placementSurface pins .buildingFootprint (never the deliberately empty .lot) as the surface, reservableFootprints(in:)/reserve(footprint:at:) refuse overlapping 1x1/2x2 footprints; LotReservationStore holds the state above the chunk cache so it survives eviction
   Sources/World/ChunkGenerator.swift        generate(chunkCoordinate:seed:reservations:) -> Chunk, calling classify once per tile in the chunk's own 8x8 world-tile footprint, no cross-chunk lookups
   Sources/World/ChunkStreamingManager.swift camera-driven resident-chunk window: updateCamera(worldPosition:) loads/evicts chunks within a fixed Chebyshev radius (3, sized from the worst-case 24-tile margin via coversViewport) of the camera's chunk, using IsometricProjection.tile(containing:) for camera tile ownership; owns the world's LotReservationStore; SpriteKit-free (plain TilePoint input) so it's unit-testable without a scene
+  Sources/World/IsometricDepthSorting.swift building-specific zPosition(forBuildingFarCornerTile:) on top of DepthModel: keys off the footprint's far corner (max tileX+tileY across footprintTiles), not the base/lot tile, placed at DepthModel.buildingContentRange's floor — so a building can never draw over an actor standing in front of any part of its footprint; farCornerTile(amongFootprintTiles:) re-derives the far corner from the raw tile list
+  Sources/World/TileFieldRenderer.swift    makeBuildingNode(for: BuildingPlacementRecord) -> SKSpriteNode: whole-sprite texture from BuildingCatalog/BuildingSprite (index-mapped via BuildingSprite(rawValue:)), anchorPoint (0.5, 0) (bottom-centre) at the lot tile's screen point rounded to whole device pixels, zPosition from IsometricDepthSorting + DepthModel.worldLayerRelativeZ, finished with PixelCrispness.apply — the building counterpart of GroundTileRenderer; no production mount yet (a later story parents these into GameScene.worldLayer)
+  Sources/World/BuildingObstruction.swift  isObstructed(_:by:)/isObstructed(_:byAnyOf:): footprint-only obstruction query over BuildingPlacementRecord.footprintTiles, never a rendered node's bounding box — the primitive a later story's movement/collision resolver (CYBERPUN-17-7) will call
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
   IsometricProjectionTests.swift           round-trip sweep (-50...50, both axes, incl. negatives) over tileToScreen/screenToTile + off-centre and on-seam cases pinning tile(containing:), plus the tile-space overload agreeing with the screen-space one across an off-centre sweep (7.6 -> tile 8, not 7)
@@ -97,6 +100,9 @@ CyberpunkMonsterCrawlTests/
   AtlasGroundDiamondTests.swift            derives tileset_ground's 6 seams from pixel alpha (5x96+112)
   BuildingCatalogTests.swift               building catalog existence + distinctness gate (12 buildings)
   BuildingSpriteTests.swift                per-building table contract: measured size, footprint, height class
+  BuildingDepthAndAnchorTests.swift         TileFieldRenderer.makeBuildingNode anchor (0.5, 0) + whole-pixel position; IsometricDepthSorting keys off the footprint's far corner (not the base tile); an actor tile-sum smaller than the far corner's always resolves a greater z than the building
+  BuildingCollisionTests.swift              a tall (building_05) and a short (building_10) building sharing one footprint obstruct identically — same blocked tiles, same walkable approach boundary, and BuildingObstruction agrees between the two — while their rendered sprite heights differ enormously
+  NoBuildingGeometryConstructionTests.swift source scan: no per-face/per-storey/prism geometry-construction markers in building-related Sources/ files, and "tileset_structure" appears nowhere in Sources/
   AtlasContractConventionTests.swift       scans the app target for raw texture-crop rects outside the contract
   AtlasCatalogNoExtraneousAssetsTests.swift whole-catalog scan: no stray @2x/@3x, no tileset_structure/preview art
   DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
@@ -452,11 +458,39 @@ docs/bootstrap.md                          original spec (source of truth)
   `reservableFootprints(in:)` must consult `tiles` for a `TileKind`, while
   `BuildingPlacement.generate(forBlock:seed:)` reads nothing but
   `(block, seed)`.
-  Still nothing renders any of this; a later story mounts the records as
-  sprites
+- Building sprite presence: anchor, depth-sort & footprint-only collision
+  primitive (implemented — `Sources/World/TileFieldRenderer.swift`,
+  `IsometricDepthSorting.swift`, `BuildingObstruction.swift`;
+  `BuildingDepthAndAnchorTests`, `BuildingCollisionTests`,
+  `NoBuildingGeometryConstructionTests` — `CYBERPUN-17-5-t2`).
+  `TileFieldRenderer.makeBuildingNode(for:)` turns a `BuildingPlacementRecord`
+  into a whole-sprite `SKSpriteNode` (`BuildingSprite(rawValue:
+  record.building.index)`, never sliced or assembled from primitives):
+  bottom-centre anchor (`(0.5, 0)`) at the lot tile's screen point rounded to
+  whole device pixels, and a zPosition from `IsometricDepthSorting`, which
+  keys off the footprint's *far* corner (`max(tileX + tileY)` across
+  `footprintTiles`, re-derived from the raw tile list rather than trusted
+  from the record) rather than the base tile — `DepthModel.band(forTile:)`'s
+  monotonic ordering then guarantees any actor tile with a smaller sum than
+  the far corner resolves a strictly greater zPosition, so a building can
+  never draw over an actor standing in front of any part of its footprint.
+  `BuildingObstruction.isObstructed(_:by:)` is a small, named, footprint-only
+  entry point (`BuildingPlacementRecord.footprintTiles` membership, never a
+  rendered node's `calculateAccumulatedFrame()`/`size`) that a later story's
+  live movement resolver can call — collision itself is already
+  footprint-only by construction (`TileKind.buildingFootprint.isWalkable ==
+  false` is decided at generation time, before any building sprite is even
+  chosen for that tile), which `BuildingCollisionTests` pins directly by
+  showing a tall (`building_05`) and a short (`building_10`) building
+  sharing one footprint obstruct identically despite wildly different
+  rendered heights. Still nothing mounts these nodes into `GameScene
+  .worldLayer` in a running app, and no live actor calls
+  `BuildingObstruction` yet — that lands with `CYBERPUN-17-6`/`CYBERPUN-17-7`
+  (player actor, movement, collision, camera)
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
-  on a tile grid (deferred — future PR; `TileKind.isWalkable` is the data
-  this will consume)
+  on a tile grid. The footprint-only obstruction primitive exists
+  (`BuildingObstruction`, above); wiring it into a live movement resolver is
+  still deferred to `CYBERPUN-17-7`
 - City lattice: 6-tile period per axis, 3×3 building block ringed by a
   3-tile street corridor that doubles as the navmesh, `TileKind` +
   walkability, ~1-in-4 empty lots, every intersection tile street under
@@ -498,7 +532,9 @@ docs/bootstrap.md                          original spec (source of truth)
 - Wiring every real texture consumer (player, raccoons, bullets, pickups,
   pulse, hit puff, signs, ground tiles, buildings) into an actual on-screen
   scene — `TextureLoading.texture(named:)` / `BuildingSprite.texture` exist
-  and are tested, but no scene places any sprite yet (later PRs)
+  and are tested; `TileFieldRenderer.makeBuildingNode(for:)` (CYBERPUN-17-5-t2)
+  is a tested factory for building sprites specifically, but no scene mounts
+  its output into `GameScene.worldLayer` yet (later PRs)
 - Final gameplay HUD, death-screen run-summary rows and the high-scores list
   are explicitly out of scope for CYBERPUN-17-2 (see the story's "Out of
   scope" section) and remain marked `// SCAFFOLDING:` in
@@ -507,7 +543,9 @@ docs/bootstrap.md                          original spec (source of truth)
   not. `GameplayScreenNode`'s placeholder is tagged for CYBERPUN-17-7 (the
   floating-thumbstick story); the death/high-scores placeholders are tagged
   for CYBERPUN-17-16 (integration checkpoint #2)
-- Tile-grid collision system
+- Tile-grid collision system: the footprint-only obstruction primitive
+  (`BuildingObstruction`) exists, but no live actor/movement resolver calls
+  it yet
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
 - Audio, app icon art, launch screen polish, App Store metadata/submission
