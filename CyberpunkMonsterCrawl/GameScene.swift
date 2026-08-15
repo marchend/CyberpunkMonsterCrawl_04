@@ -25,9 +25,10 @@ final class GameScene: SKScene {
 
     // MARK: - Layers
 
-    /// World-space content: the streamed ground plane today (see
-    /// `groundPlane` / `startGroundPlane()`), buildings and actors in later
-    /// PRs. Lowest zPosition band; never receives touches ahead of `uiLayer`.
+    /// World-space content: the streamed ground plane (see `groundPlane` /
+    /// `startGroundPlane()`) and the player (see `player` / `startPlayer()`);
+    /// buildings and the raccoon swarm in later PRs. Lowest zPosition band;
+    /// never receives touches ahead of `uiLayer`.
     ///
     /// Ground nodes are parented **directly** here, with the
     /// `worldLayer`-relative `zPosition` `DepthModel.worldLayerRelativeZ`
@@ -90,6 +91,32 @@ final class GameScene: SKScene {
     /// node per tile of `ChunkStreamingManager`'s resident window, so tapping
     /// PLAY shows the generated city.
     private(set) var groundPlane: GroundPlaneStreamer?
+
+    /// The mounted player, parented **directly** under `worldLayer` while a
+    /// run is in progress (`nil` before the first `.gameplay` entry).
+    ///
+    /// `GroundTileRenderer`'s own type doc states this repo's rule --
+    /// *"A factory with no production caller is exactly the shape of feature
+    /// that never gets switched on, so the mount is wired here rather than
+    /// deferred"* -- and `PlayerNode` is held to it: entering `.gameplay`
+    /// puts a real player in the graph, at the camera's tile, with its depth
+    /// resolved through `DepthBanding`, so the anchor/shadow/depth
+    /// integration is observable on a device instead of in unit tests only.
+    ///
+    /// What is *not* here yet is movement: `advancePlayer(currentTime:)`
+    /// drives `PlayerNode.update(deltaTime:movementVector:)` every frame with
+    /// a `.zero` vector, so the player stands idle on frame 0 facing south.
+    /// `CYBERPUN-17-7` ("wire the floating thumbstick, player movement,
+    /// building collision and camera") owns replacing that `.zero` with the
+    /// resolved stick vector and moving `position`/the camera with it -- the
+    /// story's "walking any direction shows the matching facing" gate needs
+    /// the thumbstick that ticket brings.
+    private(set) var player: PlayerNode?
+
+    /// The `currentTime` of the previous `update(_:)`, used to derive the
+    /// per-frame delta handed to `player`. `nil` until the first frame runs,
+    /// where the delta is `0` rather than an invented value.
+    private var lastFrameTime: TimeInterval?
 
     // MARK: - SCAFFOLDING(CYBERPUN-17-7): debug camera pan
     //
@@ -177,7 +204,8 @@ final class GameScene: SKScene {
     // MARK: - World content
 
     /// Brings world content in step with `state`: entering `.gameplay` starts
-    /// (or restarts) the streamed ground plane in `worldLayer`.
+    /// (or restarts) the streamed ground plane in `worldLayer`, and mounts
+    /// (or repositions) the player on top of it.
     ///
     /// The other three states leave the mounted ground alone rather than
     /// tearing it down — their screens each carry an opaque full-bleed
@@ -189,6 +217,10 @@ final class GameScene: SKScene {
         switch state {
         case .gameplay:
             startGroundPlane()
+            // After the ground, so the player is mounted onto a world that
+            // already exists; ordering in `worldLayer` is decided by
+            // `DepthModel`/`DepthBanding` zPositions, not by child order.
+            startPlayer()
         case .menu, .death, .highScores:
             break
         }
@@ -233,9 +265,76 @@ final class GameScene: SKScene {
         #endif
     }
 
+    /// Mounts the player into `worldLayer` at the camera's own tile, or
+    /// repositions the already-mounted one there when a run restarts.
+    ///
+    /// The node is parented **directly** under `worldLayer` (the same
+    /// convention the ground nodes follow) because that is the one mount
+    /// point `PlayerNode.updateDepth(atTilePosition:)` documents: it converts
+    /// its absolute depth through `DepthModel.worldLayerRelativeZ(
+    /// forAbsoluteZ:)`, which is only correct for a direct child. An
+    /// intermediate container would add its own `zPosition` to the player and
+    /// shift it out of the band the depth scheme placed it in.
+    ///
+    /// A restart reuses the existing node rather than building a second one:
+    /// two `PlayerNode`s in the graph is not a cosmetic bug but a duplicated
+    /// actor at the same depth, and the reuse keeps the sliced-texture cache
+    /// and the node identity stable across RUN AGAIN.
+    ///
+    /// Exposed (rather than private) for the same reason as
+    /// `startGroundPlane()`: tests drive the mount directly on a scene built
+    /// without an `SKView`.
+    func startPlayer() {
+        let tilePosition = cameraWorldPosition
+
+        let mounted: PlayerNode
+        if let existing = player {
+            mounted = existing
+        } else {
+            mounted = PlayerNode()
+            player = mounted
+        }
+
+        if mounted.parent !== worldLayer {
+            mounted.removeFromParent()
+            worldLayer.addChild(mounted)
+        }
+
+        mounted.position = IsometricProjection.tileToScreen(tileX: tilePosition.x, tileY: tilePosition.y)
+        mounted.updateDepth(atTilePosition: tilePosition)
+
+        #if DEBUG
+        // The player is the first non-ground world content in the graph, and
+        // its depth comes from a different part of the model than the ground
+        // does (`DepthBanding`'s actor band rather than the ground offset),
+        // so audit the moment it lands.
+        assertSceneInvariants()
+        #endif
+    }
+
+    /// Advances the mounted player's visual state once per frame.
+    ///
+    /// The movement vector is `.zero` until `CYBERPUN-17-7` wires the
+    /// floating thumbstick: `PlayerNode.update(deltaTime:movementVector:)`
+    /// freezes an idle player to walk-cycle frame 0 and keeps its last
+    /// facing, so a stationary player is exactly what this produces today.
+    /// Driving it from here anyway is deliberate -- it means the facing /
+    /// animation state machine runs in a real build rather than only under
+    /// test, and `CYBERPUN-17-7`'s change is to *supply a vector*, not to
+    /// discover that nothing was calling this at all.
+    private func advancePlayer(currentTime: TimeInterval) {
+        // `max(0, ...)` because `currentTime` is the render clock: a scene
+        // presented, backgrounded and re-presented can hand back a smaller
+        // value, and a negative delta would run the walk cycle backwards.
+        let deltaTime = lastFrameTime.map { max(0, currentTime - $0) } ?? 0
+        lastFrameTime = currentTime
+        player?.update(deltaTime: deltaTime, movementVector: .zero)
+    }
+
     /// Drains `groundPlane`'s incremental-mount queue a few chunks at a time
-    /// (`GroundPlaneStreamer.advanceIncrementalMount()`), and — DEBUG builds
-    /// only — advances the scaffolding debug pan.
+    /// (`GroundPlaneStreamer.advanceIncrementalMount()`), advances the
+    /// mounted player's visual state (`advancePlayer(currentTime:)`), and —
+    /// DEBUG builds only — advances the scaffolding debug pan.
     ///
     /// `CYBERPUN-17-4-t4`: the incremental-mount drain runs in Release too,
     /// deliberately. It exists to fix a real stall (entering `.gameplay` used
@@ -250,6 +349,7 @@ final class GameScene: SKScene {
     override func update(_ currentTime: TimeInterval) {
         super.update(currentTime)
         groundPlane?.advanceIncrementalMount()
+        advancePlayer(currentTime: currentTime)
         #if DEBUG
         advanceDebugPanIfNeeded(currentTime: currentTime)
         #endif

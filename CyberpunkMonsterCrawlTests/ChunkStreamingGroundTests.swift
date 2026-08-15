@@ -267,7 +267,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
             )
             XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
             XCTAssertEqual(
-                scene.worldLayer.children.count, boundedNodeCount,
+                groundChildren(of: scene).count, boundedNodeCount,
                 "step \(step): the scene graph grew past the fixed resident window."
             )
         }
@@ -337,7 +337,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
         // deliberately-partial first entry.
         drainIncrementalMount(scene.groundPlane)
         let firstPlane = scene.groundPlane
-        let firstNodes = Set(scene.worldLayer.children.map(ObjectIdentifier.init))
+        let firstNodes = Set(groundChildren(of: scene).map(ObjectIdentifier.init))
         XCTAssertNotNil(firstPlane)
 
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
@@ -348,7 +348,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
             "An unchanged seed is the same city, so the run restart must reuse the streamer."
         )
         XCTAssertEqual(
-            Set(scene.worldLayer.children.map(ObjectIdentifier.init)), firstNodes,
+            Set(groundChildren(of: scene).map(ObjectIdentifier.init)), firstNodes,
             "Restarting the run rebuilt the ground plane's nodes instead of keeping the mounted ones."
         )
     }
@@ -376,10 +376,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
             "A new seed must not keep streaming the previous run's city."
         )
         XCTAssertEqual(
-            scene.worldLayer.children.count, scene.groundPlane?.mountedNodeCount,
+            groundChildren(of: scene).count, scene.groundPlane?.mountedNodeCount,
             "The replaced ground plane left stale nodes behind in worldLayer."
         )
-        XCTAssertEqual(scene.worldLayer.children.count, boundedNodeCount)
+        XCTAssertEqual(groundChildren(of: scene).count, boundedNodeCount)
     }
 
     // MARK: - Incremental first mount does not gap/duplicate while draining (CYBERPUN-17-4-t4)
@@ -417,6 +417,17 @@ final class ChunkStreamingGroundTests: XCTestCase {
             "The drain must eventually reach the full resident window within a bounded number of ticks."
         )
         XCTAssertEqual(streamer.mountedChunks, Set(streamer.streaming.residentChunks.keys))
+    }
+
+    /// The **ground** nodes mounted in `scene.worldLayer`.
+    ///
+    /// `GameScene` also mounts the player there (`CYBERPUN-17-6-t2`), and
+    /// every count in this file is a claim about the streamed resident
+    /// *window* -- comparing raw `children.count` against `boundedNodeCount`
+    /// would silently start measuring "ground plus whatever else the scene
+    /// mounts", which is not the property these tests exist to pin.
+    private func groundChildren(of scene: GameScene) -> [SKNode] {
+        scene.worldLayer.children.filter { !($0 is PlayerNode) }
     }
 
     /// The chunk owning `position`, resolved through the same seam rule the

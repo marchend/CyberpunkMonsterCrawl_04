@@ -48,6 +48,22 @@ final class GroundPlaneStreamerTests: XCTestCase {
         XCTAssertEqual(streamer.pendingMountCount, 0, "Drain finished with chunks still queued.", file: file, line: line)
     }
 
+    /// The **ground** nodes mounted in `scene.worldLayer`.
+    ///
+    /// The streamer-only tests above own their own bare `SKNode` layer, so
+    /// there `children.count` *is* the ground. A real `GameScene` also mounts
+    /// the player directly under `worldLayer` (`CYBERPUN-17-6-t2` — directly,
+    /// because `PlayerNode.updateDepth(atTilePosition:)` converts through
+    /// `DepthModel.worldLayerRelativeZ`, which is only correct for a direct
+    /// child), so a raw `children.count` in the scene-level tests would be
+    /// measuring "ground plus whatever else the scene mounts" rather than the
+    /// ground plane these assertions exist to pin. The player's own mount
+    /// contract — including "exactly one `PlayerNode`, never a second one on
+    /// RUN AGAIN" — belongs to `PlayerMountTests`.
+    private func groundChildren(of scene: GameScene) -> [SKNode] {
+        scene.worldLayer.children.filter { !($0 is PlayerNode) }
+    }
+
     // MARK: - Mounting
 
     func test_updateCamera_mountsOneNodePerTileOfEveryResidentChunk() {
@@ -201,8 +217,12 @@ final class GroundPlaneStreamerTests: XCTestCase {
 
         let plane = scene.groundPlane
         XCTAssertNotNil(plane, "Entering .gameplay must start the ground plane.")
-        XCTAssertEqual(scene.worldLayer.children.count, plane?.mountedNodeCount)
-        XCTAssertGreaterThan(scene.worldLayer.children.count, 0)
+        XCTAssertEqual(
+            groundChildren(of: scene).count, plane?.mountedNodeCount,
+            "Every ground node the streamer reports must be in worldLayer, and worldLayer must hold no "
+                + "stale ground beyond them."
+        )
+        XCTAssertGreaterThan(groundChildren(of: scene).count, 0)
     }
 
     /// The mounted ground must not break either structural invariant the
@@ -228,7 +248,7 @@ final class GroundPlaneStreamerTests: XCTestCase {
         // ring synchronously; drain so `firstCount` is the steady state RUN
         // AGAIN is being compared against, not a mid-mount snapshot.
         drainIncrementalMount(scene.groundPlane)
-        let firstCount = scene.worldLayer.children.count
+        let firstCount = groundChildren(of: scene).count
 
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
@@ -237,8 +257,11 @@ final class GroundPlaneStreamerTests: XCTestCase {
         // the transition itself.
         drainIncrementalMount(scene.groundPlane)
 
-        XCTAssertEqual(scene.worldLayer.children.count, firstCount)
-        XCTAssertEqual(scene.worldLayer.children.count, scene.groundPlane?.mountedNodeCount)
+        XCTAssertEqual(
+            groundChildren(of: scene).count, firstCount,
+            "RUN AGAIN stacked a second ground plane on top of the first."
+        )
+        XCTAssertEqual(groundChildren(of: scene).count, scene.groundPlane?.mountedNodeCount)
     }
 
     // MARK: - Incremental mount (CYBERPUN-17-4-t4)

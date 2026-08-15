@@ -454,6 +454,43 @@ docs/bootstrap.md                          original spec (source of truth)
   `(block, seed)`.
   Still nothing renders any of this; a later story mounts the records as
   sprites
+- Player sprite: row/mirror table, walk-cycle timing and node assembly
+  (implemented — `Sources/Actors/Direction8.swift`,
+  `PlayerAnimator.swift`, `PlayerSpriteSheet.swift`, `PlayerNode.swift`,
+  `ActorShadowNode.swift`, `Sources/World/DepthBanding.swift`;
+  `Direction8Tests`, `PlayerAnimatorTests`, `PlayerSpriteSheetTests`,
+  `PlayerNodeTests`, `PlayerDepthTests` — `CYBERPUN-17-6-t1`/`-t2`).
+  `Direction8` bins a movement vector into 8 sectors clockwise from
+  screen-south, with a screen-space (`from(vector:)`, y-down pixel
+  convention) and a SpriteKit-space (`from(spriteKitVector:)`, y-up scene
+  convention) overload so no gameplay call site has to remember to negate
+  `dy` itself; it carries no player-specific knowledge, so a future raccoon
+  sheet (`CYBERPUN-17-8`) bins against the same unmodified type.
+  `PlayerSpriteSheet` owns the player's `Direction8 -> (row, mirrored)`
+  table (5 directly-authored facings, 3 mirrored from the row sharing their
+  vertical component) plus the anchor point (`(18, 40)px`, bottom-centre)
+  and the `14x10` hitbox, all measured/pinned against the shipped
+  `sprite_player_walk` pixels rather than assumed. `PlayerAnimator` is a
+  pure frame-timing state machine (8 fps, 4-frame walk cycle, frame 0 while
+  idle). `PlayerNode` (`SKNode`) composes all three into a live node: a
+  `.nearest`-filtered, cached-per-cell `SKSpriteNode` body plus a distinct
+  `ActorShadowNode` (a reusable 2:1-ellipse shadow, z-ordered beneath the
+  body, meant for reuse by future actors) — `update(deltaTime:
+  movementVector:)` resolves facing/frame/mirror from a SpriteKit-space
+  vector but never touches `position` itself (movement lands with
+  `CYBERPUN-17-7`). `DepthBanding` extends `DepthModel`'s actor-offset slot
+  (`6.5...9.9`) with the player-max tie-break: the player is always
+  assigned the range's exact ceiling (`playerActorOffset`), and any other
+  actor is expected to draw from `nonPlayerActorOffsetRange` (the same
+  range with that ceiling excluded), so the player's zPosition is
+  guaranteed the band's maximum by construction rather than by a per-frame
+  comparison. `PlayerNode.updateDepth(atTilePosition:)` is the production
+  wiring: `DepthBanding.playerZPosition(at:)` converted via
+  `DepthModel.worldLayerRelativeZ(forAbsoluteZ:)` for a node parented
+  directly under `worldLayer`, the same convention `GroundTileRenderer`
+  uses. Nothing yet mounts `PlayerNode` into `GameScene` or moves it —
+  that lands with `CYBERPUN-17-7` (thumbstick, movement, building
+  collision, camera)
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid (deferred — future PR; `TileKind.isWalkable` is the data
   this will consume)
