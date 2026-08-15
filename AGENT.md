@@ -45,7 +45,7 @@ CyberpunkMonsterCrawl/
   AppDelegate.swift, SceneDelegate.swift   UIKit scene wiring
   GameViewController.swift                 composition root: hosts the SKView, builds GameScene, registers all four screens, presents it
   GameStateMachine.swift                   menu/gameplay/death/highScores GKStateMachine wrapper
-  GameScene.swift                          three persistent layers (worldLayer/effectsLayer/uiLayer), state-driven screen registry, UI-first touch dispatch
+  GameScene.swift                          three persistent layers (worldLayer/effectsLayer/uiLayer), state-driven screen registry, UI-first touch dispatch; mounts the streamed ground plane + PlayerNode on entry to .gameplay, snapping the player's screen position via PixelCrispness.snappedPosition on every mount/reposition and driving it each frame via the SCAFFOLDING(CYBERPUN-17-7) PlayerScaffoldingDriver demo cycle until real input lands
   Layers/LayerConstants.swift              named zPosition bands enforcing worldLayer < effectsLayer < uiLayer
   Layers/ScreenNode.swift                  ScreenNode protocol + PlaceholderScreenNode test double
   Layers/TouchResponder.swift              touch-consumer protocol + the "scene is the sole dispatcher" contract
@@ -63,13 +63,19 @@ CyberpunkMonsterCrawl/
     Atlas/                                 10 atlas-sheet imagesets (1x only)
     Buildings/                             12 building-sprite imagesets, building_00...building_11 (1x only)
     AppIcon.appiconset/                    stub AppIcon slot (art not yet imported)
+  Sources/Actors/Direction8.swift          8-way facing bin from a movement vector, screen-space (from(vector:)) and SpriteKit-space (from(spriteKitVector:)) overloads, no player-specific coupling so a future raccoon sheet (CYBERPUN-17-8) bins against the same unmodified type
+  Sources/Actors/PlayerAnimator.swift      pure walk-cycle frame-timing state machine (8fps, 4-frame cycle, frame 0 while idle)
+  Sources/Actors/PlayerSpriteSheet.swift   measured Direction8 -> (row, mirrored) table, anchor point and 14x10 hitbox for sprite_player_walk
+  Sources/Actors/PlayerNode.swift          SKNode assembling the cached-per-cell walk-cycle body + ActorShadowNode + facing/frame state machine; update(deltaTime:movementVector:) resolves facing/frame/mirror but never touches position itself
+  Sources/Actors/ActorShadowNode.swift     reusable 2:1-ellipse actor shadow, z-ordered beneath the body, actor-agnostic (no PlayerSpriteSheet/Direction8 coupling) so future actors (raccoon swarm, CYBERPUN-17-8) reuse it unmodified
+  Sources/Actors/PlayerScaffoldingDriver.swift  SCAFFOLDING(CYBERPUN-17-7): deltaTime-driven generator cycling the mounted player through all 8 Direction8 vectors plus a trailing idle beat (S->SE->E->NE->N->NW->W->SW->idle), calling only PlayerNode's public update(deltaTime:movementVector:) API so it is trivially removable once the real thumbstick lands
   Sources/Assets/TextureLoading.swift      centralized nearest-filtering texture factory
   Sources/Assets/SpriteSheet.swift         measured-geometry contract: pixel/cell size, texture(col:row:)
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
   Sources/Assets/AtlasCellIndex.swift      one owning cell-index list per sheet family
   Sources/Assets/BuildingSprite.swift      manifest of the 12 building ids: measured size, footprint, height class
   Sources/Rendering/GroundTileCatalog.swift  GroundTileKind (the ground plane's own 6-case vocabulary: 2 asphalt orientations, junction stop-line, kerb/sidewalk, lot, building-footprint overhang) mapped onto AtlasGroundDiamond — a semantic relabeling, not a re-measurement; AtlasSheet.swift stays the one source of truth for the pixel rects
-  Sources/Rendering/PixelCrispness.swift   PixelCrispness.apply(to:): the shared SKSpriteNode finalizer — .nearest filtering/no mipmaps, whole-integer xScale/yScale, position snapped to the nearest whole point — every future sprite consumer (buildings, actors, bullets, ...) goes through this, not just ground tiles
+  Sources/Rendering/PixelCrispness.swift   PixelCrispness.apply(to:): the shared SKSpriteNode finalizer — .nearest filtering/no mipmaps, whole-integer xScale/yScale, position snapped to the nearest whole point — every future sprite consumer (buildings, actors, bullets, ...) goes through this, not just ground tiles. snappedPosition(for:scale:) rounds a position to the nearest whole *device pixel* at an explicit scale (for a position re-derived through a moving camera), and isIntegerScale(_:) is the standalone whole-integer-scale predicate, both added in CYBERPUN-17-6-t3 and simulated at @2x/@3x in PixelCrispnessTests without a live UIScreen
   Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule floor(coord + 0.5) with both a screen-space and a tile-space overload so no call site re-derives it; Double math with a CGFloat cast only at the boundary
   Sources/World/DepthModel.swift           single source of truth for painter's-algorithm zPosition: band(forTile:) = -(tileX+tileY)*10, groundZPosition = band - 5000, buildingContentRange (<+3) / actorOffsetRange (6.5-9.9) in-band slots, band(forActorAt:) rounds a fractional TilePoint to its owning tile (discontinuous by design) via IsometricProjection.tile(containing:)
   Sources/World/GroundTileRenderer.swift   maps a TileKind + TileCoordinate to a pixel-crisp SKSpriteNode: GroundTileCatalog for the crop rect (re-deriving .asphalt's corridor orientation, north-south vs east-west, from the tile coordinate's lattice-band position — TileKind alone doesn't carry it), IsometricProjection for screen position, DepthModel.groundZPosition + worldLayerRelativeZ for zPosition, PixelCrispness.apply for the finishing pass. Every produced node is meant as a direct child of GameScene.worldLayer
@@ -97,6 +103,14 @@ CyberpunkMonsterCrawlTests/
   AtlasGroundDiamondTests.swift            derives tileset_ground's 6 seams from pixel alpha (5x96+112)
   BuildingCatalogTests.swift               building catalog existence + distinctness gate (12 buildings)
   BuildingSpriteTests.swift                per-building table contract: measured size, footprint, height class
+  Direction8Tests.swift                    screen-space (from(vector:)) sector-binning table, all 8 cases plus zero-vector (nil)
+  PlayerAnimatorTests.swift                walk-cycle frame-timing: idle freezes to frame 0, 8fps progression, exhaustive frame table
+  PlayerSpriteSheetTests.swift             measured Direction8 -> (row, mirrored) table exhaustive over every case, anchor point + hitbox contract
+  PlayerNodeTests.swift                    facing/mirror/texture per Direction8 case (SpriteKit-space vectors), idle-freezes-at-last-facing, walk-cycle timing, hitbox geometry, shadow z-ordering, pixel-crispness at construction
+  PlayerDepthTests.swift                   DepthBanding's player-max tie-break, band+offset arithmetic, rounded-tile sampling, supported-depth-range guard, and PlayerNode.updateDepth wiring
+  PlayerMountTests.swift                   GameScene mounts a real PlayerNode (+ ActorShadowNode) as a direct child of worldLayer on entry to .gameplay, placed at the camera's tile with DepthBanding's zPosition, reused (not duplicated) across RUN AGAIN, and driven once per frame by GameScene.update(_:)
+  PixelCrispnessTests.swift                isIntegerScale(_:) true/false table incl. simulated @2x/@3x device scales; snappedPosition(for:scale:) lands on a whole device pixel at simulated @2x/@3x, is idempotent, is a no-op for a non-positive scale, and stays pixel-aligned across a sequence of simulated camera moves
+  PlayerScaffoldingDriverTests.swift       PlayerScaffoldingDriver starts idle, cycles S->SE->E->NE->N->NW->W->SW->idle in order (and repeats), reaches every Direction8 case even advancing in sub-step increments, handles a delta crossing several step boundaries in one call, and touches nothing but a bare PlayerNode's public update API
   AtlasContractConventionTests.swift       scans the app target for raw texture-crop rects outside the contract
   AtlasCatalogNoExtraneousAssetsTests.swift whole-catalog scan: no stray @2x/@3x, no tileset_structure/preview art
   DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
@@ -488,9 +502,24 @@ docs/bootstrap.md                          original spec (source of truth)
   wiring: `DepthBanding.playerZPosition(at:)` converted via
   `DepthModel.worldLayerRelativeZ(forAbsoluteZ:)` for a node parented
   directly under `worldLayer`, the same convention `GroundTileRenderer`
-  uses. Nothing yet mounts `PlayerNode` into `GameScene` or moves it —
-  that lands with `CYBERPUN-17-7` (thumbstick, movement, building
-  collision, camera)
+  uses. `GameScene.startPlayer()` (`CYBERPUN-17-6-t2`) is the production
+  mount: entry to `.gameplay` parents a real `PlayerNode` directly under
+  `worldLayer` at the camera's tile, reusing (not duplicating) it across a
+  RUN AGAIN, and `GameScene.update(_:)` drives its per-frame state every
+  frame. The player's screen position is re-derived from tile space on
+  every mount/reposition and snapped via
+  `PixelCrispness.snappedPosition(for:scale:)` to the running device's
+  actual pixel grid (`CYBERPUN-17-6-t3`; falls back to a whole-*point* snap
+  for a headless, view-less scene). Movement itself is still
+  `CYBERPUN-17-7`'s (the floating thumbstick, building collision, camera) —
+  until then, `PlayerScaffoldingDriver`
+  (`Sources/Actors/PlayerScaffoldingDriver.swift`, tagged
+  `SCAFFOLDING(CYBERPUN-17-7)`) drives a deterministic S/SE/E/NE/N/NW/W/SW
+  demo cycle (plus a trailing idle beat) through `PlayerNode`'s public
+  `update(deltaTime:movementVector:)` API instead, so the mounted player is
+  visibly animating ahead of real input rather than standing frozen on
+  frame 0. `CYBERPUN-17-7` deletes that driver (and its two call sites in
+  `GameScene`) once the real stick vector replaces it
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid (deferred — future PR; `TileKind.isWalkable` is the data
   this will consume)
