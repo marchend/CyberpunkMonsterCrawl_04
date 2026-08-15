@@ -20,8 +20,12 @@ import SpriteKit
 /// visual state only. There is no physics body and no movement of this
 /// node's own `position` -- `update(deltaTime:movementVector:)` only reads
 /// the vector to resolve facing/animation, it never applies it. The scene
-/// therefore passes `.zero` today and the mounted player stands idle on
-/// frame 0. Movement, the floating thumbstick and camera-follow land with
+/// therefore passes `.zero` in a shipped build today and the mounted player
+/// stands idle on frame 0; a DEBUG build that opts into
+/// `GameScene.debugPlayerDemoEnabled` substitutes a scripted
+/// `SCAFFOLDING(CYBERPUN-17-7)` demo vector so the facing/animation state
+/// machine can be watched running, which still moves nothing but the
+/// texture. Movement, the floating thumbstick and camera-follow land with
 /// `CYBERPUN-17-7`, which replaces that `.zero` with the resolved input
 /// vector and separately updates `position` (and this node's depth as the
 /// player crosses tiles).

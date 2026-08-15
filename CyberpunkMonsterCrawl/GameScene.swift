@@ -103,20 +103,68 @@ final class GameScene: SKScene {
     /// resolved through `DepthBanding`, so the anchor/shadow/depth
     /// integration is observable on a device instead of in unit tests only.
     ///
-    /// What is *not* here yet is movement: `advancePlayer(currentTime:)`
+    /// What is *not* here yet is real movement: `advancePlayer(currentTime:)`
     /// drives `PlayerNode.update(deltaTime:movementVector:)` every frame with
-    /// a `.zero` vector, so the player stands idle on frame 0 facing south.
-    /// `CYBERPUN-17-7` ("wire the floating thumbstick, player movement,
-    /// building collision and camera") owns replacing that `.zero` with the
-    /// resolved stick vector and moving `position`/the camera with it -- the
-    /// story's "walking any direction shows the matching facing" gate needs
-    /// the thumbstick that ticket brings.
+    /// a `.zero` vector, so a shipped build shows the player standing idle on
+    /// frame 0 facing south. A DEBUG build can opt into
+    /// `debugPlayerDemoEnabled` to have `playerScaffoldingDriver` supply a
+    /// scripted demo vector instead (see that property's own doc comment) --
+    /// that is a developer aid, never shipped behaviour, and it never touches
+    /// this node's `position` either. `CYBERPUN-17-7` ("wire the floating
+    /// thumbstick, player movement, building collision and camera") owns
+    /// replacing that vector source with the resolved stick vector and moving
+    /// `position`/the camera with it -- the story's "walking any direction
+    /// shows the matching facing" gate needs the thumbstick that ticket
+    /// brings.
     private(set) var player: PlayerNode?
 
     /// The `currentTime` of the previous `update(_:)`, used to derive the
     /// per-frame delta handed to `player`. `nil` until the first frame runs,
     /// where the delta is `0` rather than an invented value.
     private var lastFrameTime: TimeInterval?
+
+    // MARK: - SCAFFOLDING(CYBERPUN-17-7): player movement demo driver
+    //
+    // There is no floating thumbstick yet -- that lands with CYBERPUN-17-7
+    // ("Wire the floating thumbstick, player movement, building collision
+    // and camera") -- so a running build shows the mounted player standing
+    // frozen on frame 0 facing south for an entire `.gameplay` episode,
+    // which is hard to tell apart from a player that was never wired up at
+    // all. `PlayerScaffoldingDriver` supplies a scripted vector cycling
+    // through all 8 facings (plus a trailing idle beat) so the
+    // anchor/shadow/depth/animation integration can be *visibly*
+    // demonstrated ahead of real input.
+    //
+    // The whole block is `#if DEBUG` and additionally off by default behind
+    // `debugPlayerDemoEnabled`, exactly like the debug camera pan below: a
+    // shipped Release build physically cannot auto-walk the player and
+    // carries none of this state, because an input-less scripted lap in a
+    // shipped build is a worse "looks broken" than the frozen frame it
+    // diagnoses. Nothing in the test suite asserts this driver's behaviour
+    // either (`PlayerNodeTests`/`PlayerAnimatorTests`/`Direction8Tests` own
+    // facing, idle-at-frame-0 and walk-cycle timing against the permanent
+    // types), so `CYBERPUN-17-7` can delete it without deleting a green
+    // test.
+    //
+    // `CYBERPUN-17-7` should delete this property, the flag, `startPlayer()`'s
+    // one construction line for it and the `#if DEBUG` vector block in
+    // `advancePlayer(currentTime:)` -- and nothing else. The production
+    // `player?.update(deltaTime:movementVector:)` call there is deliberately
+    // *outside* that block, so removing the scaffolding leaves the per-frame
+    // call site standing.
+
+    #if DEBUG
+    /// Turns the scaffolding player demo cycle on or off. Off by default, so
+    /// normal gameplay (and every test in the suite) sees the same `.zero`
+    /// vector production does; only a manual on-device check that explicitly
+    /// opts in sees the player walk on its own.
+    var debugPlayerDemoEnabled = false
+
+    /// The scripted demo vector source, built alongside the player it is
+    /// meant to demonstrate. Only ever read when `debugPlayerDemoEnabled` is
+    /// set.
+    private var playerScaffoldingDriver: PlayerScaffoldingDriver?
+    #endif
 
     // MARK: - SCAFFOLDING(CYBERPUN-17-7): debug camera pan
     //
@@ -293,6 +341,13 @@ final class GameScene: SKScene {
         } else {
             mounted = PlayerNode()
             player = mounted
+            #if DEBUG
+            // SCAFFOLDING(CYBERPUN-17-7): see the property's own doc
+            // comment. Built once, alongside the player it demonstrates, and
+            // reused across a RUN AGAIN the same way `mounted` itself is.
+            // DEBUG-only, and inert until `debugPlayerDemoEnabled` is set.
+            playerScaffoldingDriver = PlayerScaffoldingDriver()
+            #endif
         }
 
         if mounted.parent !== worldLayer {
@@ -300,7 +355,29 @@ final class GameScene: SKScene {
             worldLayer.addChild(mounted)
         }
 
-        mounted.position = IsometricProjection.tileToScreen(tileX: tilePosition.x, tileY: tilePosition.y)
+        // Snapped via `PixelCrispness` (not assigned raw) because this
+        // position is derived *through the camera's tile* -- on entry to
+        // `.gameplay`, which is the only moment this method runs (mount, and
+        // every RUN AGAIN reposition) -- and
+        // `IsometricProjection.tileToScreen`'s floating-point arithmetic can
+        // drift a fraction of a device pixel off a whole point even when the
+        // input tile position looks clean. The world's whole rendering rule
+        // is hard, un-resampled pixel edges (`docs/bootstrap.md` section 1).
+        // `deviceScale` falls back to `1` for a headless (view-less) scene,
+        // which whole-point-snaps instead -- still correct, just coarser
+        // than a real device's `@2x`/`@3x` grid.
+        //
+        // Known limit (CYBERPUN-17-7): this snaps the *actor's* mount
+        // position only. `cameraNode.position` is not snapped anywhere --
+        // the scaffolding debug pan sets it fractionally today, and
+        // camera-follow will set it every frame -- so once the camera moves
+        // off a whole device pixel the player renders off the grid again
+        // regardless of this snap. The durable fix is to snap the camera
+        // (every world-space child inherits it), which belongs with the
+        // ticket that makes the camera move; this snap stays correct and
+        // sufficient for the static mount it guards.
+        let rawPosition = IsometricProjection.tileToScreen(tileX: tilePosition.x, tileY: tilePosition.y)
+        mounted.position = PixelCrispness.snappedPosition(for: rawPosition, scale: deviceScale)
         mounted.updateDepth(atTilePosition: tilePosition)
 
         #if DEBUG
@@ -309,7 +386,38 @@ final class GameScene: SKScene {
         // does (`DepthBanding`'s actor band rather than the ground offset),
         // so audit the moment it lands.
         assertSceneInvariants()
+
+        // Pixel-crispness invariant (CYBERPUN-17-6-t3): the body sprite must
+        // stay nearest-filtered, mipmap-free and whole-integer-scaled at the
+        // moment the player is spawned -- `PixelCrispness.apply(to:)`
+        // (called once, in `PlayerNode.init`) is what guarantees this, and
+        // this assert exists so a future change to that finalization pass
+        // trips here rather than only being caught by `PlayerNodeTests`.
+        assert(
+            mounted.body.texture?.filteringMode == .nearest,
+            "The player's body must stay nearest-filtered at spawn time."
+        )
+        assert(
+            mounted.body.texture?.usesMipmaps == false,
+            "The player's body must never generate mipmaps."
+        )
+        assert(
+            PixelCrispness.isIntegerScale(mounted.body.xScale)
+                && PixelCrispness.isIntegerScale(mounted.body.yScale),
+            "The player's body scale must stay whole-integer at spawn time, got "
+                + "(\(mounted.body.xScale), \(mounted.body.yScale))."
+        )
         #endif
+    }
+
+    /// The device scale (`@1x`/`@2x`/`@3x`) content is being rendered at --
+    /// `view.contentScaleFactor` once the scene is presented, or `1` for a
+    /// headless (view-less) scene, as unit tests construct. Read here rather
+    /// than assumed at each call site, so `PixelCrispness.snappedPosition(
+    /// for:scale:)` always snaps to the grid the running device actually
+    /// composites at.
+    private var deviceScale: CGFloat {
+        view?.contentScaleFactor ?? 1
     }
 
     /// Advances the mounted player's visual state once per frame.
@@ -317,18 +425,36 @@ final class GameScene: SKScene {
     /// The movement vector is `.zero` until `CYBERPUN-17-7` wires the
     /// floating thumbstick: `PlayerNode.update(deltaTime:movementVector:)`
     /// freezes an idle player to walk-cycle frame 0 and keeps its last
-    /// facing, so a stationary player is exactly what this produces today.
-    /// Driving it from here anyway is deliberate -- it means the facing /
-    /// animation state machine runs in a real build rather than only under
-    /// test, and `CYBERPUN-17-7`'s change is to *supply a vector*, not to
-    /// discover that nothing was calling this at all.
+    /// facing, so a stationary player is exactly what a shipped build
+    /// produces today. Driving it from here anyway is deliberate -- it means
+    /// the facing / animation state machine runs in a real build rather than
+    /// only under test, and `CYBERPUN-17-7`'s change is to *supply a vector*
+    /// (the resolved stick reading), not to discover that nothing was
+    /// calling this at all.
+    ///
+    /// SCAFFOLDING(CYBERPUN-17-7): a DEBUG build that has opted into
+    /// `debugPlayerDemoEnabled` substitutes a scripted demo vector for that
+    /// `.zero`. The substitution is the only scaffolded part -- the
+    /// `player?.update(...)` call below sits outside the `#if DEBUG` block
+    /// on purpose, so deleting the scaffolding cannot delete the production
+    /// call site with it.
     private func advancePlayer(currentTime: TimeInterval) {
         // `max(0, ...)` because `currentTime` is the render clock: a scene
         // presented, backgrounded and re-presented can hand back a smaller
         // value, and a negative delta would run the walk cycle backwards.
         let deltaTime = lastFrameTime.map { max(0, currentTime - $0) } ?? 0
         lastFrameTime = currentTime
-        player?.update(deltaTime: deltaTime, movementVector: .zero)
+
+        var movementVector = CGVector.zero
+        #if DEBUG
+        // SCAFFOLDING(CYBERPUN-17-7): delete this block (and nothing else in
+        // this method) once the thumbstick supplies the vector for real.
+        if debugPlayerDemoEnabled {
+            movementVector = playerScaffoldingDriver?.currentVector(advancedBy: deltaTime) ?? .zero
+        }
+        #endif
+
+        player?.update(deltaTime: deltaTime, movementVector: movementVector)
     }
 
     /// Drains `groundPlane`'s incremental-mount queue a few chunks at a time
