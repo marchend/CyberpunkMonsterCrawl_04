@@ -23,6 +23,33 @@ final class GroundPlaneStreamerTests: XCTestCase {
         GroundPlaneStreamer(seed: seed, worldLayer: worldLayer)
     }
 
+    /// The mounted **ground** nodes among `worldLayer`'s children.
+    ///
+    /// Since CYBERPUN-17-5-t2 the same layer also carries one building node
+    /// per `Chunk.buildingPlacements` record, so every "one node per resident
+    /// tile" assertion has to name which population it means rather than
+    /// taking every child. Filtered by `GroundPlaneStreamer.nodeName`, the
+    /// name the mount stamps for exactly this purpose.
+    private func groundSprites(in worldLayer: SKNode) -> [SKSpriteNode] {
+        worldLayer.children
+            .compactMap { $0 as? SKSpriteNode }
+            .filter { $0.name == GroundPlaneStreamer.nodeName }
+    }
+
+    /// The mounted building nodes among `worldLayer`'s children.
+    private func buildingSprites(in worldLayer: SKNode) -> [SKSpriteNode] {
+        worldLayer.children
+            .compactMap { $0 as? SKSpriteNode }
+            .filter { $0.name == TileFieldRenderer.buildingNodeName }
+    }
+
+    /// Every building placement across the currently resident chunks \u2014 the
+    /// generator-side ground truth the mount is checked against, derived from
+    /// `ChunkStreamingManager` rather than from anything the mount computes.
+    private func residentPlacements(of streamer: GroundPlaneStreamer) -> [BuildingPlacementRecord] {
+        streamer.streaming.residentChunks.values.flatMap(\.buildingPlacements)
+    }
+
     /// Brings `streamer` to the fully-mounted steady state the way the
     /// shipped code does: repeated `advanceIncrementalMount()` ticks, which
     /// is exactly what `GameScene.update(_:)` drives once per frame.
@@ -68,7 +95,13 @@ final class GroundPlaneStreamerTests: XCTestCase {
             "Every tile of every resident chunk must get a ground node — that is the story's "
                 + "\"render every generated ground cell\" AC."
         )
-        XCTAssertEqual(worldLayer.children.count, streamer.mountedNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, streamer.mountedNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports \u2014 "
+                + "any extra child is an orphan the eviction bookkeeping lost track of."
+        )
     }
 
     /// The depth scheme only works for a **direct** child of `worldLayer`
@@ -81,8 +114,12 @@ final class GroundPlaneStreamerTests: XCTestCase {
         streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
         drainIncrementalMount(streamer) // CYBERPUN-17-4-t4: assert the fully-mounted steady state.
 
-        let sprites = worldLayer.children.compactMap { $0 as? SKSpriteNode }
-        XCTAssertEqual(sprites.count, worldLayer.children.count, "Every ground child must be a sprite node.")
+        XCTAssertEqual(
+            worldLayer.children.compactMap { $0 as? SKSpriteNode }.count,
+            worldLayer.children.count,
+            "Every world child must be a sprite node."
+        )
+        let sprites = groundSprites(in: worldLayer)
         XCTAssertFalse(sprites.isEmpty)
 
         for sprite in sprites {
@@ -113,7 +150,7 @@ final class GroundPlaneStreamerTests: XCTestCase {
         drainIncrementalMount(streamer)
 
         let nodesByPosition = Dictionary(
-            worldLayer.children.compactMap { $0 as? SKSpriteNode }.map { ($0.position, $0) },
+            groundSprites(in: worldLayer).map { ($0.position, $0) },
             uniquingKeysWith: { first, _ in first }
         )
 
@@ -153,7 +190,15 @@ final class GroundPlaneStreamerTests: XCTestCase {
                 streamer.mountedNodeCount, bound,
                 "Mounted node count must track the fixed resident window, not grow with distance roamed."
             )
-            XCTAssertEqual(worldLayer.children.count, bound, "Evicted chunks must leave no orphan nodes behind.")
+            XCTAssertEqual(
+                groundSprites(in: worldLayer).count, bound,
+                "Evicted chunks must leave no orphan nodes behind."
+            )
+            XCTAssertEqual(
+                worldLayer.children.count,
+                streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+                "Building nodes must stream out with their chunk too, not accumulate as the camera roams."
+            )
         }
     }
 
