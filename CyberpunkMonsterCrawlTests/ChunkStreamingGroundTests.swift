@@ -376,10 +376,10 @@ final class ChunkStreamingGroundTests: XCTestCase {
             "A new seed must not keep streaming the previous run's city."
         )
         XCTAssertEqual(
-            scene.worldLayer.children.count, scene.groundPlane?.mountedNodeCount,
+            groundChildren(of: scene).count, scene.groundPlane?.mountedNodeCount,
             "The replaced ground plane left stale nodes behind in worldLayer."
         )
-        XCTAssertEqual(scene.worldLayer.children.count, boundedNodeCount)
+        XCTAssertEqual(groundChildren(of: scene).count, boundedNodeCount)
     }
 
     // MARK: - Incremental first mount does not gap/duplicate while draining (CYBERPUN-17-4-t4)
