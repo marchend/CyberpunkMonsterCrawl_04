@@ -69,13 +69,20 @@ enum PixelCrispness {
     /// device pixels), so for a node whose position is only ever assigned
     /// from a fresh, un-drifted computation the two are equivalent. This
     /// entry point exists for the case `apply(to:)` does not cover: a
-    /// position **derived through a moving camera** (`GameScene
+    /// position **derived through the camera's own tile** (`GameScene
     /// .startPlayer()`'s screen position, re-derived from tile space on
-    /// every camera update), where repeated floating-point arithmetic can
-    /// drift the result a fraction of a device pixel off a whole point even
-    /// though it is still, numerically, "close enough" to look whole. Taking
-    /// `scale` explicitly (rather than assuming it) also means this stays
-    /// correct if a future consumer ever runs at a non-integer scale.
+    /// every entry to `.gameplay`), where the projection's floating-point
+    /// arithmetic can drift the result a fraction of a device pixel off a
+    /// whole point even though it is still, numerically, "close enough" to
+    /// look whole. Taking `scale` explicitly (rather than assuming it) also
+    /// means this stays correct if a future consumer ever runs at a
+    /// non-integer scale.
+    ///
+    /// Note this snaps a *node's* position, not the camera's: a camera
+    /// parked on a fractional point re-introduces the sub-pixel offset for
+    /// every world-space child, whatever their own positions are. Snapping
+    /// `GameScene.cameraNode.position` belongs with `CYBERPUN-17-7`, which
+    /// is the ticket that first makes the camera move under gameplay.
     ///
     /// A non-positive `scale` has no meaningful pixel grid to snap to, so
     /// `position` is returned unchanged rather than dividing by zero.

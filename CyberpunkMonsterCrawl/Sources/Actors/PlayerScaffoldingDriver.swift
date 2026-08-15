@@ -1,35 +1,43 @@
 import CoreGraphics
 import Foundation
 
-/// SCAFFOLDING(CYBERPUN-17-7): a temporary, deterministic movement
-/// generator that cycles the mounted player through all 8 `Direction8`
-/// facings (plus a trailing idle beat) so `PlayerNode`'s facing/animation
-/// state machine is demonstrably exercised in a running build -- ahead of
-/// the real floating thumbstick, which is that story's own deliverable.
+#if DEBUG
+/// SCAFFOLDING(CYBERPUN-17-7): a temporary, deterministic **movement-vector
+/// generator** that cycles through all 8 `Direction8` facings (plus a
+/// trailing idle beat) so `PlayerNode`'s facing/animation state machine can
+/// be demonstrably exercised in a running DEBUG build -- ahead of the real
+/// floating thumbstick, which is that story's own deliverable.
+///
+/// **DEBUG-only, and opt-in.** The whole type is compiled out of a Release
+/// build (`#if DEBUG`), and `GameScene.debugPlayerDemoEnabled` is `false`
+/// by default, exactly like the sibling `SCAFFOLDING(CYBERPUN-17-7)` debug
+/// camera pan in `GameScene`. A shipped build therefore physically cannot
+/// auto-walk the player: a scripted S->SE->E->NE->N->NW->W->SW lap with no
+/// input is a worse "looks broken" than the frozen frame-0 it is meant to
+/// diagnose, so this is a developer aid rather than shipped behaviour.
 ///
 /// **Why this exists at all:** `GameScene.startPlayer()` mounts a real
 /// `PlayerNode` (`CYBERPUN-17-6-t2`), but until `CYBERPUN-17-7` lands there
-/// is no input to move it, so a QA pass or a demo build would otherwise show
-/// a player standing frozen on frame 0 facing south for the entire
-/// `.gameplay` episode -- indistinguishable from a player that never got
-/// wired up at all. This driver is the difference between "looks broken"
-/// and "visibly walking, ahead of real input existing".
+/// is no input to move it, so a manual QA pass would otherwise show a player
+/// standing frozen on frame 0 facing south for the entire `.gameplay`
+/// episode -- indistinguishable from a player that never got wired up at
+/// all. Flipping `debugPlayerDemoEnabled` on a DEBUG build is the difference
+/// between "looks broken" and "visibly walking, ahead of real input".
 ///
 /// **Timer, not a `Timer`:** "timer-based" here means a `deltaTime`
 /// accumulator driven from `GameScene.update(_:)`'s own render-clock delta
 /// (the same clock `advancePlayer(currentTime:)` already derives), not a
 /// Foundation `Timer`/`DispatchSourceTimer` on a wall clock. That keeps this
-/// type synchronous and deterministic under test -- `advance(deltaTime:)`
-/// is a pure step function of its input, with no run-loop or async
-/// scheduling for a test to race against.
+/// type synchronous and deterministic -- `currentVector(advancedBy:)` is a
+/// pure step function of its input, with no run-loop or async scheduling.
 ///
-/// **Zero coupling beyond `PlayerNode`'s public API.** This type holds a
-/// `PlayerNode` reference and calls nothing but its public
-/// `update(deltaTime:movementVector:)` -- no `GameScene`, no `SKView`, no
-/// world/camera state. That is deliberate: `CYBERPUN-17-7` ("wire the
-/// floating thumbstick, player movement, building collision and camera")
-/// should be able to delete this one file, plus its construction/drive call
-/// sites in `GameScene`, without touching anything else.
+/// **Zero coupling to anything.** This type holds no `PlayerNode`, no
+/// `GameScene`, no `SKView` and no world/camera state: it only answers "what
+/// movement vector is the demo cycle on now?". The scene stays the one
+/// caller of `PlayerNode.update(deltaTime:movementVector:)`, so
+/// `CYBERPUN-17-7` swaps this one expression for the resolved stick reading
+/// and deletes this file -- the production call site survives the deletion
+/// rather than disappearing with it.
 ///
 /// **Cycle order**, per the story: `south -> southeast -> east -> northeast
 /// -> north -> northwest -> west -> southwest -> idle`, then repeats. The
@@ -66,31 +74,28 @@ final class PlayerScaffoldingDriver {
     /// starting position and where a full lap wraps back around to.
     private static let idleIndex = cycle.count - 1
 
-    private let player: PlayerNode
-
-    /// The `cycle` index currently being driven. Exposed for tests that want
-    /// to assert the cycle's exact phase rather than only its visible
-    /// effect on `player`.
+    /// The `cycle` index currently being driven.
     private(set) var stepIndex = idleIndex
 
     /// Seconds elapsed since `stepIndex` last advanced.
     private var elapsedInCurrentStep: TimeInterval = 0
 
-    init(player: PlayerNode) {
-        self.player = player
-    }
-
-    /// Advances the cycle by `deltaTime` and drives `player`'s public
-    /// `update` API with whichever cycle entry is current *after* that
-    /// advance -- so a `deltaTime` that crosses one or more step boundaries
-    /// (a long frame, or a caller driving several seconds at once in a
-    /// test) still lands on the correct entry rather than the one it left.
-    func advance(deltaTime: TimeInterval) {
+    /// Advances the cycle by `deltaTime` and returns whichever cycle entry
+    /// is current *after* that advance -- so a `deltaTime` that crosses one
+    /// or more step boundaries (a long frame, or a caller driving several
+    /// seconds at once) still lands on the correct entry rather than the one
+    /// it left.
+    ///
+    /// Returning the vector (rather than driving a `PlayerNode` with it) is
+    /// what keeps the scene as the caller of
+    /// `PlayerNode.update(deltaTime:movementVector:)`.
+    func currentVector(advancedBy deltaTime: TimeInterval) -> CGVector {
         elapsedInCurrentStep += deltaTime
         while elapsedInCurrentStep >= Self.secondsPerStep {
             elapsedInCurrentStep -= Self.secondsPerStep
             stepIndex = (stepIndex + 1) % Self.cycle.count
         }
-        player.update(deltaTime: deltaTime, movementVector: Self.cycle[stepIndex])
+        return Self.cycle[stepIndex]
     }
 }
+#endif
