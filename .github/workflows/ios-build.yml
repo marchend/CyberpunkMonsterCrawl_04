@@ -1,0 +1,345 @@
+name: iOS — Build & Test
+
+# Materialises the .xcodeproj from the XcodeGen project.yml then runs
+# xcodebuild build + xcodebuild test against an iOS simulator. This is the
+# verification gate that catches the bug class where an agent writes Swift
+# files to disk but never registers them in the Xcode project — with
+# project.yml + directory globs, the new files are picked up automatically
+# the moment xcodegen regenerates the .xcodeproj here.
+#
+# Trigger policy mirrors ci.yml: PRs into the feature target (develop)
+# and pushes to develop. Tighter promotions are gated by the
+# security workflows; this is the per-PR build-correctness check.
+
+on:
+  pull_request:
+    branches: ['develop']
+  push:
+    branches: ['develop']
+  workflow_dispatch:
+
+concurrency:
+  group: ios-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: xcodebuild build + test
+    # macos-15 ships with Xcode 16; pin to a labelled runner so the
+    # toolchain is reproducible. Bump in lockstep with iOS deployment
+    # target updates in project.yml.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        # GitHub-hosted macOS runners ship multiple Xcode versions; the
+        # default is sometimes a beta. Pin explicitly so behaviour
+        # doesn't drift between runner image rolls.
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        # Homebrew is preinstalled on macos-15 runners. xcodegen materialises
+        # the .xcodeproj from project.yml — without this step xcodebuild
+        # would fail with "no project found" on a project.yml-only repo.
+        run: brew install xcodegen
+
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+            ~/.swiftpm
+          key: swiftpm-marchend/CyberpunkMonsterCrawl_04-${{ hashFiles('**/Package.resolved', 'project.yml') }}
+          restore-keys: |
+            swiftpm-marchend/CyberpunkMonsterCrawl_04-
+
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: deriveddata-marchend/CyberpunkMonsterCrawl_04-${{ github.sha }}
+          restore-keys: |
+            deriveddata-marchend/CyberpunkMonsterCrawl_04-
+
+      - name: Generate Xcode project
+        # ``xcodegen generate`` writes the .xcodeproj from project.yml.
+        # XcodeGen's caching is opt-in via ``--use-cache`` (the default
+        # behaviour is no caching), so we just don't pass that flag —
+        # the bare command always regenerates from scratch. (An earlier
+        # version of this template passed ``--no-cache``, which xcodegen
+        # rejects with "unrecognized option" — caused PR #2's ios-build
+        # to fail in 19s without ever reaching xcodebuild.)
+        run: xcodegen generate
+
+      - name: Resolve scheme
+        # Pick the first shared scheme to build/test. Most XcodeGen
+        # projects declare a single application scheme matching the
+        # target name; for projects with multiple, the user can override
+        # via the IOS_SCHEME repository variable.
+        id: scheme
+        env:
+          IOS_SCHEME_OVERRIDE: ${{ vars.IOS_SCHEME }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${IOS_SCHEME_OVERRIDE:-}" ]]; then
+            echo "scheme=${IOS_SCHEME_OVERRIDE}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PROJECT=$(ls -d *.xcodeproj | head -n 1)
+          SCHEME=$(xcodebuild -list -project "$PROJECT" \
+            | awk '/Schemes:/{flag=1; next} flag && NF{print; exit}' \
+            | tr -d ' ')
+          if [[ -z "$SCHEME" ]]; then
+            echo "::error::No schemes found in $PROJECT" >&2
+            exit 1
+          fi
+          echo "scheme=${SCHEME}" >> "$GITHUB_OUTPUT"
+          echo "Resolved scheme: ${SCHEME}"
+
+      - name: Build (no signing)
+        # CODE_SIGNING_ALLOWED=NO + CODE_SIGNING_REQUIRED=NO so the build
+        # passes without an Apple Developer identity wired into CI. The
+        # bot can verify the project compiles and tests pass; signed
+        # archives ship via a separate release workflow once you have a
+        # signing identity to manage.
+        env:
+          SCHEME: ${{ steps.scheme.outputs.scheme }}
+        run: |
+          set -euo pipefail
+          PROJECT=$(ls -d *.xcodeproj | head -n 1)
+          # ``2>&1`` is load-bearing: xcodebuild emits most of its output
+          # (compiler diagnostics, build phase progress, error: lines)
+          # to stderr, not stdout. Without ``2>&1`` the tee'd log file
+          # ends up with only the shell-echo of the invocation (~400 B)
+          # and the CI-fix agent has no actionable content to diagnose
+          # from — even though the same content is visible live in the
+          # GitHub Actions UI. Redirect stderr into the same pipe so
+          # both streams reach the log file AND the runner console.
+          # Build for the simulator SDK with a GENERIC destination — this
+          # needs no concrete simulator device, so it can't fail with
+          # "Unable to find a device matching the destination specifier"
+          # when the runner VM lacks a pre-created iPhone (the Test step
+          # uses a resolved device; see "Prepare iOS Simulator").
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee xcodebuild-build.log
+          # On older Xcode runners ``xcodebuild | tee`` propagates the
+          # piped exit code = 0 even if xcodebuild itself failed. Fail
+          # explicitly on any line containing the canonical error marker.
+          if grep -q "^** BUILD FAILED **" xcodebuild-build.log; then
+            echo "::error::xcodebuild build failed (see log above)" >&2
+            exit 1
+          fi
+
+      - name: Prepare iOS Simulator
+        # GitHub's macOS runner VMs are inconsistent about which simulator
+        # *devices* are pre-created for the selected Xcode: one VM exposes a
+        # concrete "iPhone 16 / iOS 26.x" device, the next exposes only the
+        # "Any iOS Simulator Device" placeholder. Hardcoding a specific
+        # simulator name + OS in ``-destination`` therefore fails
+        # nondeterministically with "Unable to find a device matching the
+        # provided destination specifier" even when the project is fine
+        # (observed: the same workflow + same Xcode passed on the base
+        # branch minutes earlier). Resolve a concrete simulator here — reuse
+        # an available iPhone if present, else create one for whatever iOS
+        # runtime the VM has — and target it by UDID in the Test and
+        # screenshot steps.
+        id: sim
+        run: |
+          set -euo pipefail
+          SIM_UDID="$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next((x["udid"] for rt in d if "iOS" in rt for x in d[rt] if x.get("isAvailable") and "iPhone" in x.get("name","")), ""))')"
+          if [[ -z "$SIM_UDID" ]]; then
+            echo "No pre-created iPhone simulator on this runner — creating one."
+            RUNTIME="$(xcrun simctl list runtimes available --json | python3 -c 'import json,sys; r=[x["identifier"] for x in json.load(sys.stdin)["runtimes"] if x.get("isAvailable") and "iOS" in x.get("name","")]; print(r[-1] if r else "")')"
+            if [[ -z "$RUNTIME" ]]; then
+              echo "::error::No iOS Simulator runtime available on this runner; cannot run xcodebuild test." >&2
+              exit 1
+            fi
+            DEVTYPE="$(xcrun simctl list devicetypes --json | python3 -c 'import json,sys; t=[x["identifier"] for x in json.load(sys.stdin)["devicetypes"] if "iPhone" in x.get("name","")]; print(t[-1] if t else "")')"
+            if [[ -z "$DEVTYPE" ]]; then
+              echo "::error::No iPhone device type available to create a simulator." >&2
+              exit 1
+            fi
+            SIM_UDID="$(xcrun simctl create ci-iphone "$DEVTYPE" "$RUNTIME")"
+          fi
+          echo "Using iOS Simulator UDID: $SIM_UDID"
+          xcrun simctl boot "$SIM_UDID" || true
+          xcrun simctl bootstatus "$SIM_UDID" -b || true
+          echo "udid=$SIM_UDID" >> "$GITHUB_OUTPUT"
+          echo "destination=platform=iOS Simulator,id=$SIM_UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        env:
+          SCHEME: ${{ steps.scheme.outputs.scheme }}
+          SIM_DEST: ${{ steps.sim.outputs.destination }}
+        run: |
+          set -euo pipefail
+          PROJECT=$(ls -d *.xcodeproj | head -n 1)
+          # See the Build step for why ``2>&1`` is required — same
+          # rationale (xcodebuild's per-test output, XCTAssert lines,
+          # and ``** TEST FAILED **`` marker all land on stderr).
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "$SIM_DEST" \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test 2>&1 | tee xcodebuild-test.log
+          if grep -q "^** TEST FAILED **" xcodebuild-test.log; then
+            echo "::error::xcodebuild test failed (see log above)" >&2
+            exit 1
+          fi
+
+      - name: Capture launch screenshot
+        # Boot a simulator, install the .app from DerivedData, launch, and
+        # capture a screenshot of the rendered first screen. The artifact
+        # makes regressions visible at a glance on the PR — humans (and
+        # any future vision-model verifier) can see what the app actually
+        # looks like instead of trusting "build green" as a proxy for
+        # "the screen renders correctly".
+        #
+        # Best-effort: ``continue-on-error: true`` because this is
+        # supplementary verification, not a build gate. A flaky simulator
+        # boot or .app discovery failure shouldn't fail the whole job
+        # when xcodebuild build/test already passed.
+        if: success()
+        continue-on-error: true
+        env:
+          SCHEME: ${{ steps.scheme.outputs.scheme }}
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -euo pipefail
+
+          # Locate the .app produced by the build step.
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData \
+            -name "${SCHEME}.app" \
+            -type d \
+            -path "*Debug-iphonesimulator*" \
+            2>/dev/null | head -n 1)
+          if [[ -z "$APP_PATH" ]]; then
+            echo "::warning::No ${SCHEME}.app found in DerivedData — skipping screenshot"
+            exit 0
+          fi
+          echo "Found app at: $APP_PATH"
+
+          # Read the bundle identifier directly from the app's Info.plist
+          # — more reliable than trying to grep it out of project.yml.
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
+            "${APP_PATH}/Info.plist" 2>/dev/null || true)
+          if [[ -z "$BUNDLE_ID" ]]; then
+            echo "::warning::Could not read CFBundleIdentifier from ${APP_PATH}/Info.plist"
+            exit 0
+          fi
+          echo "Bundle id: $BUNDLE_ID"
+
+          # Use the simulator resolved by the "Prepare iOS Simulator" step
+          # (targeted by UDID, so this never depends on a device name the
+          # runner VM happens to lack). It was already booted there; ``boot``
+          # is idempotent — returns 149 if already booted, swallowed below.
+          DEVICE="$SIM_UDID"
+          xcrun simctl boot "$DEVICE" || true
+          xcrun simctl bootstatus "$DEVICE" -b
+
+          # Install + launch + capture. 3s is empirically enough for the
+          # launch screen to settle on a clean simulator without any
+          # heavy startup work; bump if the app needs more.
+          xcrun simctl install "$DEVICE" "$APP_PATH"
+          xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot launch-screenshot.png
+          echo "Screenshot captured: $(ls -la launch-screenshot.png)"
+
+          # Tidy up so the runner is in a known state if anything else
+          # tries to use the simulator.
+          xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" || true
+
+      - name: Extract xcresult test results
+        # Runs only when a previous step failed (build/test). The xcresult
+        # bundle is xcodebuild's structured test output — line-precise
+        # failure messages, source file refs, and per-activity event logs.
+        # The stdout tail in xcodebuild-test.log shows only the LAST
+        # ~30KB of runner output, which on test-failure runs is dominated
+        # by verbose linker traces and may not include the actual
+        # assertion message. The xcresult JSON cuts straight to the
+        # failures. The CI-fix agent fetches this artifact via
+        # github_get_workflow_artifact to diagnose test failures with
+        # source file:line precision instead of guessing from stdout.
+        #
+        # ``continue-on-error: true`` because this is supplementary
+        # diagnostics; a failure here must not mask the original test
+        # failure (which is the actionable signal we want surfaced to
+        # the PR).
+        if: failure()
+        continue-on-error: true
+        run: |
+          set +e
+          BUNDLE=$(find ~/Library/Developer/Xcode/DerivedData \
+            -name "*.xcresult" -type d 2>/dev/null \
+            | sort | tail -n 1)
+          if [[ -z "$BUNDLE" ]]; then
+            echo "::warning::No .xcresult bundle found in DerivedData — skipping xcresult extract"
+            exit 0
+          fi
+          echo "Found xcresult bundle: $BUNDLE"
+          # Xcode 16+ has the structured ``get test-results tests``
+          # subcommand which returns a clean per-test tree with
+          # failureSummary blocks. Older runners fall back to the
+          # legacy --format json dump (much larger, but the agent can
+          # still grep for failure markers). One of these is always
+          # available on a macOS runner with Xcode installed.
+          xcrun xcresulttool get test-results tests --path "$BUNDLE" \
+            > xcresult-test-results.json 2>/dev/null \
+            || xcrun xcresulttool get --format json --legacy --path "$BUNDLE" \
+            > xcresult-test-results.json 2>/dev/null \
+            || echo '{"error": "xcresulttool extraction failed"}' > xcresult-test-results.json
+          echo "Wrote xcresult-test-results.json: $(wc -c < xcresult-test-results.json) bytes"
+
+      - name: Upload xcodebuild logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-logs
+          path: |
+            xcodebuild-build.log
+            xcodebuild-test.log
+          if-no-files-found: ignore
+
+      - name: Upload xcresult test results
+        # Separate artifact so the agent can request it by name without
+        # parsing the whole xcodebuild-logs bundle. ``if: always()`` so
+        # the file uploads even when later steps fail. ``if-no-files-found:
+        # ignore`` so the workflow stays clean on build-only failures
+        # (no xcresult exists when the build itself didn't reach the
+        # test phase).
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcresult-test-results
+          path: xcresult-test-results.json
+          if-no-files-found: ignore
+
+      - name: Upload launch screenshot
+        # Separate artifact so reviewers can preview without downloading
+        # the whole logs bundle. ``if-no-files-found: ignore`` so the
+        # job stays green when the screenshot step bailed out (no .app,
+        # missing simulator, etc.) — the build/test gate has already
+        # passed; the screenshot is supplementary.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-launch-screenshot
+          path: launch-screenshot.png
+          if-no-files-found: ignore
