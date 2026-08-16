@@ -98,6 +98,31 @@ final class DepthModelTests: XCTestCase {
         XCTAssertFalse(DepthModel.isValidBuildingContentOffset(-0.01))
     }
 
+    /// CYBERPUN-17-5-t3: `RooftopSignRenderer` sets
+    /// `DepthModel.signContentOffset` as its sign node's *child* zPosition,
+    /// on top of the building content floor its carrier building already
+    /// occupies. That accumulated offset has to stay a legal building-content
+    /// offset — this is what makes narrowing `buildingContentRange` fail here
+    /// instead of silently drawing signs into a neighbouring content slot.
+    func test_signContentOffset_stacksOnTheBuildingContentFloor_andStaysInsideBuildingContentRange() {
+        let accumulated = DepthModel.buildingContentRange.lowerBound + DepthModel.signContentOffset
+
+        XCTAssertGreaterThan(
+            DepthModel.signContentOffset, 0,
+            "A sign must draw in FRONT of the roof it sits on, so its child offset has to be positive."
+        )
+        XCTAssertTrue(
+            DepthModel.isValidBuildingContentOffset(accumulated),
+            "A rooftop sign lands at in-band offset \(accumulated), outside "
+                + "buildingContentRange (\(DepthModel.buildingContentRange))."
+        )
+        XCTAssertLessThan(
+            accumulated, DepthModel.actorOffsetRange.lowerBound,
+            "A rooftop sign must never reach into actorOffsetRange — an actor always draws in front of "
+                + "building content in the same band."
+        )
+    }
+
     func test_actorOffsetRange_staysWithinSixPointFiveToNinePointNine() {
         XCTAssertEqual(DepthModel.actorOffsetRange.lowerBound, 6.5)
         XCTAssertEqual(DepthModel.actorOffsetRange.upperBound, 9.9)

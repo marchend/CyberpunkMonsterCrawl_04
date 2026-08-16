@@ -25,18 +25,47 @@ import SpriteKit
 /// bottom-centre (`TileFieldRenderer.configure`), that local point is
 /// exactly the roofline's top-centre — a child node's position is offset
 /// from its parent's own position, unaffected by the parent's anchor point —
-/// so this holds regardless of the building's absolute screen position,
-/// with no dependency on `IsometricProjection` or `DepthModel` of its own.
+/// so this holds regardless of the building's absolute screen position.
 /// The sign then extends upward from the roofline rather than overlapping
 /// the building's own art.
 ///
-/// **Depth.** A small positive *child* `zPosition` (relative to
-/// `buildingNode`'s own, since SpriteKit accumulates `zPosition` down the
-/// tree) keeps the sign drawing in front of the roof it sits on; it carries
-/// no absolute world-band value of its own — unlike `TileFieldRenderer`'s
-/// building `zPosition`, which is derived from `IsometricDepthSorting` —
-/// because a child's accumulated depth already inherits the building's
-/// correctly-sorted absolute position in the world band.
+/// That anchor rests on *measured* facts about the shipped `sprite_signs`
+/// art, not on an assumption inferred from the cell size — the same
+/// treatment `TileFieldRenderer`'s anchor comment gives the building art via
+/// `BuildingSpriteBaseAlignmentTests`. `AtlasSheet.signs` only pins the
+/// *sheet* geometry (192x144px, 48x48 cells, 12 of them); it says nothing
+/// about where the opaque pixels sit inside a cell, and glyphs centred in
+/// their cell (or carrying a glow pad below them) would render the sign
+/// floating above the roofline or clipped into the roof while every
+/// anchor/position assertion in `RooftopSignRenderingTests` still passed,
+/// because those are self-consistent by construction.
+/// `RooftopSignSpriteAlignmentTests` therefore re-derives the layout from
+/// the PNG's alpha channel at test time, for all 12 cells:
+/// - each cell's opaque content is horizontally centred inside its own 48px
+///   cell (measured to within 4px, a twelfth of the cell), which is what
+///   makes `anchorPoint.x = 0.5` put the sign over the roof's centre;
+/// - each cell's content runs to the bottom of its own 48px cell with at
+///   most 4 transparent rows below it, which is what makes
+///   `anchorPoint.y = 0` at `buildingNode.size.height` put the sign's base
+///   *on* the roofline rather than some pixels above it;
+/// - all 12 cells decode at that geometry with real opaque content, so
+///   neither measurement can pass vacuously on an empty or mis-sliced
+///   sheet.
+///
+/// **Depth.** `DepthModel.signContentOffset` — a small positive *child*
+/// `zPosition` (relative to `buildingNode`'s own, since SpriteKit
+/// accumulates `zPosition` down the tree) that keeps the sign drawing in
+/// front of the roof it sits on. It carries no absolute world-band value of
+/// its own — unlike `TileFieldRenderer`'s building `zPosition`, which is
+/// derived from `IsometricDepthSorting` — because a child's accumulated
+/// depth already inherits the building's correctly-sorted absolute position
+/// in the world band. The offset is *not* a literal invented here:
+/// `DepthModel` is the single source of truth for in-band offsets and its
+/// `buildingContentRange` is documented as covering "building content
+/// (walls, rooftop signs, etc.)", so the constant is owned there and
+/// asserted against `DepthModel.isValidBuildingContentOffset` in DEBUG
+/// below — the same pattern `TileFieldRenderer.configure` already follows
+/// for its band check.
 enum RooftopSignRenderer {
     /// Name stamped on every produced sign node, so scene audits/tests can
     /// find a building's sign child without holding a separate reference —
@@ -68,7 +97,25 @@ enum RooftopSignRenderer {
         node.size = texture.size()
         node.anchorPoint = CGPoint(x: 0.5, y: 0)
         node.position = CGPoint(x: 0, y: buildingNode.size.height.rounded())
-        node.zPosition = 1
+
+        #if DEBUG
+        // The sign's *accumulated* in-band offset is the building's own
+        // content-floor slot plus this child offset, so that sum - not the
+        // child offset alone - is what has to stay inside
+        // `buildingContentRange`. Asserting it here means narrowing that
+        // range (or retuning `signContentOffset`) fails at the sign that
+        // caused it rather than surfacing as a draw-order oddity on device.
+        assert(
+            DepthModel.isValidBuildingContentOffset(
+                DepthModel.buildingContentRange.lowerBound + DepthModel.signContentOffset
+            ),
+            "DepthModel.signContentOffset (\(DepthModel.signContentOffset)) puts a rooftop sign at in-band "
+                + "offset \(DepthModel.buildingContentRange.lowerBound + DepthModel.signContentOffset), "
+                + "outside DepthModel.buildingContentRange (\(DepthModel.buildingContentRange)); the sign "
+                + "would draw in a neighbouring content slot."
+        )
+        #endif
+        node.zPosition = DepthModel.signContentOffset
 
         // Finalizes `.nearest`/no-mipmap filtering and whole-integer
         // scale/whole-point position — the same pass every other production

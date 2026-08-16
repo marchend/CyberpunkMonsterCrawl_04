@@ -77,7 +77,7 @@ CyberpunkMonsterCrawl/
   Sources/Rendering/GroundTileCatalog.swift  GroundTileKind (the ground plane's own 6-case vocabulary: 2 asphalt orientations, junction stop-line, kerb/sidewalk, lot, building-footprint overhang) mapped onto AtlasGroundDiamond — a semantic relabeling, not a re-measurement; AtlasSheet.swift stays the one source of truth for the pixel rects
   Sources/Rendering/PixelCrispness.swift   PixelCrispness.apply(to:): the shared SKSpriteNode finalizer — .nearest filtering/no mipmaps, whole-integer xScale/yScale, position snapped to the nearest whole point — every future sprite consumer (buildings, actors, bullets, ...) goes through this, not just ground tiles. snappedPosition(for:scale:) rounds a position to the nearest whole *device pixel* at an explicit scale (for a position derived through the camera's tile on entry to .gameplay; it snaps the node, not the camera - snapping cameraNode.position is CYBERPUN-17-7's, the ticket that first moves it), and isIntegerScale(_:) is the standalone whole-integer-scale predicate, both added in CYBERPUN-17-6-t3 and simulated at @2x/@3x in PixelCrispnessTests without a live UIScreen
   Sources/World/IsometricProjection.swift  tileToScreen/screenToTile at 96x48 tile size, TilePoint tile-space type, tile(containing:) diamond-ownership rule floor(coord + 0.5) with both a screen-space and a tile-space overload so no call site re-derives it; Double math with a CGFloat cast only at the boundary
-  Sources/World/DepthModel.swift           single source of truth for painter's-algorithm zPosition: band(forTile:) = -(tileX+tileY)*10, groundZPosition = band - 5000, buildingContentRange (<+3) / actorOffsetRange (6.5-9.9) in-band slots, band(forActorAt:) rounds a fractional TilePoint to its owning tile (discontinuous by design) via IsometricProjection.tile(containing:)
+  Sources/World/DepthModel.swift           single source of truth for painter's-algorithm zPosition: band(forTile:) = -(tileX+tileY)*10, groundZPosition = band - 5000, buildingContentRange (<+3) / actorOffsetRange (6.5-9.9) in-band slots, signContentOffset (+1, a rooftop sign's child zPosition stacked on the building content floor - owned here, never a literal at RooftopSignRenderer), band(forActorAt:) rounds a fractional TilePoint to its owning tile (discontinuous by design) via IsometricProjection.tile(containing:)
   Sources/World/GroundTileRenderer.swift   maps a TileKind + TileCoordinate to a pixel-crisp SKSpriteNode: GroundTileCatalog for the crop rect (re-deriving .asphalt's corridor orientation, north-south vs east-west, from the tile coordinate's lattice-band position — TileKind alone doesn't carry it), IsometricProjection for screen position, DepthModel.groundZPosition + worldLayerRelativeZ for zPosition, PixelCrispness.apply for the finishing pass. Every produced node is meant as a direct child of GameScene.worldLayer
   Sources/World/SeedMixer.swift            explicit splitmix64-style bit mixer over (seed, tileX, tileY), wrapping arithmetic only - never Hasher/.hashValue, which is randomized per process
   Sources/World/WorldSeed.swift            thin UInt64-wrapping per-run seed type: "a run is fully described by its seed"
@@ -537,26 +537,48 @@ docs/bootstrap.md                          original spec (source of truth)
 - Rooftop sign rendering & scene streaming wiring (implemented —
   `Sources/Rendering/RooftopSignRenderer.swift`,
   `Sources/World/GroundPlaneStreamer.swift` (extended, not a new sibling
-  streamer); `RooftopSignRenderingTests`, `BuildingSceneIntegrationTests` —
-  `CYBERPUN-17-5-t3`). `RooftopSignRenderer.makeSignNode(for:parent:)` turns
+  streamer); `RooftopSignRenderingTests`, `RooftopSignSpriteAlignmentTests`,
+  `BuildingSceneIntegrationTests`, `ChunkStreamingGroundTests` (recycle path)
+  — `CYBERPUN-17-5-t3`). `RooftopSignRenderer.makeSignNode(for:parent:)` turns
   a `RooftopSignRecord` into a **distinct** `sprite_signs`-textured
   `SKSpriteNode`, added as a *child* of its carrier building node rather
   than composited into the building's own texture (AC7's rendering half):
   bottom-centre anchor at `(0, buildingNode.size.height)` in the building
   node's own local coordinate space — exactly the roofline's top-centre,
   since a child's position is unaffected by its parent's anchor point — and
-  a small positive child `zPosition` so it draws in front of the roof.
+  `DepthModel.signContentOffset` as its child `zPosition` (owned by
+  `DepthModel`, whose `buildingContentRange` names rooftop signs as its
+  content, not a literal invented at the renderer; asserted against
+  `DepthModel.isValidBuildingContentOffset` in DEBUG) so it draws in front of
+  the roof. That anchor is a *measurement*, not an inference from the 48×48
+  cell size: `RooftopSignSpriteAlignmentTests` re-derives from `sprite_signs`'
+  alpha channel, for all 12 cells, that each cell's opaque content is
+  horizontally centred (±4px) and runs to the bottom of its own cell (≤4
+  transparent rows below), which is what makes a bottom-centre anchor at the
+  roofline read correctly instead of floating above it or clipping into the
+  roof — the same treatment `BuildingSpriteBaseAlignmentTests` gives the
+  building anchor.
   `GroundPlaneStreamer.mountChunk` already generically mounted/evicted
   building nodes per chunk (`CYBERPUN-17-5-t2`), so this task extended that
   existing streamer rather than adding a new sibling: it now also looks up
   `chunk.roofSigns` by `carrierLotTile` and attaches the matching sign as a
   child in the same pass a building node is mounted. Because a sign is only
   ever a *child* of its building node, it carries no bookkeeping of its own
-  (no `signNodesByChunk` map, no separate pool) — mount, recycle and
-  eviction all follow the parent building node's lifecycle for free;
-  `dequeueOrMakeBuildingNode` strips any stale sign child
-  (`removeAllChildren()`) before reconfiguring a pooled node, so a recycled
-  building never keeps rendering a previous occupant's sign.
+  (no `signNodesByChunk` map, no separate pool) — **mount and eviction**
+  follow the parent building node's lifecycle for free. **Recycle does not:**
+  `dequeueOrMakeBuildingNode` strips any stale sign child (by name —
+  `childNode(withName: RooftopSignRenderer.signNodeName)?.removeFromParent()`,
+  not the broader `removeAllChildren()`) before reconfiguring a pooled node,
+  so a recycled building never keeps rendering a previous occupant's sign,
+  but the sign node itself is discarded and a fresh one is allocated on the
+  next remount. Signs are therefore explicitly outside the "no further
+  `SKSpriteNode` allocated once the window has filled" invariant `pool` /
+  `buildingPool` state — a bounded, accepted allocation (~1 per 3 blocks per
+  mount), not a covered case.
+  `ChunkStreamingGroundTests.test_recycledBuildingNodes_carryNoStaleRooftopSign_afterAPanThatEvictsSignedBuildings`
+  pins the strip through a real evict-then-remount (a fresh mount from an
+  empty pool never reaches that line, so the stale-sign regression would
+  otherwise ship green).
   `BuildingSceneIntegrationTests` drives the same production mount
   (`GroundPlaneStreamer`, not `TileFieldRenderer` called in isolation) and
   checks the AC1 "city reads visually" claim as far as it is checkable
