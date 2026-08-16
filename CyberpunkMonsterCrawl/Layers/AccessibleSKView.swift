@@ -3,7 +3,8 @@ import UIKit
 
 /// The `SKView` subclass the app hosts `GameScene` in, so that every
 /// accessible UI node publishes a **correct screen-space
-/// `accessibilityFrame`**.
+/// `accessibilityFrame`** *and* is actually reachable by an out-of-process
+/// accessibility client (XCUITest, VoiceOver, the scripted runtime probe).
 ///
 /// ## The bug this exists to fix
 ///
@@ -25,14 +26,7 @@ import UIKit
 /// saw it, `stateMachine.transition(to: .gameplay)` never fired, and the
 /// probe reported "tapped PLAY, screen stayed on the menu".
 ///
-/// That is the "reachable in code review, unreachable by the actual driver"
-/// trap in its purest form: the state machine, the screen registry, the
-/// `onPlay` wiring and `startGroundPlane()` were all correct, and every unit
-/// test stayed green throughout - because the tests call
-/// `dispatchTouch(atScenePoint:)` directly and so never go anywhere near an
-/// accessibility frame.
-///
-/// ## The fix
+/// ## The fix, part 1: publish frames the scene agrees with
 ///
 /// Publish the elements ourselves, with frames computed through the *same*
 /// coordinate path `routeTouch(at:)` trusts for real touches:
@@ -45,36 +39,112 @@ import UIKit
 ///    the conversion SpriteKit uses to give `UITouch.location(in:)` its
 ///    value (and camera-aware, which is the step SpriteKit's implicit support
 ///    gets wrong).
-/// 3. `UIAccessibility.convertToScreenCoordinates(_:in:)` - view space to
-///    *screen* space, the space `accessibilityFrame` is documented in
-///    (`UIScreen.fixedCoordinateSpace`, portrait-up origin).
-///
-/// Step 3 deliberately does **not** use `convert(_:to: nil)`, which yields
-/// *window* coordinates. The two spaces coincide on a full-bleed portrait
-/// window - which is why the window form looked correct and unit-tested
-/// green - and diverge the moment the interface rotates: the window's
-/// coordinate space rotates with the interface, the accessibility screen
-/// space does not. `AppLaunchAndRotationUITests` rotates to `.landscapeLeft`
-/// and then taps `menu.playButton` by identifier, i.e. it drives exactly
-/// this element-frame path in the orientation where window != screen, so a
-/// window-space frame would resurrect "the synthesized tap landed somewhere
-/// that is not the button" wearing the rotation hat.
-/// `UIAccessibility.convertToScreenCoordinates(_:in:)` does view -> screen
-/// directly and handles interface orientation itself.
+/// 3. View space to *screen* space, the space `accessibilityFrame` is
+///    documented in.
 ///
 /// Because the published frame is derived from the inverse of the hit test,
 /// an element-driven tap and the scene's own routing cannot disagree.
-/// `AccessibleSKViewTests` pins that agreement directly - it is the real
-/// regression guard, and it fails the moment the two paths drift apart
-/// again.
+/// `AccessibleSKViewTests` pins that agreement directly.
 ///
-/// Elements are rebuilt on every query rather than cached, so a screen swap
-/// (`GameScene.transitionScreens(to:)`), a rotation (`didChangeSize(_:)`) or
-/// a camera move can never leave a stale frame behind - a stale frame is the
-/// same defect wearing a different hat.
+/// ## The fix, part 2: be a container whose elements survive the query
+///
+/// Publishing the right *numbers* is necessary but not sufficient - the
+/// elements also have to still be there when the accessibility server comes
+/// back to read them. Three things are load-bearing here, and each one on its
+/// own is enough to make the whole tree vanish from an XCUITest snapshot
+/// while every unit test in `AccessibleSKViewTests` stays green (those call
+/// `publishedAccessibilityElements()` directly, in-process, inside one
+/// autorelease pool - the one situation where all three defects are
+/// invisible):
+///
+/// * **The elements must be owned.** `UIAccessibilityElement` holds its
+///   `accessibilityContainer` weakly and a container does *not* retain the
+///   elements it vends. Building a fresh, unretained array on every query
+///   means the objects UIKit was handed can be gone before the next message
+///   in the same snapshot pass arrives, so the container resolves to a node
+///   with no live children. `elementCache` gives them an owner, and reusing
+///   the same instance for the same node keeps element *identity* stable
+///   across queries - which is what `index(ofAccessibilityElement:)`, and
+///   therefore VoiceOver focus and XCUITest element resolution, are built on.
+///   Freshness is preserved by rewriting every reused element's properties
+///   from the live scene graph on each query and dropping any key the walk no
+///   longer produces, so a screen swap (`GameScene.transitionScreens(to:)`),
+///   a rotation (`didChangeSize(_:)`) or a camera move still cannot leave a
+///   stale frame behind.
+///
+/// * **The view must stay a *container*, not a leaf.** UIKit only looks at
+///   `accessibilityElements` when the view itself reports
+///   `isAccessibilityElement == false`; if anything up the `SKView` chain
+///   answers `true`, the whole subtree collapses into one unlabelled element
+///   and nothing we publish is ever asked for. `isAccessibilityElement` is
+///   overridden below to answer `false` for as long as we have something to
+///   publish rather than trusting the inherited value.
+///
+/// * **A published frame must not be degenerate.** An accessibility snapshot
+///   is entitled to drop a zero-sized element, and a marker node such as
+///   `MenuScreenNode`'s `menu.container` has no visual content, so its
+///   accumulated frame is legitimately empty. Such elements are published at
+///   a minimum 1pt size so they remain *findable by identifier* (which is all
+///   a marker is for) instead of being culled.
+///
+/// The frame is handed to UIKit as `accessibilityFrameInContainerSpace`
+/// whenever this view is in a window. That property takes the rect in *this
+/// view's* coordinate space and lets UIKit do the view -> screen step itself,
+/// which is the only form that is correct in every interface orientation:
+/// `AppLaunchAndRotationUITests` rotates to `.landscapeLeft` and then taps
+/// `menu.playButton` by identifier, i.e. it drives exactly this element-frame
+/// path in the orientation where window != screen. Off-window (unit tests, a
+/// view mid-teardown) there is no screen mapping to ask for, so
+/// `screenFrame(forSceneRect:in:)`'s view-space fallback is written straight
+/// into `accessibilityFrame` and the element still measures the button.
 final class AccessibleSKView: SKView {
 
+    /// The elements handed out by `publishedAccessibilityElements()`, keyed
+    /// by the stable identity of the node each one mirrors.
+    ///
+    /// This property is what makes the published elements *owned*: without a
+    /// strong reference living here they are unretained temporaries (see the
+    /// class comment), and an accessibility client that comes back for them a
+    /// message later finds nothing.
+    private var elementCache: [String: UIAccessibilityElement] = [:]
+
+    // MARK: - Init
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureAsAccessibilityContainer()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureAsAccessibilityContainer()
+    }
+
+    private func configureAsAccessibilityContainer() {
+        // Both are UIView defaults, but they are the two flags that silently
+        // erase everything this class publishes, so they are stated rather
+        // than assumed.
+        isAccessibilityElement = false
+        accessibilityElementsHidden = false
+    }
+
     // MARK: - UIAccessibilityContainer
+
+    /// A container, never a leaf, for as long as there is something of ours
+    /// to publish.
+    ///
+    /// UIKit consults `accessibilityElements` only on a view that is *not*
+    /// itself an accessibility element. Answering `true` here - from any
+    /// point in the `SKView` inheritance chain - collapses the menu into a
+    /// single unlabelled element and makes this entire class dead code, so
+    /// the answer is computed rather than inherited.
+    override var isAccessibilityElement: Bool {
+        get {
+            if publishedAccessibilityElements() != nil { return false }
+            return super.isAccessibilityElement
+        }
+        set { super.isAccessibilityElement = newValue }
+    }
 
     /// The modern container hook, and the one XCUITest's snapshotting reads.
     ///
@@ -120,11 +190,11 @@ final class AccessibleSKView: SKView {
         }
         guard let candidate = element as? UIAccessibilityElement else { return NSNotFound }
 
-        // Identity first, then identifier/label: the elements are rebuilt on
-        // every query (see the class comment on why they are not cached), so
-        // UIKit may hand back an instance produced by an earlier rebuild.
-        // Matching on the stable identity the *node* supplies keeps VoiceOver
-        // focus from being lost across a rebuild.
+        // Identity first, then identifier/label. Identity is now the common
+        // case (elements are cached and reused per node), which is what keeps
+        // VoiceOver focus and XCUITest's element resolution stable; the
+        // identifier/label fallback still covers an instance produced before
+        // a screen swap rebuilt the cache.
         let match = elements.firstIndex { published in
             if published === candidate { return true }
             if let identifier = published.accessibilityIdentifier,
@@ -139,10 +209,26 @@ final class AccessibleSKView: SKView {
         return match ?? NSNotFound
     }
 
+    // MARK: - Scene presentation
+
+    /// A new scene means a new element set; drop the cache so nothing from
+    /// the previous scene can be handed out, and tell accessibility clients
+    /// the tree they may already have read is out of date.
+    override func presentScene(_ scene: SKScene?) {
+        super.presentScene(scene)
+        elementCache.removeAll()
+        UIAccessibility.post(notification: .layoutChanged, argument: nil)
+    }
+
     // MARK: - Element construction
 
     /// One `UIAccessibilityElement` per accessible node in the presented
     /// `GameScene`'s `uiLayer`, or `nil` when there is nothing to publish.
+    ///
+    /// Elements are reused across calls (see `elementCache`) but their
+    /// properties are rewritten from the live scene graph every time, so a
+    /// screen swap, a rotation or a camera move can never leave a stale frame
+    /// behind - a stale frame is the original defect wearing a different hat.
     ///
     /// Internal (not private) so `AccessibleSKViewTests` can assert on the
     /// published identifiers, labels, traits and frame sizes without a
@@ -150,16 +236,87 @@ final class AccessibleSKView: SKView {
     func publishedAccessibilityElements() -> [UIAccessibilityElement]? {
         guard let gameScene = scene as? GameScene, gameScene.view === self else { return nil }
 
-        let elements: [UIAccessibilityElement] = gameScene.accessibleUINodes().compactMap { node in
-            guard let sceneFrame = gameScene.accessibilityFrameInScene(for: node) else { return nil }
-            let element = UIAccessibilityElement(accessibilityContainer: self)
-            element.accessibilityFrame = self.screenFrame(forSceneRect: sceneFrame, in: gameScene)
+        var live: [String: UIAccessibilityElement] = [:]
+        var ordered: [UIAccessibilityElement] = []
+
+        for node in gameScene.accessibleUINodes() {
+            guard let sceneFrame = gameScene.accessibilityFrameInScene(for: node) else { continue }
+
+            let key = cacheKey(for: node)
+            let element = elementCache[key] ?? UIAccessibilityElement(accessibilityContainer: self)
+            element.accessibilityContainer = self
             element.accessibilityIdentifier = node.accessibilityIdentifier
             element.accessibilityLabel = node.accessibilityLabel
             element.accessibilityTraits = node.accessibilityTraits
-            return element
+            applyFrame(sceneRect: sceneFrame, to: element, in: gameScene)
+
+            live[key] = element
+            ordered.append(element)
         }
-        return elements.isEmpty ? nil : elements
+
+        // Assigning (rather than merging) drops every key the walk no longer
+        // produces, so a swapped-out screen releases its elements.
+        elementCache = live
+
+        return ordered.isEmpty ? nil : ordered
+    }
+
+    /// The stable identity an element is cached under. Identifier first (that
+    /// is what a driver matches on), then label, then the node's own object
+    /// identity so an unlabelled accessible node still gets a stable slot
+    /// instead of colliding with every other one.
+    private func cacheKey(for node: SKNode) -> String {
+        if let identifier = node.accessibilityIdentifier, !identifier.isEmpty {
+            return "id:\(identifier)"
+        }
+        if let label = node.accessibilityLabel, !label.isEmpty {
+            return "label:\(label)"
+        }
+        return "node:\(UInt(bitPattern: ObjectIdentifier(node).hashValue))"
+    }
+
+    /// Writes `sceneRect` onto `element` in whichever form UIKit can act on.
+    ///
+    /// In a window the rect is handed over as
+    /// `accessibilityFrameInContainerSpace` - this view's own coordinate
+    /// space - and UIKit performs the view -> screen step itself, which is
+    /// the only form that stays correct once the interface rotates. Off
+    /// window there is no screen mapping to ask for, so
+    /// `screenFrame(forSceneRect:in:)`'s view-space fallback goes straight
+    /// into `accessibilityFrame`.
+    private func applyFrame(sceneRect: CGRect, to element: UIAccessibilityElement, in scene: SKScene) {
+        if window != nil {
+            element.accessibilityFrameInContainerSpace =
+                publishableRect(viewRect(forSceneRect: sceneRect, in: scene))
+        } else {
+            element.accessibilityFrame =
+                publishableRect(screenFrame(forSceneRect: sceneRect, in: scene))
+        }
+    }
+
+    /// `rect` made safe to hand to UIAccessibility.
+    ///
+    /// A non-finite rect (SpriteKit can report a null accumulated frame,
+    /// whose corners subtract into NaN) is replaced outright, and a
+    /// zero-sized one is grown to 1pt: an accessibility snapshot is entitled
+    /// to cull a degenerate element, and a marker node such as
+    /// `menu.container` legitimately has no size but must still be findable
+    /// by identifier. Anything with a real size is returned untouched, so a
+    /// button's published frame keeps measuring the button.
+    private func publishableRect(_ rect: CGRect) -> CGRect {
+        guard
+            rect.origin.x.isFinite, rect.origin.y.isFinite,
+            rect.size.width.isFinite, rect.size.height.isFinite
+        else {
+            return CGRect(x: 0, y: 0, width: 1, height: 1)
+        }
+        guard rect.size.width <= 0 || rect.size.height <= 0 else { return rect }
+        return CGRect(
+            x: rect.origin.x,
+            y: rect.origin.y,
+            width: max(rect.size.width, 1),
+            height: max(rect.size.height, 1)
+        )
     }
 
     /// Converts `sceneRect` (scene coordinates, y-up, origin bottom-left)
@@ -171,7 +328,7 @@ final class AccessibleSKView: SKView {
     /// `UIAccessibility.convertToScreenCoordinates(_:in:)` rather than
     /// `convert(_:to: nil)`: the latter answers in *window* coordinates,
     /// which only coincide with screen coordinates while the interface is
-    /// portrait and the window is full-bleed (see the class comment).
+    /// portrait and the window is full-bleed.
     ///
     /// Internal so the conversion can be exercised directly by tests.
     func screenFrame(forSceneRect sceneRect: CGRect, in scene: SKScene) -> CGRect {
@@ -193,6 +350,10 @@ final class AccessibleSKView: SKView {
     /// The scene -> view half of `screenFrame(forSceneRect:in:)`: `sceneRect`
     /// expressed in this view's own coordinate space (y-down, origin
     /// top-left), still camera-aware.
+    ///
+    /// This is also the rect published as
+    /// `accessibilityFrameInContainerSpace` in the windowed case, which is
+    /// exactly what that property is documented to take.
     ///
     /// Split out from the screen conversion so tests can round-trip a
     /// published frame back into scene space with `convert(_:to: scene)`
