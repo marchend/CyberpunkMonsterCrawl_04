@@ -86,9 +86,13 @@ final class TouchRoutingTests: XCTestCase {
             "precondition: the gameplay screen must actually be mounted and laid out"
         )
 
-        // Points spread across the viewport, all clear of the small centred
-        // placeholder label. The camera stays at the origin in a view-less
-        // test scene, so scene coordinates map straight through to uiLayer.
+        // Points spread across the viewport. Since CYBERPUN-17-5-t4 the
+        // gameplay screen mounts nothing with a frame at all (its former
+        // centred placeholder label is gone), so no point on screen is
+        // covered by UI - but the assertion is written to hold for any
+        // future HUD too, hence points away from the centre. The camera stays
+        // at the origin in a view-less test scene, so scene coordinates map
+        // straight through to uiLayer.
         for worldPoint in [CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 400), CGPoint(x: 350, y: 700)] {
             let worldNode = makeHitTestableNode(at: worldPoint)
             // Entering `.gameplay` above also starts the real streamed ground

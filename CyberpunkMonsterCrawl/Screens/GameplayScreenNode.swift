@@ -1,14 +1,32 @@
 import SpriteKit
 import UIKit
 
-/// Skeleton `.gameplay` screen.
+/// Skeleton `.gameplay` screen: an accessibility anchor over live world
+/// content, and no content of its own.
 ///
 /// CYBERPUN-17-2's own scope explicitly excludes "final HUD content" (see
-/// the story's "Out of scope" section) \u2014 real gameplay content (world
-/// rendering, the player actor, the raccoon swarm, auto-fire/XP HUD) lands
-/// across CYBERPUN-17-3 through CYBERPUN-17-9. This screen exists purely so
-/// `.gameplay` has a mounted, observable `ScreenNode` today: tapping PLAY on
-/// the menu visibly lands somewhere real instead of an empty `uiLayer`.
+/// the story's "Out of scope" section) - the real in-run HUD lands with
+/// CYBERPUN-17-7 (floating thumbstick) and CYBERPUN-17-12 (the in-run HUD).
+/// What the player actually sees on entry to `.gameplay` is the *world*:
+/// `GameScene.updateWorldContent(for:)` starts the streamed ground plane
+/// with its building and rooftop-sign nodes (CYBERPUN-17-5) and mounts the
+/// player actor (CYBERPUN-17-6) into `worldLayer`.
+///
+/// **This screen therefore mounts no text of its own.** It used to carry a
+/// neon "GAMEPLAY - WORLD COMING SOON" placeholder label, from the days when
+/// `worldLayer` was genuinely empty on entry. Now that the city and the
+/// player really do render, a label announcing "no world here yet" sits on
+/// top of the very content it denies - which reads as "feature not
+/// delivered" to anyone (or any screenshot-driven verification) looking at
+/// the screen, however correct the rendering behind it is. It was removed in
+/// CYBERPUN-17-5-t4; `ScreensTests.test_gameplayScreenNode_mountsNoComingSoonText`
+/// pins the removal by wording and
+/// `ScreensTests.test_gameplayScreenNode_mountsOnlyTheContainerMarker_andNoTextAnywhere`
+/// pins it structurally (exactly one child, no text anywhere in the
+/// subtree), so neither the original label nor a reworded one can creep back
+/// in. The wording gate is the durable invariant and must survive
+/// CYBERPUN-17-7; the structural one is expected to be rewritten when real
+/// HUD content lands.
 ///
 /// **Deliberately mounts no full-bleed backdrop.** The menu / death /
 /// high-scores screens each carry an opaque, scene-sized `SKSpriteNode`
@@ -25,36 +43,54 @@ import UIKit
 /// `TouchRoutingTests.test_mountedGameplayScreen_doesNotBlockWorldTouches`
 /// pins the fall-through against a real, laid-out instance of this screen.
 ///
-/// // SCAFFOLDING(CYBERPUN-17-7): the placeholder label and the container
-/// marker below are temporary. CYBERPUN-17-7 ("Wire the floating thumbstick,
-/// player movement, building collision and camera") adds the first real HUD
-/// content this screen gains and should replace this placeholder wholesale.
+/// // SCAFFOLDING(CYBERPUN-17-7): the container marker below is temporary,
+/// and after CYBERPUN-17-5-t4 removed the placeholder label it is the *only*
+/// scaffolding artifact left on this screen. CYBERPUN-17-7 ("Wire the
+/// floating thumbstick, player movement, building collision and camera")
+/// adds the first real HUD content this screen gains and should delete the
+/// marker then.
+///
+/// Deleting the marker alone turns two green assertions red, so 17-7's
+/// definition of done is "delete the marker **and** re-point both
+/// assertions" - see the marker's own comment for the pair. Removing the
+/// node without them makes keeping the marker the path of least resistance,
+/// which is exactly how scaffolding outlives the ticket meant to delete it.
 final class GameplayScreenNode: ScreenNode {
 
     let node = SKNode()
-
-    // SCAFFOLDING(CYBERPUN-17-7): placeholder label only; no real HUD yet.
-    private let placeholderLabel = SKLabelNode(text: "GAMEPLAY \u{2014} WORLD COMING SOON")
 
     /// Non-visual accessibility anchor identifying "gameplay is mounted",
     /// so a UI test can assert the PLAY -> gameplay transition landed
     /// somewhere real instead of only observing the menu disappear.
     ///
     /// // SCAFFOLDING(CYBERPUN-17-7): this marker is a diagnostic hook, not a
-    /// durable accessibility contract \u2014 it exists only because the skeleton
-    /// screen has no real content for `CyberpunkMonsterCrawlUITests` to
-    /// assert against yet. CYBERPUN-17-7 replaces the placeholder wholesale
-    /// and should delete this marker and re-point the UI test's assertion at
-    /// real HUD content rather than keeping the marker alive to satisfy it.
+    /// durable accessibility contract - it exists only because the skeleton
+    /// screen mounts no HUD content of its own for
+    /// `CyberpunkMonsterCrawlUITests` to assert against yet. CYBERPUN-17-7
+    /// adds the first real HUD content and should delete this marker then,
+    /// re-pointing the assertions below at that content rather than keeping
+    /// the marker alive to satisfy them.
+    ///
+    /// Two green assertions currently require this node to *exist*, and both
+    /// are part of 17-7's definition of done, not just the node itself:
+    ///
+    /// 1. `ScreensTests.test_gameplayScreenNode_exposesAContainerAccessibilityAnchor`
+    ///    (asserts the marker is an accessibility element labelled
+    ///    "Gameplay"), and
+    /// 2. `CyberpunkMonsterCrawlUITests.test_launchesIntoMenu_withAHittablePlayButton_thatStartsARun`,
+    ///    which waits on `app.descendants(matching: .any)["Gameplay"]` to
+    ///    prove PLAY landed on a real screen.
+    ///
+    /// A test that asserts a scaffolding node's presence is the usual
+    /// mechanism by which scaffolding outlives its ticket: deleting the
+    /// marker turns both red, so the cheap move in 17-7 is to keep it.
+    /// Delete the marker and re-point both assertions at real HUD content
+    /// together. Note this is *not* true of the no-text gates
+    /// (`mountsNoComingSoonText` in particular): those pin a
+    /// CYBERPUN-17-5-t4 invariant that must survive 17-7, not the marker.
     private let containerMarker = SKNode()
 
     init() {
-        placeholderLabel.fontName = "Menlo-Bold"
-        placeholderLabel.fontSize = 18
-        placeholderLabel.fontColor = PixelGritPalette.neonSecondary
-        placeholderLabel.verticalAlignmentMode = .center
-        placeholderLabel.horizontalAlignmentMode = .center
-
         containerMarker.name = "gameplayScreen.container"
         containerMarker.isAccessibilityElement = true
         containerMarker.accessibilityIdentifier = "gameplay.container"
@@ -62,14 +98,18 @@ final class GameplayScreenNode: ScreenNode {
 
         node.name = "gameplayScreen"
         node.addChild(containerMarker)
-        node.addChild(placeholderLabel)
     }
 
     func willEnter() {}
 
     func willExit() {}
 
-    func layout(for size: CGSize, safeAreaInsets: UIEdgeInsets) {
-        placeholderLabel.position = CGPoint(x: 0, y: (safeAreaInsets.bottom - safeAreaInsets.top) / 2)
-    }
+    /// Intentionally a no-op: the only thing mounted here is the non-visual
+    /// `containerMarker`, which is positioned at the screen's origin and has
+    /// nothing to re-lay out. The requirement stays satisfied by having no
+    /// size-dependent content at all rather than by re-deriving positions,
+    /// so rotation (AC5) cannot clip or strand anything on this screen. The
+    /// real HUD content CYBERPUN-17-7 / CYBERPUN-17-12 add will need a real
+    /// implementation here.
+    func layout(for size: CGSize, safeAreaInsets: UIEdgeInsets) {}
 }

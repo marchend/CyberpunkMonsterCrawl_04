@@ -178,30 +178,194 @@ final class ScreensTests: XCTestCase {
 
         gameplay.layout(for: size, safeAreaInsets: .zero)
 
+        // Anti-vacuity precondition: a `for` loop over an empty collection
+        // asserts nothing, so without this the gate below cannot tell "no
+        // mounted node blankets the viewport" from "the screen mounted
+        // nothing, so the loop never ran".
+        //
+        // Deliberately *not* the per-child `!frame.isEmpty` guard that
+        // `test_menuScreenNode_layout_resizesBackground_andKeepsButtonsWithinBounds`
+        // uses. That test's containment assertion is a positive one (the
+        // button must sit inside the viewport), so an empty frame there
+        // hides a real failure. Here the assertion is negative (nothing may
+        // contain the viewport) and the container marker's empty frame is
+        // the correct, shipped state - a literal frame guard would fail on
+        // correct code. What actually needs pinning is that there is
+        // something to walk at all.
+        XCTAssertFalse(
+            gameplay.node.children.isEmpty,
+            "the gameplay screen mounted nothing at all, so the containment gate below would "
+                + "pass vacuously"
+        )
+
         let viewport = CGRect(
             x: -size.width / 2, y: -size.height / 2,
             width: size.width, height: size.height
         )
-        for child in gameplay.node.children {
-            let frame = child.calculateAccumulatedFrame()
+        for node in Self.descendants(of: gameplay.node) {
+            let frame = node.calculateAccumulatedFrame()
             XCTAssertFalse(
                 frame.contains(viewport),
-                "\(child.name ?? "\(type(of: child))") blankets the viewport; the world must stay "
+                "\(node.name ?? "\(type(of: node))") blankets the viewport; the world must stay "
                     + "reachable behind the gameplay screen"
+            )
+        }
+
+        // The loop above is a containment check, and this screen's only node
+        // is the frameless container marker - so state the structural fact
+        // directly rather than letting the gate pass because there was
+        // nothing with a frame to measure: unlike menu / death /
+        // high-scores, this screen mounts no backdrop sprite at all.
+        //
+        // Walked over the whole subtree, at the same depth as the label gate
+        // below. The HUD container CYBERPUN-17-7 adds is exactly where a
+        // full-bleed plate would end up, and nested there it would slip past
+        // a direct-children `is SKSpriteNode` check *and* past the
+        // containment loop above (which measures the container's accumulated
+        // frame, which a plate inset by even a point would not fully
+        // contain) - leaving the one gate protecting "the world must show
+        // through" the shallower of the two.
+        let sprites = Self.spriteNodes(in: gameplay.node)
+        XCTAssertTrue(
+            sprites.isEmpty,
+            "the gameplay screen must mount no backdrop sprite anywhere in its subtree; the "
+                + "scene's own backgroundColor supplies the dark base and the world renders "
+                + "through this screen: found "
+                + "\(sprites.map { $0.name ?? "an unnamed SKSpriteNode" })"
+        )
+    }
+
+    /// The gameplay screen used to mount a neon "GAMEPLAY - WORLD COMING
+    /// SOON" label from the days when `worldLayer` was empty on entry to
+    /// `.gameplay`. The streamed ground plane (CYBERPUN-17-4), the building
+    /// and rooftop-sign nodes (CYBERPUN-17-5) and the player actor
+    /// (CYBERPUN-17-6) now all render there, so that label sat on top of the
+    /// very content it denied - a screen that visually contradicts itself
+    /// reads as "feature not delivered" to a human or a screenshot-driven
+    /// verification, however correct the rendering behind it is.
+    ///
+    /// This pins the removal (CYBERPUN-17-5-t4) rather than trusting a
+    /// deleted line to stay deleted. It walks the whole subtree, not just the
+    /// immediate children, so re-introducing the text inside a HUD container
+    /// fails here too. It deliberately does *not* forbid `SKLabelNode`
+    /// outright: CYBERPUN-17-7 / CYBERPUN-17-12 add real HUD text (HP, XP,
+    /// timer), which must not have to fight this gate.
+    func test_gameplayScreenNode_mountsNoComingSoonText() {
+        let gameplay = GameplayScreenNode()
+
+        // Both before and after layout: the removal must not be something a
+        // layout pass could put back.
+        for insets in [UIEdgeInsets.zero, UIEdgeInsets(top: 20, left: 0, bottom: 40, right: 0)] {
+            gameplay.layout(for: CGSize(width: 800, height: 400), safeAreaInsets: insets)
+
+            for label in Self.labelNodes(in: gameplay.node) {
+                let text = label.text ?? ""
+                XCTAssertFalse(
+                    text.uppercased().contains("COMING SOON"),
+                    "the gameplay screen must not mount placeholder text over the rendered city: "
+                        + "found \"\(text)\" on \(label.name ?? "an unnamed SKLabelNode")"
+                )
+            }
+        }
+    }
+
+    /// The wording-agnostic half of the CYBERPUN-17-5-t4 pin. The gate above
+    /// matches the literal text, which a *reworded* placeholder ("WORLD
+    /// PENDING", "TODO: world") would slip straight past, and it walks a
+    /// collection that is empty today. This states the structural fact
+    /// instead: after the removal the screen mounts exactly one child - the
+    /// non-visual container marker - and no text anywhere in its subtree.
+    ///
+    /// This is the assertion CYBERPUN-17-7 is expected to *rewrite* when it
+    /// adds the first real HUD content and deletes the marker; the
+    /// `mountsNoComingSoonText` gate above is the one that must survive it.
+    func test_gameplayScreenNode_mountsOnlyTheContainerMarker_andNoTextAnywhere() {
+        let gameplay = GameplayScreenNode()
+
+        // Before and after layout: neither construction nor a layout pass
+        // may put content back.
+        for insets in [UIEdgeInsets.zero, UIEdgeInsets(top: 20, left: 0, bottom: 40, right: 0)] {
+            gameplay.layout(for: CGSize(width: 800, height: 400), safeAreaInsets: insets)
+
+            let children = gameplay.node.children
+            XCTAssertEqual(
+                children.count, 1,
+                "the gameplay screen must mount exactly the container marker and nothing else; "
+                    + "found \(children.map { $0.name ?? "\(type(of: $0))" })"
+            )
+            XCTAssertEqual(
+                children.first?.accessibilityLabel, "Gameplay",
+                "the screen's single child must be the non-visual gameplay.container marker"
+            )
+
+            let labels = Self.labelNodes(in: gameplay.node)
+            XCTAssertTrue(
+                labels.isEmpty,
+                "the skeleton gameplay screen must mount no text at all - a reworded placeholder "
+                    + "is still a placeholder painted over the rendered city: found "
+                    + "\(labels.map { $0.text ?? "" })"
             )
         }
     }
 
-    func test_gameplayScreenNode_layout_centresThePlaceholderWithinTheSafeArea() {
-        let gameplay = GameplayScreenNode()
-        let size = CGSize(width: 800, height: 400)
-        let insets = UIEdgeInsets(top: 20, left: 0, bottom: 40, right: 0)
+    /// Anti-vacuity guard for the gate above: `GameplayScreenNode` mounts no
+    /// labels at all now, so that assertion iterates an empty collection and
+    /// would stay green even if `labelNodes(in:)` were blind. This proves the
+    /// walk really does surface a label, including one nested inside a
+    /// container (the shape a future HUD would use).
+    func test_labelNodeWalk_findsNestedLabels_soTheComingSoonGateIsNotVacuous() {
+        let root = SKNode()
+        let container = SKNode()
+        let nested = SKLabelNode(text: "WORLD COMING SOON")
+        nested.name = "nestedPlaceholder"
+        container.addChild(nested)
+        root.addChild(container)
+        root.addChild(SKLabelNode(text: "TOP LEVEL"))
 
-        gameplay.layout(for: size, safeAreaInsets: insets)
+        let found = Self.labelNodes(in: root)
 
-        let label = gameplay.node.children.compactMap { $0 as? SKLabelNode }.first
-        XCTAssertEqual(label?.position.x, 0)
-        XCTAssertEqual(label?.position.y, (insets.bottom - insets.top) / 2)
+        XCTAssertEqual(
+            Set(found.map { $0.text ?? "" }), ["WORLD COMING SOON", "TOP LEVEL"],
+            "the label walk must reach both a direct child and one nested inside a container"
+        )
+    }
+
+    /// Anti-vacuity guard for the backdrop gate, which now shares the label
+    /// gate's depth: `GameplayScreenNode` mounts no sprites at all, so that
+    /// assertion also iterates an empty collection. This proves the walk
+    /// really does surface a sprite nested inside a container - the shape a
+    /// full-bleed HUD plate would take once CYBERPUN-17-7 adds a HUD
+    /// container, and the case a direct-children check would miss.
+    func test_spriteNodeWalk_findsNestedSprites_soTheBackdropGateIsNotVacuous() {
+        let root = SKNode()
+        let container = SKNode()
+        let nested = SKSpriteNode(color: .black, size: CGSize(width: 800, height: 400))
+        nested.name = "nestedPlate"
+        container.addChild(nested)
+        root.addChild(container)
+
+        let found = Self.spriteNodes(in: root)
+
+        XCTAssertEqual(
+            found.map { $0.name ?? "" }, ["nestedPlate"],
+            "the sprite walk must reach a plate nested inside a container, or the backdrop gate "
+                + "is shallower than the label gate it sits beside"
+        )
+    }
+
+    /// Recursive so a node nested inside a future HUD container is still seen
+    /// by the gates above. Both the label gate and the backdrop gate are
+    /// derived from this one walk so they cannot drift apart in depth.
+    private static func descendants(of root: SKNode) -> [SKNode] {
+        root.children.flatMap { [$0] + descendants(of: $0) }
+    }
+
+    private static func labelNodes(in root: SKNode) -> [SKLabelNode] {
+        descendants(of: root).compactMap { $0 as? SKLabelNode }
+    }
+
+    private static func spriteNodes(in root: SKNode) -> [SKSpriteNode] {
+        descendants(of: root).compactMap { $0 as? SKSpriteNode }
     }
 
     func test_gameplayScreenNode_willEnterAndWillExit_areNoOps() {
