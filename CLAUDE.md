@@ -657,7 +657,8 @@ docs/bootstrap.md                          original spec (source of truth)
 - Floating thumbstick input + player movement computation, the first PR of
   `CYBERPUN-17-7` (implemented — `Sources/UI/FloatingThumbstickNode.swift`,
   `Sources/Gameplay/PlayerMovementController.swift`;
-  `FloatingThumbstickNodeTests`, `PlayerMovementControllerTests`). Two
+  `FloatingThumbstickNodeTests`, `PlayerMovementControllerTests`,
+  `ThumbstickMovementSeamTests`). Two
   self-contained, exhaustively unit-tested types, deliberately **not yet
   wired into a live scene**: `FloatingThumbstickNode` is the input
   *producer* — appears at first-touch location within the left half of the
@@ -668,15 +669,38 @@ docs/bootstrap.md                          original spec (source of truth)
   `beginTouch(at:)`/`updateTouch(at:)`/`endTouch()` rather than through
   `touchesBegan`/`touchesMoved`/`touchesEnded`, since `GameScene` does not
   yet route the latter two. `PlayerMovementController` is the *consumer*:
-  given a `StickState` and the render clock, it derives `velocity` (a
-  tile-space displacement, the stick's screen-space direction converted
-  through the existing `IsometricProjection.screenToTile(_:)` inverse
-  transform so "up the screen" maps to the correct tile-space diagonal,
-  never a duplicate projection), `facingVector` (the stick's own raw
-  screen-space direction, freezing at its last value below the dead zone —
-  facing tracks the movement stick only, there is no aim stick in this
-  story), and `isMoving` (exactly `StickState.isBeyondDeadZone`, exposed as
-  stable API for the upcoming auto-fire story, `CYBERPUN-17-9`). Replacing
+  given a `StickState` and the render clock, it derives
+  `frameDisplacement` (named for what it is — `deltaTime` is already folded
+  in, so a caller must never re-apply the timestep; a tile-space step
+  produced by scaling the stick's screen-space direction to
+  `maxPointsPerSecond * magnitude * deltaTime` **while still in screen
+  space** and only then passing it through the existing
+  `IsometricProjection.screenToTile(_:)` inverse transform, never a
+  duplicate projection. Because `screenToTile` is linear, that ordering
+  preserves the screen distance exactly, so a full stick push covers the
+  same on-screen distance in every heading; re-normalizing in tile space
+  instead would pin the speed in tile units and make a sideways push travel
+  exactly 2x as far per second on screen as an upward one on the 2:1
+  projection — a ratio no tiles-per-second value can fix), `facingVector`
+  (the stick's own raw screen-space direction, freezing at its last value
+  below the dead zone — facing tracks the movement stick only, there is no
+  aim stick in this story), and `isMoving` (exactly
+  `StickState.isBeyondDeadZone`, exposed as stable API for the upcoming
+  auto-fire story, `CYBERPUN-17-9`). `deltaTime` is clamped at derivation
+  to `maxFrameDelta` (1/20s) as well as floored at `0`, so a backgrounded
+  app, a debugger pause or the `.gameplay`-entry generation stall cannot
+  hand the (later) collision resolver a single frame that steps many tiles
+  and tunnels through a building. `canBeginTouch(at:)` requires
+  `isRunActive`, which makes "no run => no stick interaction" hold from
+  both directions rather than relying on each call site (the `didSet`
+  already cancels an in-flight drag), and asserts in DEBUG that
+  `layout(for:safeAreaInsets:)` has run, since a `.zero` `currentSize`
+  makes `leftRegion` degenerate and would otherwise silently refuse every
+  touch. Because both halves are unwired for now,
+  `ThumbstickMovementSeamTests` drives a real laid-out node through
+  `beginTouch`/`updateTouch`/`endTouch` and pipes its own `stickState`
+  straight into a real controller, so a y-sign, unit-vs-raw or dead-zone
+  disagreement between producer and consumer cannot ship green. Replacing
   `PlayerScaffoldingDriver`'s `SCAFFOLDING(CYBERPUN-17-7)` demo vector with
   this controller's output, extending `GameScene`'s touch dispatch to drive
   the stick, building collision and camera-follow are a later PR of this
