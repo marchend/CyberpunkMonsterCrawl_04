@@ -654,6 +654,33 @@ docs/bootstrap.md                          original spec (source of truth)
   driver's behaviour, so `CYBERPUN-17-7` deletes the driver, the flag and
   the vector substitution without deleting the production per-frame call
   site or a green test
+- Floating thumbstick input + player movement computation, the first PR of
+  `CYBERPUN-17-7` (implemented — `Sources/UI/FloatingThumbstickNode.swift`,
+  `Sources/Gameplay/PlayerMovementController.swift`;
+  `FloatingThumbstickNodeTests`, `PlayerMovementControllerTests`). Two
+  self-contained, exhaustively unit-tested types, deliberately **not yet
+  wired into a live scene**: `FloatingThumbstickNode` is the input
+  *producer* — appears at first-touch location within the left half of the
+  safe content area (excluding a reserved bottom-left HUD slot stacked
+  above it for the future pulse-ability button, `CYBERPUN-17-10`), tracks
+  a drag, clamps at `maxRadius`, and reports a plain `StickState` (unit
+  direction, `0...1` magnitude, `isBeyondDeadZone`) — driven directly via
+  `beginTouch(at:)`/`updateTouch(at:)`/`endTouch()` rather than through
+  `touchesBegan`/`touchesMoved`/`touchesEnded`, since `GameScene` does not
+  yet route the latter two. `PlayerMovementController` is the *consumer*:
+  given a `StickState` and the render clock, it derives `velocity` (a
+  tile-space displacement, the stick's screen-space direction converted
+  through the existing `IsometricProjection.screenToTile(_:)` inverse
+  transform so "up the screen" maps to the correct tile-space diagonal,
+  never a duplicate projection), `facingVector` (the stick's own raw
+  screen-space direction, freezing at its last value below the dead zone —
+  facing tracks the movement stick only, there is no aim stick in this
+  story), and `isMoving` (exactly `StickState.isBeyondDeadZone`, exposed as
+  stable API for the upcoming auto-fire story, `CYBERPUN-17-9`). Replacing
+  `PlayerScaffoldingDriver`'s `SCAFFOLDING(CYBERPUN-17-7)` demo vector with
+  this controller's output, extending `GameScene`'s touch dispatch to drive
+  the stick, building collision and camera-follow are a later PR of this
+  same story
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid. The footprint-only obstruction primitive exists
   (`BuildingObstruction`, above); wiring it into a live movement resolver is
