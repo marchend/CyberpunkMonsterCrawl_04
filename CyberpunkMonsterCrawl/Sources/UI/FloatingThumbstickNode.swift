@@ -49,8 +49,13 @@ struct StickState: Equatable {
 /// vector with this node's real `StickState` fed through
 /// `PlayerMovementController`, building collision and camera-follow, lands
 /// in a later PR of this same story -- this PR's own scope is explicitly
-/// "one producer (stick state), one consumer (velocity/facing/isMoving); no
-/// collision, camera, or world logic".
+/// "one producer (stick state), one consumer (displacement/facing/isMoving);
+/// no collision, camera, or world logic".
+///
+/// Until that wiring lands, `ThumbstickMovementSeamTests` pipes this node's
+/// own `stickState` from a real drag straight into
+/// `PlayerMovementController`, so the two halves' conventions are pinned
+/// against each other rather than only against their own isolated suites.
 ///
 /// **Touch-input agnostic.** This node holds no `UITouch` and does not
 /// override `touchesBegan`/`touchesMoved`/`touchesEnded` -- doing so would
@@ -148,9 +153,12 @@ final class FloatingThumbstickNode: SKNode {
     /// Whether a run is currently in progress. A later PR wires this to
     /// `GameplayScreenNode`'s `willEnter()`/`willExit()`. While `false` the
     /// stick is fully hidden -- there is nothing to move in
-    /// `.menu`/`.death`/`.highScores` -- and any touch currently tracking is
+    /// `.menu`/`.death`/`.highScores` -- any touch currently tracking is
     /// cancelled back to rest, so a run ending mid-drag can never strand the
-    /// stick off-centre or mid-fade for the next run.
+    /// stick off-centre or mid-fade for the next run, and no *new* touch may
+    /// begin one (`canBeginTouch(at:)` refuses while this is `false`). Those
+    /// two halves together are what make "no run => no stick interaction" an
+    /// invariant rather than a convention each call site has to uphold.
     var isRunActive: Bool = false {
         didSet {
             guard isRunActive != oldValue else { return }
@@ -255,9 +263,33 @@ final class FloatingThumbstickNode: SKNode {
     // MARK: - Touch tracking
 
     /// Whether a touch at `point` (already in this node's coordinate space)
-    /// is allowed to engage the stick: inside the left region, and outside
-    /// the reserved pulse-button slot.
+    /// is allowed to engage the stick: a run is active, the point is inside
+    /// the left region, and it is outside the reserved pulse-button slot.
+    ///
+    /// The `isRunActive` half makes the run invariant hold from *both*
+    /// directions. `isRunActive`'s `didSet` already owns "run ended =>
+    /// cancel the in-flight drag"; without the check here a touch could
+    /// still *start* one after the run was over -- `beginTouch` would return
+    /// `true`, `isTracking` would flip, `alpha` would go to `activeAlpha` on
+    /// a hidden node, and `stickState` would start reporting deflection with
+    /// nothing left to move. Owning it here rather than leaving it to every
+    /// future call site is what stops the next caller from forgetting.
     func canBeginTouch(at point: CGPoint) -> Bool {
+        assert(
+            currentSize != .zero,
+            """
+            FloatingThumbstickNode was asked about a touch before \
+            layout(for:safeAreaInsets:) ran. `currentSize`/\
+            `currentSafeAreaInsets` are still `.zero`, which makes \
+            `leftRegion` a degenerate rect at the origin, so every touch is \
+            silently refused and the stick simply never responds. Call \
+            `layout(for:safeAreaInsets:)` when mounting the node (and on \
+            every size/safe-area change) before routing touches to it.
+            """
+        )
+
+        guard isRunActive else { return false }
+
         let region = Self.leftRegion(forSize: currentSize, safeAreaInsets: currentSafeAreaInsets)
         guard region.contains(point) else { return false }
         let reserved = Self.reservedPulseButtonSlot(forSize: currentSize, safeAreaInsets: currentSafeAreaInsets)

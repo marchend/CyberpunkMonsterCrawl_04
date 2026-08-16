@@ -2,8 +2,17 @@ import CoreGraphics
 import Foundation
 
 /// Pure, SpriteKit-independent computation of the player's per-frame
-/// movement outputs (`velocity`, `facingVector`, `isMoving`) from the
-/// floating thumbstick's `StickState` plus elapsed time.
+/// movement outputs (`frameDisplacement`, `facingVector`, `isMoving`) from
+/// the floating thumbstick's `StickState` plus elapsed time.
+///
+/// **Naming note.** The movement output is called `frameDisplacement`, not
+/// `velocity`, because `deltaTime` is already folded into it: it is the
+/// distance to move *this frame*, not a per-second rate. A property named
+/// `velocity` invites the next caller to write `position += velocity * dt`
+/// and apply the timestep twice, and a doc comment is a weak defence
+/// against that. Naming it for what it actually is makes the trap
+/// structural rather than documented-against -- the same discipline
+/// `TilePoint` applies to keeping tile space and screen space apart.
 ///
 /// **This is the real replacement for the demo cycle.** Where
 /// `SCAFFOLDING(CYBERPUN-17-7)`'s `PlayerScaffoldingDriver` synthesises a
@@ -16,7 +25,8 @@ import Foundation
 ///
 /// **Scope of this PR (`CYBERPUN-17-7` PR 1).** This is the input
 /// *consumer* half of the story: given a `StickState` and the render clock,
-/// it computes what the player's velocity/facing/moving state *should be*.
+/// it computes what the player's displacement/facing/moving state *should
+/// be*.
 /// It does not touch `PlayerNode.position`, does not resolve building
 /// collision, and is not yet wired into `GameScene.update(_:)` in place of
 /// `PlayerScaffoldingDriver` -- that wiring (which also deletes the
@@ -24,13 +34,67 @@ import Foundation
 /// later PR of this same story, alongside collision and camera-follow. See
 /// `FloatingThumbstickNode`'s own doc comment for the same scope note on the
 /// producer side.
+///
+/// Because that split leaves both halves without a production call site for
+/// now, `ThumbstickMovementSeamTests` drives a real `FloatingThumbstickNode`
+/// drag straight into this controller: the producer and consumer cannot
+/// silently disagree about y-sign, unit-vs-raw direction or dead-zone
+/// semantics while waiting to be wired together.
 final class PlayerMovementController {
 
-    /// World-space (tile) units per second the player covers at full stick
-    /// deflection (`StickState.magnitude == 1`). Tuning is a later PR's
-    /// concern (once collision/camera exist to feel it against); this value
-    /// only needs to be positive and finite for the conversion math below.
-    static let maxTilesPerSecond: Double = 3.0
+    /// On-screen distance (points) covered by a one-tile step along a single
+    /// tile axis on the 96x48 projection -- `hypot(48, 24)`. Only used to
+    /// derive `maxPointsPerSecond`, so the screen-space speed constant is
+    /// visibly anchored to the projection's own geometry rather than being
+    /// an unexplained magic number.
+    private static let pointsPerTileAxisStep = hypot(
+        IsometricProjection.tileHalfWidth,
+        IsometricProjection.tileHalfHeight
+    )
+
+    /// **On-screen** points per second the player covers at full stick
+    /// deflection (`StickState.magnitude == 1`) -- and, unlike a tile-space
+    /// speed constant, the same in *every* heading.
+    ///
+    /// Normalizing in tile space (what this controller used to do) makes the
+    /// player's speed constant in tile units, which on a 2:1 projection
+    /// means the on-screen speed varies by exactly 2x with heading: a full
+    /// deflection sideways covers `hypot(96, 0)`-worth of screen per tile
+    /// unit while a full deflection up the screen covers only `hypot(0,
+    /// 48)`-worth. That is a feel bug no *value* of a tiles-per-second
+    /// constant can fix, because it is a ratio. Pinning the speed in screen
+    /// space instead makes a full stick push travel the same number of
+    /// points per second whichever way it points, which is what a player
+    /// actually perceives.
+    ///
+    /// Tuning remains a later PR's concern (once collision/camera exist to
+    /// feel it against); the value is chosen to preserve the previous
+    /// 3-tiles-per-second feel *along a tile axis* so this change is a pure
+    /// heading-consistency fix and not a stealth speed change.
+    static let maxPointsPerSecond: Double = 3 * pointsPerTileAxisStep
+
+    /// Upper bound (seconds) on any single frame's `deltaTime`, equivalent
+    /// to one 20fps frame.
+    ///
+    /// `max(0, ...)` alone only guards the *lower* end. A backgrounded app,
+    /// a debugger pause, or the known `.gameplay`-entry generation stall
+    /// (`ChunkStreamingManager.updateCamera` still generates all 49 chunks
+    /// synchronously -- see the `GroundPlaneStreamer` note in AGENT.md) can
+    /// hand `update` a multi-second gap, which without a cap becomes a
+    /// single-frame displacement of many tiles. That is harmless while
+    /// nothing applies the displacement, but it turns into a tunnelling bug
+    /// the moment collision lands: a footprint-based resolver that tests (or
+    /// even sweeps) the destination tile will happily step the player
+    /// straight through a building if one frame moves 15 tiles. Capping
+    /// here, where the delta is derived, means the guarantee exists *before*
+    /// the resolver is written against it rather than being retrofitted
+    /// after the first tunnelling report.
+    ///
+    /// The cost of the cap is that the player moves slightly slower than
+    /// wall-clock through a stall, which is the standard and far cheaper
+    /// trade -- a dropped fraction of a second of travel versus a player
+    /// teleported inside geometry.
+    static let maxFrameDelta: TimeInterval = 1.0 / 20.0
 
     /// The `currentTime` most recently passed to `update`, used to derive
     /// this call's `deltaTime`. `nil` until the first call, so the very
@@ -41,15 +105,20 @@ final class PlayerMovementController {
     private(set) var lastFrameTimestamp: TimeInterval?
 
     /// This frame's tile-space displacement: the stick's screen-space
-    /// (SpriteKit, y-up) direction converted through
-    /// `IsometricProjection.screenToTile(_:)` -- the project's existing
-    /// inverse isometric transform, not a duplicate of it -- so "up the
-    /// screen" maps to the tile-space diagonal that actually renders as
-    /// "up" once projected, rather than to a naive tile-space unit step.
-    /// The converted direction is re-normalized before being scaled by
-    /// `maxTilesPerSecond * magnitude * deltaTime`, so the projection only
-    /// ever decides *which way* the player moves in tile space, never how
-    /// far -- that stays under this controller's own speed constant.
+    /// (SpriteKit, y-up) direction scaled to `maxPointsPerSecond *
+    /// magnitude * deltaTime` points **while still in screen space**, then
+    /// converted through `IsometricProjection.screenToTile(_:)` -- the
+    /// project's existing inverse isometric transform, not a duplicate of
+    /// it -- so "up the screen" maps to the tile-space diagonal that
+    /// actually renders as "up" once projected, rather than to a naive
+    /// tile-space unit step.
+    ///
+    /// Because `screenToTile` is linear, projecting an already-scaled screen
+    /// step preserves that screen distance exactly, so the player's
+    /// *rendered* speed is identical in every heading. The earlier version
+    /// re-normalized in tile space instead, which pinned the speed in tile
+    /// units and therefore made a sideways push travel exactly 2x as far
+    /// per second on screen as an upward one -- see `maxPointsPerSecond`.
     ///
     /// Callers apply this directly to a tile-space position; there is no
     /// further per-caller deltaTime multiplication needed. It is exactly
@@ -58,7 +127,7 @@ final class PlayerMovementController {
     /// very first `update` call -- regardless of how far the stick is
     /// deflected, since zero elapsed time means zero displacement actually
     /// happened.
-    private(set) var velocity: CGVector = .zero
+    private(set) var frameDisplacement: CGVector = .zero
 
     /// The player's current facing, expressed the same way `PlayerNode`
     /// consumes movement (`Direction8.from(spriteKitVector:)`'s SpriteKit
@@ -79,7 +148,7 @@ final class PlayerMovementController {
     /// `true` only while `StickState.isBeyondDeadZone` is `true`. Exposed as
     /// stable, public API: the upcoming auto-fire/weapons story
     /// (`CYBERPUN-17-9`) reads this to gate movement-dependent behaviour,
-    /// independent of this frame's raw stick deflection or velocity.
+    /// independent of this frame's raw stick deflection or displacement.
     private(set) var isMoving = false
 
     init() {}
@@ -89,7 +158,7 @@ final class PlayerMovementController {
     /// monotonically-increasing render clock `GameScene.update(_:)` already
     /// threads through `advancePlayer(currentTime:)`.
     func update(stickState: StickState, currentTime: TimeInterval) {
-        let deltaTime = lastFrameTimestamp.map { max(0, currentTime - $0) } ?? 0
+        let deltaTime = lastFrameTimestamp.map { min(Self.maxFrameDelta, max(0, currentTime - $0)) } ?? 0
         lastFrameTimestamp = currentTime
 
         isMoving = stickState.isBeyondDeadZone
@@ -98,7 +167,7 @@ final class PlayerMovementController {
             facingVector = stickState.direction
         }
 
-        velocity = Self.tileVelocity(
+        frameDisplacement = Self.tileDisplacement(
             forStickDirection: stickState.direction,
             magnitude: stickState.magnitude,
             isBeyondDeadZone: stickState.isBeyondDeadZone,
@@ -108,8 +177,15 @@ final class PlayerMovementController {
 
     /// The pure conversion `update(stickState:currentTime:)` delegates to:
     /// a SpriteKit-space stick direction -> a tile-space displacement for
-    /// `deltaTime` seconds at `maxTilesPerSecond * magnitude`.
-    private static func tileVelocity(
+    /// `deltaTime` seconds at `maxPointsPerSecond * magnitude`.
+    ///
+    /// The scaling happens in **screen** space, *before* the projection, and
+    /// the result is not re-normalized afterwards: `screenToTile` is linear,
+    /// so projecting an already-correctly-scaled screen step yields the tile
+    /// step whose rendered length is exactly that screen distance. This is
+    /// the whole reason the player no longer moves twice as fast sideways as
+    /// upward -- see `maxPointsPerSecond`.
+    private static func tileDisplacement(
         forStickDirection direction: CGVector,
         magnitude: CGFloat,
         isBeyondDeadZone: Bool,
@@ -117,12 +193,19 @@ final class PlayerMovementController {
     ) -> CGVector {
         guard isBeyondDeadZone, deltaTime > 0, direction != .zero else { return .zero }
 
-        let tileDirection = IsometricProjection.screenToTile(CGPoint(x: direction.dx, y: direction.dy))
-        let tileDirectionLength = hypot(tileDirection.x, tileDirection.y)
-        guard tileDirectionLength > 0 else { return .zero }
+        // `StickState.direction` is documented unit-length, but normalizing
+        // here keeps the screen-space distance exact for any caller that
+        // hands over a merely-nonzero vector.
+        let directionLength = hypot(Double(direction.dx), Double(direction.dy))
+        guard directionLength > 0 else { return .zero }
 
-        let displacement = maxTilesPerSecond * Double(magnitude) * deltaTime
-        let scale = displacement / tileDirectionLength
-        return CGVector(dx: CGFloat(tileDirection.x * scale), dy: CGFloat(tileDirection.y * scale))
+        let screenDistance = maxPointsPerSecond * Double(magnitude) * deltaTime
+        let screenStep = CGPoint(
+            x: CGFloat(Double(direction.dx) / directionLength * screenDistance),
+            y: CGFloat(Double(direction.dy) / directionLength * screenDistance)
+        )
+
+        let tileStep = IsometricProjection.screenToTile(screenStep)
+        return CGVector(dx: CGFloat(tileStep.x), dy: CGFloat(tileStep.y))
     }
 }

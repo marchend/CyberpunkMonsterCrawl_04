@@ -21,9 +21,15 @@ final class FloatingThumbstickNodeTests: XCTestCase {
     private let sceneSize = CGSize(width: 390, height: 844)
     private let insets = UIEdgeInsets(top: 47, left: 0, bottom: 34, right: 0)
 
-    private func makeLaidOutStick() -> FloatingThumbstickNode {
+    /// Defaults to an **active run**, because that is the only state in
+    /// which the stick accepts touches at all: `canBeginTouch(at:)` refuses
+    /// while `isRunActive` is `false`, so a stick built without it could
+    /// only ever exercise the rejection paths. The run-inactive cases opt
+    /// out explicitly via `runActive: false`.
+    private func makeLaidOutStick(runActive: Bool = true) -> FloatingThumbstickNode {
         let stick = FloatingThumbstickNode()
         stick.layout(for: sceneSize, safeAreaInsets: insets)
+        stick.isRunActive = runActive
         return stick
     }
 
@@ -34,6 +40,49 @@ final class FloatingThumbstickNodeTests: XCTestCase {
         let point = CGPoint(x: stick.restPosition.x, y: stick.restPosition.y + 40)
 
         XCTAssertTrue(stick.beginTouch(at: point))
+    }
+
+    // MARK: - No run => no interaction, from both directions
+
+    /// The symmetric half of `isRunActive`'s own `didSet` (which cancels an
+    /// in-flight drag when a run ends). Without this gate a touch could
+    /// still *start* a drag after the run was over: `beginTouch` would
+    /// return `true`, the node would go to `activeAlpha` while hidden, and
+    /// `stickState` would report deflection with nothing left to move.
+    func test_beginTouch_isRefused_whileNoRunIsActive() {
+        let stick = makeLaidOutStick(runActive: false)
+        let point = CGPoint(x: stick.restPosition.x, y: stick.restPosition.y + 40)
+
+        // Sanity: the very same point is accepted once a run is active, so
+        // this test pins the run gate and not the region geometry.
+        XCTAssertTrue(FloatingThumbstickNode.leftRegion(forSize: sceneSize, safeAreaInsets: insets).contains(point))
+
+        XCTAssertFalse(stick.canBeginTouch(at: point))
+        XCTAssertFalse(stick.beginTouch(at: point))
+        XCTAssertEqual(stick.stickState, .resting, "a refused touch must not start reporting deflection")
+    }
+
+    /// A refused touch must leave the *visuals* untouched too -- otherwise a
+    /// hidden node still brightens to `activeAlpha` behind the death screen.
+    func test_beginTouch_whileNoRunIsActive_leavesTheStickHiddenAndDimmed() {
+        let stick = makeLaidOutStick(runActive: false)
+
+        stick.beginTouch(at: stick.restPosition)
+
+        XCTAssertTrue(stick.isHidden)
+        XCTAssertEqual(stick.alpha, FloatingThumbstickNode.restAlpha, accuracy: 1e-6)
+    }
+
+    /// And a drag refused at `beginTouch` must stay refused: `updateTouch`
+    /// is a no-op without tracking, so no deflection can leak through.
+    func test_updateTouch_afterARefusedBeginTouch_reportsNoDeflection() {
+        let stick = makeLaidOutStick(runActive: false)
+        let origin = stick.restPosition
+
+        stick.beginTouch(at: origin)
+        stick.updateTouch(at: CGPoint(x: origin.x + FloatingThumbstickNode.maxRadius, y: origin.y))
+
+        XCTAssertEqual(stick.stickState, .resting)
     }
 
     func test_beginTouch_rejectsATouchInsideTheRightHalf() {
@@ -152,13 +201,12 @@ final class FloatingThumbstickNodeTests: XCTestCase {
     // MARK: - Rest/dimmed vs active vs hidden
 
     func test_stick_isFullyHidden_whileNoRunIsActive() {
-        let stick = makeLaidOutStick()
+        let stick = makeLaidOutStick(runActive: false)
         XCTAssertTrue(stick.isHidden)
     }
 
     func test_stick_isDimmedButVisible_atRest_duringAnActiveRun() {
         let stick = makeLaidOutStick()
-        stick.isRunActive = true
 
         XCTAssertFalse(stick.isHidden)
         XCTAssertEqual(stick.alpha, FloatingThumbstickNode.restAlpha, accuracy: 1e-6)
@@ -167,7 +215,6 @@ final class FloatingThumbstickNodeTests: XCTestCase {
 
     func test_stick_isMoreOpaque_whileATouchIsActive() {
         let stick = makeLaidOutStick()
-        stick.isRunActive = true
         XCTAssertTrue(stick.beginTouch(at: stick.restPosition))
 
         XCTAssertEqual(stick.alpha, FloatingThumbstickNode.activeAlpha, accuracy: 1e-6)
@@ -176,7 +223,6 @@ final class FloatingThumbstickNodeTests: XCTestCase {
 
     func test_endTouch_returnsToRestPosition_andRestAlpha() {
         let stick = makeLaidOutStick()
-        stick.isRunActive = true
         let origin = stick.restPosition
         XCTAssertTrue(stick.beginTouch(at: CGPoint(x: origin.x + 100, y: origin.y)))
         stick.updateTouch(at: CGPoint(x: origin.x + 200, y: origin.y))
@@ -189,7 +235,6 @@ final class FloatingThumbstickNodeTests: XCTestCase {
 
     func test_runEnding_cancelsAnInProgressTouch_andHidesTheStick() {
         let stick = makeLaidOutStick()
-        stick.isRunActive = true
         XCTAssertTrue(stick.beginTouch(at: stick.restPosition))
 
         stick.isRunActive = false

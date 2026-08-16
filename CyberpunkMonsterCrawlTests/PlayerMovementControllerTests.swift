@@ -15,18 +15,22 @@ import XCTest
 /// SpriteKit's own node storage.
 final class PlayerMovementControllerTests: XCTestCase {
 
-    private let accuracy: CGFloat = 1e-9
+    /// A representative in-budget frame step. Deliberately below
+    /// `PlayerMovementController.maxFrameDelta` so these tests exercise the
+    /// conversion math rather than the stall clamp, which
+    /// `test_deltaTime_isClampedAtMaxFrameDelta_soAStallCannotTunnel` owns.
+    private let frameDelta: TimeInterval = 1.0 / 60.0
 
     // MARK: - First frame: nil lastFrameTimestamp forces deltaTime == 0
 
-    func test_firstUpdate_hasNilLastFrameTimestamp_andProducesZeroVelocity() {
+    func test_firstUpdate_hasNilLastFrameTimestamp_andProducesZeroDisplacement() {
         let controller = PlayerMovementController()
         XCTAssertNil(controller.lastFrameTimestamp)
 
         let deflected = StickState(direction: CGVector(dx: 0, dy: 1), magnitude: 1, isBeyondDeadZone: true)
         controller.update(stickState: deflected, currentTime: 100)
 
-        XCTAssertEqual(controller.velocity, .zero, "deltaTime == 0 on the first frame must produce zero movement.")
+        XCTAssertEqual(controller.frameDisplacement, .zero, "deltaTime == 0 on the first frame must produce zero movement.")
         XCTAssertEqual(controller.lastFrameTimestamp, 100)
     }
 
@@ -86,8 +90,8 @@ final class PlayerMovementControllerTests: XCTestCase {
         XCTAssertEqual(controller.facingVector, CGVector(dx: 0, dy: -1))
     }
 
-    // MARK: - Velocity: direction/magnitude conversion through the isometric
-    // projection, for all 8 headings
+    // MARK: - Frame displacement: direction/magnitude conversion through the
+    // isometric projection, for all 8 headings
 
     private static let headings: [CGVector] = [
         CGVector(dx: 0, dy: -1), // south
@@ -100,48 +104,159 @@ final class PlayerMovementControllerTests: XCTestCase {
         CGVector(dx: -1, dy: -1).normalized, // southwest
     ]
 
-    func test_velocity_convertsEveryHeadingThroughTheIsometricProjection() {
+    /// Deliberately asserted in **screen** space, via `tileToScreen`, rather
+    /// than by recomputing the production expression as its own expectation.
+    /// The previous version of this test rebuilt `tileDirection / tileLength
+    /// * maxTilesPerSecond` as its expected value, so it asserted the
+    /// implementation against a copy of itself and stayed green whether the
+    /// speed was pinned in tile space or screen space -- exactly the bug it
+    /// should have caught. Projecting the result back to screen space and
+    /// pinning its *length* distinguishes the two behaviours: under the old
+    /// tile-space normalization the east heading came out 2x longer on
+    /// screen than the north one.
+    func test_frameDisplacement_hasTheSameOnScreenLength_forEveryHeading() {
+        let expectedScreenDistance = PlayerMovementController.maxPointsPerSecond * frameDelta
+
         for direction in Self.headings {
             let controller = PlayerMovementController()
             // First call only establishes `lastFrameTimestamp`; its own
-            // deltaTime is forced to 0, so it contributes no velocity.
+            // deltaTime is forced to 0, so it contributes no displacement.
             controller.update(
                 stickState: StickState(direction: direction, magnitude: 1, isBeyondDeadZone: true),
                 currentTime: 0
             )
             controller.update(
                 stickState: StickState(direction: direction, magnitude: 1, isBeyondDeadZone: true),
-                currentTime: 1
+                currentTime: frameDelta
             )
 
-            let tileDirection = IsometricProjection.screenToTile(CGPoint(x: direction.dx, y: direction.dy))
-            let tileLength = hypot(tileDirection.x, tileDirection.y)
-            let expectedDisplacement = PlayerMovementController.maxTilesPerSecond // magnitude 1, deltaTime 1
-            let expectedDx = CGFloat(tileDirection.x / tileLength * expectedDisplacement)
-            let expectedDy = CGFloat(tileDirection.y / tileLength * expectedDisplacement)
+            let onScreen = IsometricProjection.tileToScreen(
+                TilePoint(x: Double(controller.frameDisplacement.dx), y: Double(controller.frameDisplacement.dy))
+            )
+            let screenDistance = hypot(Double(onScreen.x), Double(onScreen.y))
 
-            XCTAssertEqual(controller.velocity.dx, expectedDx, accuracy: accuracy, "heading \(direction)")
-            XCTAssertEqual(controller.velocity.dy, expectedDy, accuracy: accuracy, "heading \(direction)")
+            XCTAssertEqual(
+                screenDistance, expectedScreenDistance, accuracy: 1e-9,
+                "heading \(direction) must cover the same on-screen distance as every other heading"
+            )
         }
     }
 
-    func test_velocity_scalesWithMagnitude() {
+    /// The companion to the length test above: equal *lengths* alone would
+    /// also be satisfied by a controller that ignored the stick and always
+    /// moved in one direction, so pin the projected screen *direction* back
+    /// to the stick's own heading too.
+    func test_frameDisplacement_pointsBackAtTheStickHeading_onceProjectedToScreen() {
+        for direction in Self.headings {
+            let controller = PlayerMovementController()
+            controller.update(
+                stickState: StickState(direction: direction, magnitude: 1, isBeyondDeadZone: true),
+                currentTime: 0
+            )
+            controller.update(
+                stickState: StickState(direction: direction, magnitude: 1, isBeyondDeadZone: true),
+                currentTime: frameDelta
+            )
+
+            let onScreen = IsometricProjection.tileToScreen(
+                TilePoint(x: Double(controller.frameDisplacement.dx), y: Double(controller.frameDisplacement.dy))
+            )
+            let length = hypot(onScreen.x, onScreen.y)
+
+            XCTAssertEqual(onScreen.x / length, direction.dx, accuracy: 1e-9, "heading \(direction)")
+            XCTAssertEqual(onScreen.y / length, direction.dy, accuracy: 1e-9, "heading \(direction)")
+        }
+    }
+
+    func test_frameDisplacement_scalesWithMagnitude() {
         let controller = PlayerMovementController()
         let east = CGVector(dx: 1, dy: 0)
         controller.update(stickState: StickState(direction: east, magnitude: 0.5, isBeyondDeadZone: true), currentTime: 0)
-        controller.update(stickState: StickState(direction: east, magnitude: 0.5, isBeyondDeadZone: true), currentTime: 1)
+        controller.update(
+            stickState: StickState(direction: east, magnitude: 0.5, isBeyondDeadZone: true),
+            currentTime: frameDelta
+        )
 
-        let tileDirection = IsometricProjection.screenToTile(CGPoint(x: east.dx, y: east.dy))
-        let tileLength = hypot(tileDirection.x, tileDirection.y)
-        let expectedDisplacement = PlayerMovementController.maxTilesPerSecond * 0.5
-        let expectedDx = CGFloat(tileDirection.x / tileLength * expectedDisplacement)
-        let expectedDy = CGFloat(tileDirection.y / tileLength * expectedDisplacement)
+        let onScreen = IsometricProjection.tileToScreen(
+            TilePoint(x: Double(controller.frameDisplacement.dx), y: Double(controller.frameDisplacement.dy))
+        )
+        let screenDistance = hypot(Double(onScreen.x), Double(onScreen.y))
 
-        XCTAssertEqual(controller.velocity.dx, expectedDx, accuracy: accuracy)
-        XCTAssertEqual(controller.velocity.dy, expectedDy, accuracy: accuracy)
+        XCTAssertEqual(
+            screenDistance,
+            PlayerMovementController.maxPointsPerSecond * 0.5 * frameDelta,
+            accuracy: 1e-9
+        )
     }
 
-    func test_velocity_isZero_belowTheDeadZone() {
+    // MARK: - Stall clamp on the upper end of deltaTime
+
+    /// A backgrounded app, a debugger pause or the `.gameplay`-entry chunk
+    /// generation stall can hand `update` a multi-second gap. Uncapped, that
+    /// is a single frame worth many tiles of displacement -- which becomes a
+    /// tunnelling bug the moment a collision resolver tests the destination
+    /// tile. Pin the cap here, where the delta is derived, so the resolver
+    /// can be written against the guarantee rather than around it.
+    func test_deltaTime_isClampedAtMaxFrameDelta_soAStallCannotTunnel() {
+        let controller = PlayerMovementController()
+        let east = CGVector(dx: 1, dy: 0)
+        controller.update(stickState: StickState(direction: east, magnitude: 1, isBeyondDeadZone: true), currentTime: 0)
+
+        // A 12-second stall -- far beyond any real frame.
+        controller.update(stickState: StickState(direction: east, magnitude: 1, isBeyondDeadZone: true), currentTime: 12)
+
+        let onScreen = IsometricProjection.tileToScreen(
+            TilePoint(x: Double(controller.frameDisplacement.dx), y: Double(controller.frameDisplacement.dy))
+        )
+        let screenDistance = hypot(Double(onScreen.x), Double(onScreen.y))
+
+        XCTAssertEqual(
+            screenDistance,
+            PlayerMovementController.maxPointsPerSecond * PlayerMovementController.maxFrameDelta,
+            accuracy: 1e-9,
+            "a multi-second stall must be capped to one maxFrameDelta of travel"
+        )
+        XCTAssertEqual(
+            controller.lastFrameTimestamp, 12,
+            "clamping the delta must not desynchronise the stored timestamp from the render clock"
+        )
+    }
+
+    /// The clamp must not disturb ordinary frames: a normal 60fps step is
+    /// well inside the budget and must be passed through untouched.
+    func test_deltaTime_isNotClampedForAnOrdinaryFrame() {
+        let controller = PlayerMovementController()
+        let east = CGVector(dx: 1, dy: 0)
+        controller.update(stickState: StickState(direction: east, magnitude: 1, isBeyondDeadZone: true), currentTime: 0)
+        controller.update(
+            stickState: StickState(direction: east, magnitude: 1, isBeyondDeadZone: true),
+            currentTime: frameDelta
+        )
+
+        let onScreen = IsometricProjection.tileToScreen(
+            TilePoint(x: Double(controller.frameDisplacement.dx), y: Double(controller.frameDisplacement.dy))
+        )
+        let screenDistance = hypot(Double(onScreen.x), Double(onScreen.y))
+
+        XCTAssertEqual(
+            screenDistance,
+            PlayerMovementController.maxPointsPerSecond * frameDelta,
+            accuracy: 1e-9
+        )
+    }
+
+    /// A clock that goes backwards (the lower end `max(0, ...)` already
+    /// guarded) must still produce no movement, not negative displacement.
+    func test_deltaTime_isFlooredAtZero_forANonMonotonicClock() {
+        let controller = PlayerMovementController()
+        let east = CGVector(dx: 1, dy: 0)
+        controller.update(stickState: StickState(direction: east, magnitude: 1, isBeyondDeadZone: true), currentTime: 10)
+        controller.update(stickState: StickState(direction: east, magnitude: 1, isBeyondDeadZone: true), currentTime: 4)
+
+        XCTAssertEqual(controller.frameDisplacement, .zero)
+    }
+
+    func test_frameDisplacement_isZero_belowTheDeadZone() {
         let controller = PlayerMovementController()
         controller.update(stickState: .resting, currentTime: 0)
         controller.update(
@@ -149,10 +264,10 @@ final class PlayerMovementControllerTests: XCTestCase {
             currentTime: 1
         )
 
-        XCTAssertEqual(controller.velocity, .zero)
+        XCTAssertEqual(controller.frameDisplacement, .zero)
     }
 
-    func test_velocity_isZero_whenStickIsAtRest() {
+    func test_frameDisplacement_isZero_whenStickIsAtRest() {
         let controller = PlayerMovementController()
         controller.update(
             stickState: StickState(direction: CGVector(dx: 1, dy: 0), magnitude: 1, isBeyondDeadZone: true),
@@ -160,7 +275,7 @@ final class PlayerMovementControllerTests: XCTestCase {
         )
         controller.update(stickState: .resting, currentTime: 1)
 
-        XCTAssertEqual(controller.velocity, .zero)
+        XCTAssertEqual(controller.frameDisplacement, .zero)
     }
 }
 
