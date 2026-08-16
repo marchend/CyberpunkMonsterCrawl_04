@@ -122,6 +122,63 @@ enum AtlasSheet: CaseIterable {
     }
 }
 
+/// Where the neon glyphs actually sit *inside* each 48×48 `sprite_signs`
+/// cell, measured off the shipped PNG's alpha channel rather than inferred
+/// from the cell size.
+///
+/// **Why this exists.** `AtlasSheet.signs` pins the *sheet* geometry
+/// (192×144px, 48×48 cells, 12 of them) and `SpriteSheet.init` measures that
+/// against the shipped art — but neither says anything about where the
+/// opaque pixels sit within a cell, and that is what a bottom-centre
+/// roofline anchor depends on.
+///
+/// **How this was measured.** A pixel-alpha scan of the shipped
+/// `sprite_signs.png` puts every cell's opaque content in a band that is
+/// *vertically centred* in its cell, not flush with the cell's bottom edge:
+/// cell 0's glyphs occupy rows 18..<30 of its 48-row cell, i.e. 18 fully
+/// transparent rows above them and 18 below. The bands below are those
+/// measured row ranges, in `AtlasCellIndex.signs` order (top-row-is-0, the
+/// same convention `SpriteSheet.texture(col:row:)` reads).
+///
+/// **What consumes it.** `RooftopSignRenderer` anchors a sign bottom-centre
+/// on its carrier building's roofline; mounting the raw 48×48 cell there
+/// would leave every sign floating 8–19px above the roof it stands on (the
+/// visible-gap failure AC7 calls out), because those transparent rows below
+/// the glyphs would sit between the glyphs and the roofline. The renderer
+/// therefore drops the cell by `bottomInset(forSignCellIndex:)` so the
+/// *glyphs'* base — not the cell's empty bottom edge — lands on the
+/// roofline, while still cropping the whole cell so a sign's art is never
+/// clipped.
+///
+/// **How that stays honest.** These are not left as prose:
+/// `RooftopSignSpriteAlignmentTests` re-runs the alpha scan at test time and
+/// asserts every declared band equals the measured one, for all 12 cells. Art
+/// re-authored bottom-flush (or re-cut on a different grid) turns the suite
+/// red here rather than silently un-tuning the renderer's offset.
+enum AtlasSignGlyphBand {
+    /// Measured opaque-content row range within each cell, indexed by
+    /// `RooftopSignRecord.signCellIndex` / `AtlasCellIndex.signs`.
+    static let glyphRows: [Range<Int>] = [
+        18..<30, 18..<30, 18..<31, 17..<31,
+        12..<36, 8..<40, 19..<29, 19..<30,
+        14..<34, 13..<35, 16..<33, 12..<36,
+    ]
+
+    /// Fully transparent rows between a cell's glyphs and the cell's bottom
+    /// edge — the amount a bottom-centre-anchored sign has to drop for its
+    /// glyph base to rest on the roofline.
+    static func bottomInset(forSignCellIndex index: Int) -> CGFloat {
+        precondition(
+            glyphRows.indices.contains(index),
+            "Sign cell index \(index) is outside the 12 measured sprite_signs glyph bands."
+        )
+        guard let cellHeight = AtlasSheet.signs.sheet.cellSize?.height else {
+            preconditionFailure("sprite_signs is a uniform grid; its SpriteSheet must declare a cellSize.")
+        }
+        return cellHeight - CGFloat(glyphRows[index].upperBound)
+    }
+}
+
 /// The six `tileset_ground` diamond sub-rects, measured directly off the
 /// shipped `tileset_ground.png` pixels rather than assumed from the 96×48
 /// world-tile constant.

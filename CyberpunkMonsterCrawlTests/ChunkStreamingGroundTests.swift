@@ -18,9 +18,16 @@ import XCTest
 /// at any tile of the resident window, checked at every step of a sweep that
 /// repeatedly crosses chunk boundaries (AC1, the continuous-ground/no-seams
 /// criterion, holding across a pan rather than only at a single camera
-/// position); and (4) the two sequences that are *not* a pan — `unmountAll()`
+/// position); (4) the two sequences that are *not* a pan — `unmountAll()`
 /// followed by `updateCamera`, and a run restarted through `GameScene` —
-/// recycling the same nodes instead of re-allocating a whole window.
+/// recycling the same nodes instead of re-allocating a whole window; and
+/// (5) CYBERPUN-17-5-t3: a recycled *building* node carrying no stale
+/// rooftop-sign child. That last one belongs here rather than in
+/// `RooftopSignRenderingTests` precisely because it needs a real
+/// evict-then-remount — a fresh mount from an empty pool never reaches
+/// `dequeueOrMakeBuildingNode`'s strip, so the regression it guards (a pooled
+/// node from a signed lot recycled onto an unsigned one and still rendering
+/// the old sign) would ship green behind mount-time assertions.
 ///
 /// Everything here drives the production streaming API. In particular
 /// nothing references `GameScene.debugPanEnabled`: the
@@ -55,6 +62,38 @@ final class ChunkStreamingGroundTests: XCTestCase {
     /// ground-only; building nodes have their own `buildingPool`).
     private func groundIdentities(in worldLayer: SKNode) -> Set<ObjectIdentifier> {
         Set(groundSprites(in: worldLayer).map(ObjectIdentifier.init))
+    }
+
+    /// The mounted **building** nodes among `worldLayer`'s children, named
+    /// through `TileFieldRenderer.buildingNodeName` for the same reason
+    /// `groundSprites(in:)` names the ground population: the two share the
+    /// layer, and a claim about one must not silently start measuring both.
+    private func buildingSprites(in worldLayer: SKNode) -> [SKSpriteNode] {
+        worldLayer.children
+            .compactMap { $0 as? SKSpriteNode }
+            .filter { $0.name == TileFieldRenderer.buildingNodeName }
+    }
+
+    /// Every rooftop-sign child of `buildingNode` — as a list rather than a
+    /// single `childNode(withName:)` lookup, so "the strip left the old sign
+    /// behind *underneath* a newly attached one" is a detectable state (that
+    /// lookup returns only the first match, and both nodes carry the same
+    /// name).
+    private func signChildren(of buildingNode: SKSpriteNode) -> [SKNode] {
+        buildingNode.children.filter { $0.name == RooftopSignRenderer.signNodeName }
+    }
+
+    /// The rounded screen point a mounted building node for `lotTile` sits
+    /// at, derived the way `TileFieldRenderer.configure` derives it — how a
+    /// `RooftopSignRecord`'s carrier lot is matched to the node that carries
+    /// it. `IsometricProjection.tileToScreen` is injective over distinct
+    /// integer tiles, so this is a unique key per lot.
+    private func mountedPosition(ofLotTile lotTile: TileCoordinate) -> CGPoint {
+        let screenPoint = IsometricProjection.tileToScreen(
+            tileX: Double(lotTile.tileX),
+            tileY: Double(lotTile.tileY)
+        )
+        return CGPoint(x: screenPoint.x.rounded(), y: screenPoint.y.rounded())
     }
 
     /// Brings `streamer` to the fully-mounted steady state the way the
@@ -185,6 +224,99 @@ final class ChunkStreamingGroundTests: XCTestCase {
             "Repeatedly crossing the same chunk boundaries back and forth must not keep allocating new "
                 + "node identities \u{2014} evicted-chunk nodes must be recycled for newly resident chunks."
         )
+    }
+
+    // MARK: - Recycled building nodes carry no stale rooftop sign (CYBERPUN-17-5-t3)
+
+    /// A building node freed by eviction goes back into `buildingPool` with
+    /// whatever children it had — including a rooftop-sign child, which is
+    /// never pooled separately. `dequeueOrMakeBuildingNode` strips that child
+    /// before `TileFieldRenderer.configure` re-textures the node, and this is
+    /// the test that reaches that line: the regression it guards is "pan away
+    /// from a signed building, pan back, and its recycled node keeps
+    /// rendering the old sign over an unsigned lot", which no fresh-mount
+    /// assertion in `RooftopSignRenderingTests` can see because a fresh mount
+    /// dequeues from an empty pool.
+    ///
+    /// Asserted as an exact correspondence rather than just "no leftovers":
+    /// after the pan, a mounted building node carries a sign child **iff** its
+    /// lot is a carrier lot of a currently resident sign, and the sign it
+    /// carries crops that record's own atlas cell — so a stale sign, a
+    /// *wrong-variant* sign left underneath a newly attached one, and a
+    /// dropped sign are all failures here.
+    func test_recycledBuildingNodes_carryNoStaleRooftopSign_afterAPanThatEvictsSignedBuildings() {
+        let worldLayer = SKNode()
+        let streamer = GroundPlaneStreamer(seed: seed, worldLayer: worldLayer)
+
+        streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        drainIncrementalMount(streamer)
+
+        let previouslySignedNodes = Set(
+            buildingSprites(in: worldLayer)
+                .filter { !signChildren(of: $0).isEmpty }
+                .map(ObjectIdentifier.init)
+        )
+        XCTAssertGreaterThan(
+            previouslySignedNodes.count, 0,
+            "Precondition: the window at the origin must mount at least one signed building, or the recycle "
+                + "path this test is about is never fed a node carrying a sign."
+        )
+
+        // Pan far enough that every chunk resident at the origin is evicted,
+        // handing its building nodes — the signed ones included — to
+        // `buildingPool`, so the mount that follows is served by recycled
+        // nodes rather than fresh allocations.
+        let farOffset = Double((ChunkStreamingManager.residentRadius + 25) * Chunk.size)
+        streamer.updateCamera(worldPosition: TilePoint(x: farOffset, y: farOffset))
+        drainIncrementalMount(streamer)
+
+        let mountedBuildings = buildingSprites(in: worldLayer)
+        let recycledPreviouslySignedNodes = mountedBuildings
+            .filter { previouslySignedNodes.contains(ObjectIdentifier($0)) }
+        XCTAssertGreaterThan(
+            recycledPreviouslySignedNodes.count, 0,
+            "Anti-vacuity: no node that previously carried a sign was recycled into this window, so the "
+                + "assertions below would pass without ever exercising the strip in "
+                + "dequeueOrMakeBuildingNode."
+        )
+
+        var signsByCarrierPosition: [CGPoint: RooftopSignRecord] = [:]
+        for sign in streamer.streaming.residentChunks.values.flatMap(\.roofSigns) {
+            signsByCarrierPosition[mountedPosition(ofLotTile: sign.carrierLotTile)] = sign
+        }
+
+        for node in mountedBuildings {
+            let signs = signChildren(of: node)
+            guard let expectedSign = signsByCarrierPosition[node.position] else {
+                XCTAssertTrue(
+                    signs.isEmpty,
+                    "A building node mounted at \(node.position) carries \(signs.count) rooftop-sign "
+                        + "child(ren) but its lot is not a carrier lot of any resident sign — a recycled "
+                        + "node kept a previous occupant's sign."
+                )
+                continue
+            }
+
+            XCTAssertEqual(
+                signs.count, 1,
+                "The carrier building at \(node.position) has \(signs.count) sign children; a recycled node "
+                    + "must end up with exactly the one sign this mount attached, never the new sign stacked "
+                    + "over a stale one."
+            )
+
+            let expectedCell = AtlasCellIndex.signs[expectedSign.signCellIndex]
+            let expectedTexture = AtlasSheet.signs.sheet.texture(col: expectedCell.col, row: expectedCell.row)
+            guard let mountedTexture = (signs.first as? SKSpriteNode)?.texture else {
+                XCTFail("The sign mounted at \(node.position) carries no texture.")
+                continue
+            }
+            XCTAssertEqual(
+                mountedTexture.textureRect(), expectedTexture.textureRect(),
+                "The sign mounted on the carrier building at \(node.position) crops a different "
+                    + "sprite_signs cell than its record's signCellIndex "
+                    + "(\(expectedSign.signCellIndex)) — a recycled node is showing the wrong variant."
+            )
+        }
     }
 
     // MARK: - No gaps or duplicates at chunk boundaries during a sweep

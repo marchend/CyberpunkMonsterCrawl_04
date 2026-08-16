@@ -26,6 +26,32 @@ import SpriteKit
 /// land later (`CYBERPUN-17-6`/`CYBERPUN-17-7`) and will mount into this same
 /// layer alongside these nodes.
 ///
+/// ## `CYBERPUN-17-5-t3`: rooftop signs mount as building children
+///
+/// `Chunk.roofSigns` follows the same "a factory nothing calls renders
+/// nothing in a real build" argument: `mountChunk` attaches each signed
+/// lot's `RooftopSignRenderer.makeSignNode(for:parent:)` node as a child of
+/// its carrier building node, in the same pass that mounts the building
+/// itself. A sign therefore has no bookkeeping of its own here — no
+/// `signNodesByChunk` map, no separate pool — because a child node's
+/// lifecycle already follows its parent building node's: it mounts when the
+/// building mounts, and it is torn down (and, for a pooled building node,
+/// stripped before the pool reuses it — see `dequeueOrMakeBuildingNode`)
+/// exactly when the building is.
+///
+/// **Signs are not pooled, and that is a real (bounded) allocation.** Being a
+/// child covers *visibility* for free, not *reuse*: `dequeueOrMakeBuildingNode`
+/// discards the recycled node's sign child, and `mountChunk` asks
+/// `RooftopSignRenderer.makeSignNode` for a brand-new `SKSpriteNode` on every
+/// remount. So signs are explicitly **outside** the "after the window fills
+/// once, no further `SKSpriteNode` is allocated" invariant `pool` and
+/// `buildingPool` state; a pan allocates one sign node per signed block that
+/// streams in. `RooftopSignPlacement` signs roughly one block in three, so
+/// that is a small, bounded number per mount rather than a per-tile churn —
+/// accepted deliberately rather than covered by a third pool. If a profile
+/// ever says otherwise, the fix is a `signPool` alongside `buildingPool`,
+/// not a change to how signs are parented.
+///
 /// **Node ownership mirrors chunk residency.** One ground node per tile, plus
 /// one building node per `buildingPlacements` record, of every resident
 /// chunk; when `ChunkStreamingManager` evicts a chunk, this drops both sets
@@ -193,6 +219,15 @@ final class GroundPlaneStreamer {
     /// placement count are fixed for a given `(coordinate, seed)`, so a pan
     /// recycles rather than allocates. Capped defensively at `maxPoolSize`
     /// too.
+    ///
+    /// **Scope: the building node itself, not its rooftop-sign child.**
+    /// `CYBERPUN-17-5-t3` attaches a sign as a child of a building node, and
+    /// `dequeueOrMakeBuildingNode` strips that child before handing the node
+    /// back out, so a remounted signed lot gets a freshly allocated sign
+    /// node. The "no further allocation once the window has filled" claim
+    /// above is therefore about building nodes only; signs are a small,
+    /// bounded per-mount allocation (roughly one signed block in three) and
+    /// have no pool of their own by design.
     private var buildingPool: [SKSpriteNode] = []
 
     /// Nodes currently parked in the recycle pool. Exposed for the tests that
@@ -419,10 +454,29 @@ final class GroundPlaneStreamer {
         // worldLayer-relative too, so an intermediate container would shift
         // the whole depth scheme). `TileFieldRenderer` handles anchor, depth
         // and crispness; this only decides *when* a record becomes a node.
+        //
+        // `CYBERPUN-17-5-t3`: a building whose lot carries a rooftop sign
+        // (`chunk.roofSigns`, keyed here by `carrierLotTile`) gets its sign
+        // node attached as a *child* of the building node in this same
+        // pass — never tracked in a parallel `[ChunkCoordinate: [SKSpriteNode]]`
+        // map of its own, because a child's mount and eviction already follow
+        // its parent building node's. Note that *recycle* is the one part
+        // that is not free: a pooled building node's sign child is discarded
+        // by `dequeueOrMakeBuildingNode`, so the call below allocates a fresh
+        // sign node per remount (bounded by the signed blocks in the window
+        // — see this type's doc comment).
+        var signsByCarrierLot: [TileCoordinate: RooftopSignRecord] = [:]
+        for sign in chunk.roofSigns {
+            signsByCarrierLot[sign.carrierLotTile] = sign
+        }
+
         var mountedBuildings: [SKSpriteNode] = []
         mountedBuildings.reserveCapacity(chunk.buildingPlacements.count)
         for record in chunk.buildingPlacements {
             let node = dequeueOrMakeBuildingNode(for: record)
+            if let sign = signsByCarrierLot[record.lotTile] {
+                RooftopSignRenderer.makeSignNode(for: sign, parent: node)
+            }
             worldLayer.addChild(node)
             mountedBuildings.append(node)
         }
@@ -455,6 +509,26 @@ final class GroundPlaneStreamer {
     /// tiles among `worldLayer`'s children.
     private func dequeueOrMakeBuildingNode(for record: BuildingPlacementRecord) -> SKSpriteNode {
         if let recycled = buildingPool.popLast() {
+            // `CYBERPUN-17-5-t3`: a pooled node may still carry a previous
+            // occupant's rooftop-sign child (signs are never pooled
+            // separately — see `mountChunk`'s doc note). Strip it before
+            // `configure` re-textures the building itself, so a recycled
+            // node for an unsigned lot never keeps rendering a stale sign,
+            // and a recycled node for a *different* signed lot never shows
+            // the wrong sign cell underneath the new one `mountChunk` is
+            // about to attach. Pinned by
+            // `ChunkStreamingGroundTests.test_recycledBuildingNodes_carryNoStaleRooftopSign_afterAPanThatEvictsSignedBuildings`,
+            // which drives a real evict-then-remount rather than a fresh
+            // mount from an empty pool (a fresh mount never reaches this
+            // line, so the stale-sign regression would otherwise ship
+            // green).
+            //
+            // Addressed by name rather than `removeAllChildren()`: the sign
+            // is the only child a building node is expected to carry today,
+            // but the broad call would also silently eat any future
+            // legitimate child (a damage overlay, an occupancy marker),
+            // which is wider than this line's stated intent.
+            recycled.childNode(withName: RooftopSignRenderer.signNodeName)?.removeFromParent()
             TileFieldRenderer.configure(recycled, for: record)
             return recycled
         }

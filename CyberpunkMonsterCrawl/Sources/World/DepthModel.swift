@@ -165,6 +165,30 @@ enum DepthModel {
     /// band, and never spills into the next band up (`+bandSpacing`).
     static let buildingContentRange: Range<CGFloat> = 0..<3
 
+    /// The in-band offset a rooftop sign draws at, measured from the
+    /// building-content floor its carrier building node already occupies
+    /// (`IsometricDepthSorting` places a building at
+    /// `buildingContentRange.lowerBound`).
+    ///
+    /// `CYBERPUN-17-5-t3`: a sign is mounted as a *child* of its building
+    /// node and SpriteKit accumulates `zPosition` down the tree, so this is
+    /// the value `RooftopSignRenderer` sets on the child node — small and
+    /// positive, so the sign draws in front of the roof it sits on while its
+    /// accumulated absolute depth still inherits the building's
+    /// correctly-sorted band position.
+    ///
+    /// It lives here rather than as a literal at that call site for the
+    /// reason this whole type exists: "a single call site that invents its
+    /// own offset silently breaks draw order for exactly the tiles/actors
+    /// near that boundary". `buildingContentRange` is documented as covering
+    /// *building content (walls, rooftop signs, etc.)*, so this constant's
+    /// owner is this file. `DepthModelTests` pins that
+    /// `buildingContentRange.lowerBound + signContentOffset` is still a legal
+    /// building-content offset and still below `actorOffsetRange`, so
+    /// narrowing `buildingContentRange` fails there rather than quietly
+    /// pushing signs into a neighbouring content slot with a green suite.
+    static let signContentOffset: CGFloat = 1
+
     /// The zPosition offset range, relative to a tile's own `band`, that
     /// actors (player, raccoons) may occupy. Deliberately starts above
     /// `buildingContentRange` (so an actor always draws in front of
