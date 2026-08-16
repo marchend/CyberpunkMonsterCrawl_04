@@ -20,7 +20,13 @@ import UIKit
 /// delivered" to anyone (or any screenshot-driven verification) looking at
 /// the screen, however correct the rendering behind it is. It was removed in
 /// CYBERPUN-17-5-t4; `ScreensTests.test_gameplayScreenNode_mountsNoComingSoonText`
-/// pins the removal so it cannot creep back in.
+/// pins the removal by wording and
+/// `ScreensTests.test_gameplayScreenNode_mountsOnlyTheContainerMarker_andNoTextAnywhere`
+/// pins it structurally (exactly one child, no text anywhere in the
+/// subtree), so neither the original label nor a reworded one can creep back
+/// in. The wording gate is the durable invariant and must survive
+/// CYBERPUN-17-7; the structural one is expected to be rewritten when real
+/// HUD content lands.
 ///
 /// **Deliberately mounts no full-bleed backdrop.** The menu / death /
 /// high-scores screens each carry an opaque, scene-sized `SKSpriteNode`
@@ -37,10 +43,18 @@ import UIKit
 /// `TouchRoutingTests.test_mountedGameplayScreen_doesNotBlockWorldTouches`
 /// pins the fall-through against a real, laid-out instance of this screen.
 ///
-/// // SCAFFOLDING(CYBERPUN-17-7): the container marker below is temporary.
-/// CYBERPUN-17-7 ("Wire the floating thumbstick, player movement, building
-/// collision and camera") adds the first real HUD content this screen gains
-/// and should delete the marker then (see the marker's own comment).
+/// // SCAFFOLDING(CYBERPUN-17-7): the container marker below is temporary,
+/// and after CYBERPUN-17-5-t4 removed the placeholder label it is the *only*
+/// scaffolding artifact left on this screen. CYBERPUN-17-7 ("Wire the
+/// floating thumbstick, player movement, building collision and camera")
+/// adds the first real HUD content this screen gains and should delete the
+/// marker then.
+///
+/// Deleting the marker alone turns two green assertions red, so 17-7's
+/// definition of done is "delete the marker **and** re-point both
+/// assertions" - see the marker's own comment for the pair. Removing the
+/// node without them makes keeping the marker the path of least resistance,
+/// which is exactly how scaffolding outlives the ticket meant to delete it.
 final class GameplayScreenNode: ScreenNode {
 
     let node = SKNode()
@@ -54,8 +68,26 @@ final class GameplayScreenNode: ScreenNode {
     /// screen mounts no HUD content of its own for
     /// `CyberpunkMonsterCrawlUITests` to assert against yet. CYBERPUN-17-7
     /// adds the first real HUD content and should delete this marker then,
-    /// re-pointing the UI test's assertion at that content rather than
-    /// keeping the marker alive to satisfy it.
+    /// re-pointing the assertions below at that content rather than keeping
+    /// the marker alive to satisfy them.
+    ///
+    /// Two green assertions currently require this node to *exist*, and both
+    /// are part of 17-7's definition of done, not just the node itself:
+    ///
+    /// 1. `ScreensTests.test_gameplayScreenNode_exposesAContainerAccessibilityAnchor`
+    ///    (asserts the marker is an accessibility element labelled
+    ///    "Gameplay"), and
+    /// 2. `CyberpunkMonsterCrawlUITests.test_launchesIntoMenu_withAHittablePlayButton_thatStartsARun`,
+    ///    which waits on `app.descendants(matching: .any)["Gameplay"]` to
+    ///    prove PLAY landed on a real screen.
+    ///
+    /// A test that asserts a scaffolding node's presence is the usual
+    /// mechanism by which scaffolding outlives its ticket: deleting the
+    /// marker turns both red, so the cheap move in 17-7 is to keep it.
+    /// Delete the marker and re-point both assertions at real HUD content
+    /// together. Note this is *not* true of the no-text gates
+    /// (`mountsNoComingSoonText` in particular): those pin a
+    /// CYBERPUN-17-5-t4 invariant that must survive 17-7, not the marker.
     private let containerMarker = SKNode()
 
     init() {

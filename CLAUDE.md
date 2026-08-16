@@ -696,12 +696,19 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- Wiring every real texture consumer (player, raccoons, bullets, pickups,
-  pulse, hit puff, signs, ground tiles, buildings) into an actual on-screen
-  scene — `TextureLoading.texture(named:)` / `BuildingSprite.texture` exist
-  and are tested; `TileFieldRenderer.makeBuildingNode(for:)` (CYBERPUN-17-5-t2)
-  is a tested factory for building sprites specifically, but no scene mounts
-  its output into `GameScene.worldLayer` yet (later PRs)
+- Wiring the *remaining* real texture consumers (raccoons, bullets, pickups,
+  pulse, hit puff) into an actual on-screen scene — `TextureLoading.texture(named:)`
+  exists and is tested, but no scene mounts those sprites yet (later PRs).
+  Ground tiles, buildings and rooftop signs are no longer deferred:
+  `GroundPlaneStreamer.mountChunk` parents one
+  `TileFieldRenderer.makeBuildingNode(for:)` node per
+  `Chunk.buildingPlacements` record straight into `GameScene.worldLayer`
+  alongside that chunk's ground nodes (CYBERPUN-17-5-t2), with the chunk's
+  `roofSigns` attached as children of the carrier building node
+  (CYBERPUN-17-5-t3), and the player actor mounts with CYBERPUN-17-6. Product
+  gate 4 is therefore reachable in a real build, which is precisely the
+  justification for the CYBERPUN-17-5-t4 placeholder-label removal described
+  below
 - Final gameplay HUD, death-screen run-summary rows and the high-scores list
   are explicitly out of scope for CYBERPUN-17-2 (see the story's "Out of
   scope" section): navigation (PLAY, RUN AGAIN, back-to-menu) is real; the
@@ -715,12 +722,18 @@ docs/bootstrap.md                          original spec (source of truth)
   content it denied, which reads as "feature not delivered" to a human or a
   screenshot-driven verification however correct the rendering behind it is.
   `ScreensTests.test_gameplayScreenNode_mountsNoComingSoonText` pins the
-  removal (walking the whole subtree, and deliberately *not* banning
-  `SKLabelNode` outright so the real HUD text CYBERPUN-17-7 /
-  CYBERPUN-17-12 add does not have to fight the gate). The screen's one
-  remaining `SCAFFOLDING(CYBERPUN-17-7)` artifact is the non-visual
-  `gameplay.container` accessibility marker, and its `layout(for:
-  safeAreaInsets:)` is now deliberately a no-op
+  removal by wording (walking the whole subtree, and deliberately *not*
+  banning `SKLabelNode` outright so the real HUD text CYBERPUN-17-7 /
+  CYBERPUN-17-12 add does not have to fight the gate), and
+  `test_gameplayScreenNode_mountsOnlyTheContainerMarker_andNoTextAnywhere`
+  pins it structurally so a *reworded* placeholder fails too. The screen's
+  one remaining `SCAFFOLDING(CYBERPUN-17-7)` artifact is the non-visual
+  `gameplay.container` accessibility marker, whose *presence* both
+  `ScreensTests.test_gameplayScreenNode_exposesAContainerAccessibilityAnchor`
+  and `CyberpunkMonsterCrawlUITests` assert - so CYBERPUN-17-7's definition
+  of done is deleting the marker **and** re-pointing both assertions at real
+  HUD content, not the node alone. Its `layout(for: safeAreaInsets:)` is now
+  deliberately a no-op
 - Tile-grid collision system: the footprint-only obstruction primitive
   (`BuildingObstruction`) exists, but no live actor/movement resolver calls
   it yet
