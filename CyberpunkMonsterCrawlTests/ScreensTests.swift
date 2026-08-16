@@ -190,18 +190,82 @@ final class ScreensTests: XCTestCase {
                     + "reachable behind the gameplay screen"
             )
         }
+
+        // The loop above is a containment check, and this screen's only child
+        // is the frameless container marker - so state the structural fact
+        // directly rather than letting the gate pass because there was
+        // nothing with a frame to measure: unlike menu / death /
+        // high-scores, this screen mounts no backdrop sprite at all.
+        XCTAssertFalse(
+            gameplay.node.children.contains { $0 is SKSpriteNode },
+            "the gameplay screen must mount no backdrop sprite; the scene's own backgroundColor "
+                + "supplies the dark base and the world renders through this screen"
+        )
     }
 
-    func test_gameplayScreenNode_layout_centresThePlaceholderWithinTheSafeArea() {
+    /// The gameplay screen used to mount a neon "GAMEPLAY - WORLD COMING
+    /// SOON" label from the days when `worldLayer` was empty on entry to
+    /// `.gameplay`. The streamed ground plane (CYBERPUN-17-4), the building
+    /// and rooftop-sign nodes (CYBERPUN-17-5) and the player actor
+    /// (CYBERPUN-17-6) now all render there, so that label sat on top of the
+    /// very content it denied - a screen that visually contradicts itself
+    /// reads as "feature not delivered" to a human or a screenshot-driven
+    /// verification, however correct the rendering behind it is.
+    ///
+    /// This pins the removal (CYBERPUN-17-5-t4) rather than trusting a
+    /// deleted line to stay deleted. It walks the whole subtree, not just the
+    /// immediate children, so re-introducing the text inside a HUD container
+    /// fails here too. It deliberately does *not* forbid `SKLabelNode`
+    /// outright: CYBERPUN-17-7 / CYBERPUN-17-12 add real HUD text (HP, XP,
+    /// timer), which must not have to fight this gate.
+    func test_gameplayScreenNode_mountsNoComingSoonText() {
         let gameplay = GameplayScreenNode()
-        let size = CGSize(width: 800, height: 400)
-        let insets = UIEdgeInsets(top: 20, left: 0, bottom: 40, right: 0)
 
-        gameplay.layout(for: size, safeAreaInsets: insets)
+        // Both before and after layout: the removal must not be something a
+        // layout pass could put back.
+        for insets in [UIEdgeInsets.zero, UIEdgeInsets(top: 20, left: 0, bottom: 40, right: 0)] {
+            gameplay.layout(for: CGSize(width: 800, height: 400), safeAreaInsets: insets)
 
-        let label = gameplay.node.children.compactMap { $0 as? SKLabelNode }.first
-        XCTAssertEqual(label?.position.x, 0)
-        XCTAssertEqual(label?.position.y, (insets.bottom - insets.top) / 2)
+            for label in Self.labelNodes(in: gameplay.node) {
+                let text = label.text ?? ""
+                XCTAssertFalse(
+                    text.uppercased().contains("COMING SOON"),
+                    "the gameplay screen must not mount placeholder text over the rendered city: "
+                        + "found \"\(text)\" on \(label.name ?? "an unnamed SKLabelNode")"
+                )
+            }
+        }
+    }
+
+    /// Anti-vacuity guard for the gate above: `GameplayScreenNode` mounts no
+    /// labels at all now, so that assertion iterates an empty collection and
+    /// would stay green even if `labelNodes(in:)` were blind. This proves the
+    /// walk really does surface a label, including one nested inside a
+    /// container (the shape a future HUD would use).
+    func test_labelNodeWalk_findsNestedLabels_soTheComingSoonGateIsNotVacuous() {
+        let root = SKNode()
+        let container = SKNode()
+        let nested = SKLabelNode(text: "WORLD COMING SOON")
+        nested.name = "nestedPlaceholder"
+        container.addChild(nested)
+        root.addChild(container)
+        root.addChild(SKLabelNode(text: "TOP LEVEL"))
+
+        let found = Self.labelNodes(in: root)
+
+        XCTAssertEqual(
+            Set(found.map { $0.text ?? "" }), ["WORLD COMING SOON", "TOP LEVEL"],
+            "the label walk must reach both a direct child and one nested inside a container"
+        )
+    }
+
+    /// Recursive so a label nested inside a future HUD container is still
+    /// seen by the gate above.
+    private static func labelNodes(in root: SKNode) -> [SKLabelNode] {
+        root.children.flatMap { child -> [SKLabelNode] in
+            let nested = labelNodes(in: child)
+            return (child as? SKLabelNode).map { [$0] + nested } ?? nested
+        }
     }
 
     func test_gameplayScreenNode_willEnterAndWillExit_areNoOps() {

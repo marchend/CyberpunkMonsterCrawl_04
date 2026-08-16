@@ -1,0 +1,14 @@
+{
+  "name": "menu-to-gameplay",
+  "demonstrates": "Tapping PLAY on the menu enters .gameplay and shows the generated neon city - the streamed isometric ground plane with building sprites and rooftop signs, plus the player actor - with no placeholder text painted over it",
+  "stories": ["CYBERPUN-17-5"],
+  "steps": [
+    {"action": "wait", "seconds": 4},
+    {"action": "assert_running"},
+    {"action": "screenshot", "label": "menu"},
+    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)"},
+    {"action": "wait", "seconds": 5},
+    {"action": "screenshot", "label": "gameplay-city"},
+    {"action": "assert_running"}
+  ]
+}

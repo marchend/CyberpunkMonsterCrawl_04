@@ -55,7 +55,7 @@ CyberpunkMonsterCrawl/
   Layers/SKNodeAccessibilityIdentifier.swift  Swift-side accessibilityIdentifier storage for SKNode (SKNode never adopts UIAccessibilityIdentification); AccessibleSKView is what carries the value into a real accessibility element, and only for nodes under uiLayer in an AccessibleSKView-hosted scene - world/effects-layer identifiers stay invisible to XCUITest
   Layers/AccessibleSKView.swift            the hosted SKView subclass: publishes one UIAccessibilityElement per accessible uiLayer node, with a screen-space accessibilityFrame derived from the same coordinate path routeTouch(at:) hit-tests, so identifier/element-driven taps (XCUITest, the runtime probe, VoiceOver) land on the button instead of missing it
   Screens/MenuScreenNode.swift             the menu: title + neon PLAY button + placeholder HIGH SCORES entry, registered for .menu
-  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; no full-bleed backdrop so world touches fall through; SCAFFOLDING(CYBERPUN-17-7) placeholder content
+  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; mounts no full-bleed backdrop and, since CYBERPUN-17-5-t4, no text of its own, so the streamed city + player render through it and world touches fall through; its only remaining content is the SCAFFOLDING(CYBERPUN-17-7) non-visual gameplay.container accessibility marker
   Screens/DeathScreenNode.swift            skeleton .death screen; real RUN AGAIN / back-to-menu buttons, SCAFFOLDING(CYBERPUN-17-16) placeholder run-summary content
   Screens/HighScoresScreenNode.swift       skeleton .highScores screen; real back-to-menu button, SCAFFOLDING(CYBERPUN-17-16) placeholder scores content
   PrivacyInfo.xcprivacy, *.entitlements
@@ -131,7 +131,7 @@ CyberpunkMonsterCrawlUITests/
   CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run and lands on the gameplay screen
   AppLaunchAndRotationUITests.swift        launch shows the menu in portrait, rotation re-lays it out in landscape with nothing off-screen, PLAY dismisses the menu
 docs/bootstrap.md                          original spec (source of truth)
-.mothership/journeys/menu-to-gameplay.json product-verification journey: launch -> tap PLAY by accessibility element -> screenshot the streamed ground plane
+.mothership/journeys/menu-to-gameplay.json product-verification journey: launch -> screenshot the menu -> navigate to PLAY (described in plain language, located visually) -> screenshot the streamed city (ground plane + building sprites + rooftop signs, player actor) with no placeholder text over it
 ```
 
 > `AGENT.md` and `CLAUDE.md` are the same document under two names. Every edit
@@ -704,12 +704,23 @@ docs/bootstrap.md                          original spec (source of truth)
   its output into `GameScene.worldLayer` yet (later PRs)
 - Final gameplay HUD, death-screen run-summary rows and the high-scores list
   are explicitly out of scope for CYBERPUN-17-2 (see the story's "Out of
-  scope" section) and remain marked `// SCAFFOLDING:` in
-  `GameplayScreenNode` / `DeathScreenNode` / `HighScoresScreenNode` —
-  navigation (PLAY, RUN AGAIN, back-to-menu) is real; the visual content is
-  not. `GameplayScreenNode`'s placeholder is tagged for CYBERPUN-17-7 (the
-  floating-thumbstick story); the death/high-scores placeholders are tagged
-  for CYBERPUN-17-16 (integration checkpoint #2)
+  scope" section): navigation (PLAY, RUN AGAIN, back-to-menu) is real; the
+  visual content is not. `DeathScreenNode` / `HighScoresScreenNode` still
+  carry `// SCAFFOLDING(CYBERPUN-17-16)` placeholder content (integration
+  checkpoint #2). `GameplayScreenNode` no longer carries placeholder *text*:
+  CYBERPUN-17-5-t4 deleted its "GAMEPLAY - WORLD COMING SOON" label, because
+  the streamed ground plane (CYBERPUN-17-4), the building/rooftop-sign nodes
+  (CYBERPUN-17-5) and the player actor (CYBERPUN-17-6) all render behind that
+  screen now - a label announcing "no world here yet" sat on top of the very
+  content it denied, which reads as "feature not delivered" to a human or a
+  screenshot-driven verification however correct the rendering behind it is.
+  `ScreensTests.test_gameplayScreenNode_mountsNoComingSoonText` pins the
+  removal (walking the whole subtree, and deliberately *not* banning
+  `SKLabelNode` outright so the real HUD text CYBERPUN-17-7 /
+  CYBERPUN-17-12 add does not have to fight the gate). The screen's one
+  remaining `SCAFFOLDING(CYBERPUN-17-7)` artifact is the non-visual
+  `gameplay.container` accessibility marker, and its `layout(for:
+  safeAreaInsets:)` is now deliberately a no-op
 - Tile-grid collision system: the footprint-only obstruction primitive
   (`BuildingObstruction`) exists, but no live actor/movement resolver calls
   it yet
