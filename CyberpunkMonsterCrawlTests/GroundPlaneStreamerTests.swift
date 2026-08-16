@@ -23,6 +23,33 @@ final class GroundPlaneStreamerTests: XCTestCase {
         GroundPlaneStreamer(seed: seed, worldLayer: worldLayer)
     }
 
+    /// The mounted **ground** nodes among `worldLayer`'s children.
+    ///
+    /// Since CYBERPUN-17-5-t2 the same layer also carries one building node
+    /// per `Chunk.buildingPlacements` record, so every "one node per resident
+    /// tile" assertion has to name which population it means rather than
+    /// taking every child. Filtered by `GroundPlaneStreamer.nodeName`, the
+    /// name the mount stamps for exactly this purpose.
+    private func groundSprites(in worldLayer: SKNode) -> [SKSpriteNode] {
+        worldLayer.children
+            .compactMap { $0 as? SKSpriteNode }
+            .filter { $0.name == GroundPlaneStreamer.nodeName }
+    }
+
+    /// The mounted building nodes among `worldLayer`'s children.
+    private func buildingSprites(in worldLayer: SKNode) -> [SKSpriteNode] {
+        worldLayer.children
+            .compactMap { $0 as? SKSpriteNode }
+            .filter { $0.name == TileFieldRenderer.buildingNodeName }
+    }
+
+    /// Every building placement across the currently resident chunks \u2014 the
+    /// generator-side ground truth the mount is checked against, derived from
+    /// `ChunkStreamingManager` rather than from anything the mount computes.
+    private func residentPlacements(of streamer: GroundPlaneStreamer) -> [BuildingPlacementRecord] {
+        streamer.streaming.residentChunks.values.flatMap(\.buildingPlacements)
+    }
+
     /// Brings `streamer` to the fully-mounted steady state the way the
     /// shipped code does: repeated `advanceIncrementalMount()` ticks, which
     /// is exactly what `GameScene.update(_:)` drives once per frame.
@@ -48,10 +75,15 @@ final class GroundPlaneStreamerTests: XCTestCase {
         XCTAssertEqual(streamer.pendingMountCount, 0, "Drain finished with chunks still queued.", file: file, line: line)
     }
 
-    /// The **ground** nodes mounted in `scene.worldLayer`.
+    /// Everything the **streamer** mounted in `scene.worldLayer`: since
+    /// `CYBERPUN-17-5-t2` that is the ground nodes *plus* one building node
+    /// per resident `Chunk.buildingPlacements` record, i.e. every direct
+    /// child except the scene's own player mount. Use `groundSprites(in:)` /
+    /// `buildingSprites(in:)` when an assertion means one population
+    /// specifically.
     ///
     /// The streamer-only tests above own their own bare `SKNode` layer, so
-    /// there `children.count` *is* the ground. A real `GameScene` also mounts
+    /// there `children.count` *is* the mount. A real `GameScene` also mounts
     /// the player directly under `worldLayer` (`CYBERPUN-17-6-t2` — directly,
     /// because `PlayerNode.updateDepth(atTilePosition:)` converts through
     /// `DepthModel.worldLayerRelativeZ`, which is only correct for a direct
@@ -84,7 +116,13 @@ final class GroundPlaneStreamerTests: XCTestCase {
             "Every tile of every resident chunk must get a ground node — that is the story's "
                 + "\"render every generated ground cell\" AC."
         )
-        XCTAssertEqual(worldLayer.children.count, streamer.mountedNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, streamer.mountedNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports — "
+                + "any extra child is an orphan the eviction bookkeeping lost track of."
+        )
     }
 
     /// The depth scheme only works for a **direct** child of `worldLayer`
@@ -97,8 +135,12 @@ final class GroundPlaneStreamerTests: XCTestCase {
         streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
         drainIncrementalMount(streamer) // CYBERPUN-17-4-t4: assert the fully-mounted steady state.
 
-        let sprites = worldLayer.children.compactMap { $0 as? SKSpriteNode }
-        XCTAssertEqual(sprites.count, worldLayer.children.count, "Every ground child must be a sprite node.")
+        XCTAssertEqual(
+            worldLayer.children.compactMap { $0 as? SKSpriteNode }.count,
+            worldLayer.children.count,
+            "Every world child must be a sprite node."
+        )
+        let sprites = groundSprites(in: worldLayer)
         XCTAssertFalse(sprites.isEmpty)
 
         for sprite in sprites {
@@ -129,7 +171,7 @@ final class GroundPlaneStreamerTests: XCTestCase {
         drainIncrementalMount(streamer)
 
         let nodesByPosition = Dictionary(
-            worldLayer.children.compactMap { $0 as? SKSpriteNode }.map { ($0.position, $0) },
+            groundSprites(in: worldLayer).map { ($0.position, $0) },
             uniquingKeysWith: { first, _ in first }
         )
 
@@ -169,7 +211,15 @@ final class GroundPlaneStreamerTests: XCTestCase {
                 streamer.mountedNodeCount, bound,
                 "Mounted node count must track the fixed resident window, not grow with distance roamed."
             )
-            XCTAssertEqual(worldLayer.children.count, bound, "Evicted chunks must leave no orphan nodes behind.")
+            XCTAssertEqual(
+                groundSprites(in: worldLayer).count, bound,
+                "Evicted chunks must leave no orphan nodes behind."
+            )
+            XCTAssertEqual(
+                worldLayer.children.count,
+                streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+                "Building nodes must stream out with their chunk too, not accumulate as the camera roams."
+            )
         }
     }
 
@@ -215,14 +265,22 @@ final class GroundPlaneStreamerTests: XCTestCase {
 
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
 
-        let plane = scene.groundPlane
-        XCTAssertNotNil(plane, "Entering .gameplay must start the ground plane.")
+        guard let plane = scene.groundPlane else {
+            return XCTFail("Entering .gameplay must start the ground plane.")
+        }
         XCTAssertEqual(
-            groundChildren(of: scene).count, plane?.mountedNodeCount,
+            groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount,
             "Every ground node the streamer reports must be in worldLayer, and worldLayer must hold no "
                 + "stale ground beyond them."
         )
-        XCTAssertGreaterThan(groundChildren(of: scene).count, 0)
+        XCTAssertEqual(buildingSprites(in: scene.worldLayer).count, plane.mountedBuildingNodeCount)
+        XCTAssertEqual(
+            groundChildren(of: scene).count,
+            plane.mountedNodeCount + plane.mountedBuildingNodeCount,
+            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports "
+                + "(beyond the player's own mount) — any extra child is an orphan the mount lost track of."
+        )
+        XCTAssertGreaterThan(groundSprites(in: scene.worldLayer).count, 0)
     }
 
     /// The mounted ground must not break either structural invariant the
@@ -257,11 +315,21 @@ final class GroundPlaneStreamerTests: XCTestCase {
         // the transition itself.
         drainIncrementalMount(scene.groundPlane)
 
+        guard let plane = scene.groundPlane else {
+            return XCTFail("Re-entering .gameplay must leave a ground plane mounted.")
+        }
         XCTAssertEqual(
             groundChildren(of: scene).count, firstCount,
             "RUN AGAIN stacked a second ground plane on top of the first."
         )
-        XCTAssertEqual(groundChildren(of: scene).count, scene.groundPlane?.mountedNodeCount)
+        XCTAssertEqual(groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount)
+        XCTAssertEqual(buildingSprites(in: scene.worldLayer).count, plane.mountedBuildingNodeCount)
+        XCTAssertEqual(
+            groundChildren(of: scene).count,
+            plane.mountedNodeCount + plane.mountedBuildingNodeCount,
+            "A restart stacked a second ground plane's nodes on top of the first — worldLayer must hold "
+                + "exactly one mount's ground plus building nodes."
+        )
     }
 
     // MARK: - Incremental mount (CYBERPUN-17-4-t4)
@@ -293,7 +361,14 @@ final class GroundPlaneStreamerTests: XCTestCase {
             streamer.mountedNodeCount, 0,
             "The very first rendered frame must already show a street, not an empty world."
         )
-        XCTAssertEqual(worldLayer.children.count, streamer.mountedNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, streamer.mountedNodeCount)
+        XCTAssertEqual(buildingSprites(in: worldLayer).count, streamer.mountedBuildingNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+            "The synchronous quickstart mount put a child into worldLayer that neither the ground nor "
+                + "the building bookkeeping knows about."
+        )
     }
 
     /// The remainder of the resident window (everything outside the
@@ -318,13 +393,22 @@ final class GroundPlaneStreamerTests: XCTestCase {
 
         XCTAssertLessThan(ticks, generousTickBound, "Incremental mount did not converge within the generous tick bound.")
         XCTAssertEqual(streamer.mountedNodeCount, fullWindowNodeCount)
-        XCTAssertEqual(worldLayer.children.count, fullWindowNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, fullWindowNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount,
+            "The drained window must hold exactly the ground nodes plus the building nodes the mount "
+                + "reports — any extra child is an orphan."
+        )
         XCTAssertEqual(streamer.mountedChunks, Set(streamer.streaming.residentChunks.keys))
 
-        // No double-mount or drop: every mounted sprite maps to a distinct
-        // tile, and the set of mounted tiles matches the resident window
-        // exactly.
-        let sprites = worldLayer.children.compactMap { $0 as? SKSpriteNode }
+        // No double-mount or drop: every mounted ground sprite maps to a
+        // distinct tile, and the set of mounted tiles matches the resident
+        // window exactly. Buildings are excluded deliberately — several may
+        // legitimately share a tile's screen point with the ground under
+        // them, so counting them here would report a "duplicate" that is
+        // nothing of the sort.
+        let sprites = groundSprites(in: worldLayer)
         let mountedTiles = sprites.map { sprite -> TileCoordinate in
             let owningTile = IsometricProjection.tile(containing: sprite.position)
             return TileCoordinate(tileX: owningTile.tileX, tileY: owningTile.tileY)
@@ -383,7 +467,11 @@ final class GroundPlaneStreamerTests: XCTestCase {
         // the full window mounted.
         drainIncrementalMount(streamer)
         XCTAssertEqual(streamer.mountedNodeCount, fullWindowNodeCount)
-        XCTAssertEqual(worldLayer.children.count, fullWindowNodeCount)
+        XCTAssertEqual(groundSprites(in: worldLayer).count, fullWindowNodeCount)
+        XCTAssertEqual(
+            worldLayer.children.count,
+            streamer.mountedNodeCount + streamer.mountedBuildingNodeCount
+        )
     }
 
     /// The same property under a per-frame camera-follow (`CYBERPUN-17-7`'s

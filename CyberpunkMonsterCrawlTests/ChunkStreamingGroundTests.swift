@@ -34,6 +34,29 @@ final class ChunkStreamingGroundTests: XCTestCase {
     private var tilesPerChunk: Int { Chunk.size * Chunk.size }
     private var boundedNodeCount: Int { ChunkStreamingManager.residentWindowSize * tilesPerChunk }
 
+    /// The mounted **ground** nodes among `worldLayer`'s children.
+    ///
+    /// Since CYBERPUN-17-5-t2 the same layer also carries one building node
+    /// per `Chunk.buildingPlacements` record, so every claim in this suite
+    /// about "one node per resident tile" has to name which population it
+    /// means rather than taking every child \u{2014} a chunk's building count
+    /// varies with how many block interiors it owns, so counting both
+    /// together against `boundedNodeCount` measures the wrong thing.
+    /// Filtered by `GroundPlaneStreamer.nodeName`, the name the mount stamps
+    /// for exactly this purpose.
+    private func groundSprites(in worldLayer: SKNode) -> [SKSpriteNode] {
+        worldLayer.children
+            .compactMap { $0 as? SKSpriteNode }
+            .filter { $0.name == GroundPlaneStreamer.nodeName }
+    }
+
+    /// The object identities of the currently mounted ground nodes \u{2014} the
+    /// population the recycle-pool claims below are about (`pool` is
+    /// ground-only; building nodes have their own `buildingPool`).
+    private func groundIdentities(in worldLayer: SKNode) -> Set<ObjectIdentifier> {
+        Set(groundSprites(in: worldLayer).map(ObjectIdentifier.init))
+    }
+
     /// Brings `streamer` to the fully-mounted steady state the way the
     /// shipped code does: repeated `advanceIncrementalMount()` ticks, which
     /// is exactly what `GameScene.update(_:)` drives once per frame.
@@ -84,7 +107,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
                     + "it must stay bounded no matter how far the camera has panned."
             )
             XCTAssertEqual(
-                worldLayer.children.count, boundedNodeCount,
+                groundSprites(in: worldLayer).count, boundedNodeCount,
                 "step \(step): the scene graph itself grew past the bounded window \u{2014} evicted chunks "
                     + "must leave no orphan nodes behind."
             )
@@ -111,23 +134,23 @@ final class ChunkStreamingGroundTests: XCTestCase {
         // reach the full initial mount this test's identity-reuse claim is
         // built on.
         drainIncrementalMount(streamer)
-        var everSeenIdentities = Set(worldLayer.children.map(ObjectIdentifier.init))
+        var everSeenIdentities = groundIdentities(in: worldLayer)
         XCTAssertEqual(everSeenIdentities.count, boundedNodeCount, "The initial full mount must fill the window.")
 
         // Move far enough away that every chunk resident at the origin,
         // including the origin chunk itself, is evicted.
         let farOffset = Double((ChunkStreamingManager.residentRadius + 25) * Chunk.size)
         streamer.updateCamera(worldPosition: TilePoint(x: farOffset, y: farOffset))
-        everSeenIdentities.formUnion(worldLayer.children.map(ObjectIdentifier.init))
+        everSeenIdentities.formUnion(groundIdentities(in: worldLayer))
 
         // Wander a little further while away, so more than one eviction
         // cycle has happened before returning.
         streamer.updateCamera(worldPosition: TilePoint(x: farOffset + 40, y: farOffset - 15))
-        everSeenIdentities.formUnion(worldLayer.children.map(ObjectIdentifier.init))
+        everSeenIdentities.formUnion(groundIdentities(in: worldLayer))
 
         // Return to the origin, re-streaming the original chunks back in.
         streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
-        everSeenIdentities.formUnion(worldLayer.children.map(ObjectIdentifier.init))
+        everSeenIdentities.formUnion(groundIdentities(in: worldLayer))
 
         XCTAssertEqual(
             everSeenIdentities.count, boundedNodeCount,
@@ -154,7 +177,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
             // is checked against the steady state, not a deliberately partial
             // mid-mount snapshot.
             drainIncrementalMount(streamer)
-            everSeenIdentities.formUnion(worldLayer.children.map(ObjectIdentifier.init))
+            everSeenIdentities.formUnion(groundIdentities(in: worldLayer))
         }
 
         XCTAssertEqual(
@@ -185,7 +208,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
 
             let expectedTiles = expectedResidentTiles(for: streamer.streaming)
 
-            let sprites = worldLayer.children.compactMap { $0 as? SKSpriteNode }
+            let sprites = groundSprites(in: worldLayer)
             let mountedTiles = sprites.map { sprite -> TileCoordinate in
                 let owningTile = IsometricProjection.tile(containing: sprite.position)
                 return TileCoordinate(tileX: owningTile.tileX, tileY: owningTile.tileY)
@@ -298,7 +321,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
         // test's recycling claim is about, not the quickstart-only partial
         // state the call now leaves mid-mount.
         drainIncrementalMount(streamer)
-        let firstMount = Set(worldLayer.children.map(ObjectIdentifier.init))
+        let firstMount = groundIdentities(in: worldLayer)
         XCTAssertEqual(firstMount.count, boundedNodeCount)
 
         streamer.unmountAll()
@@ -314,7 +337,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
         // CYBERPUN-17-4-t4: the re-mount is incremental too, so let the
         // per-frame drain finish before comparing node identities.
         drainIncrementalMount(streamer)
-        let secondMount = Set(worldLayer.children.map(ObjectIdentifier.init))
+        let secondMount = groundIdentities(in: worldLayer)
 
         XCTAssertEqual(secondMount.count, boundedNodeCount)
         XCTAssertEqual(
@@ -400,7 +423,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
             streamer.advanceIncrementalMount()
             ticks += 1
 
-            let sprites = worldLayer.children.compactMap { $0 as? SKSpriteNode }
+            let sprites = groundSprites(in: worldLayer)
             let mountedTiles = sprites.map { sprite -> TileCoordinate in
                 let owningTile = IsometricProjection.tile(containing: sprite.position)
                 return TileCoordinate(tileX: owningTile.tileX, tileY: owningTile.tileY)
@@ -409,7 +432,7 @@ final class ChunkStreamingGroundTests: XCTestCase {
                 Set(mountedTiles).count, mountedTiles.count,
                 "tick \(ticks): a tile was mounted more than once mid-drain."
             )
-            XCTAssertEqual(worldLayer.children.count, streamer.mountedNodeCount)
+            XCTAssertEqual(groundSprites(in: worldLayer).count, streamer.mountedNodeCount)
         }
 
         XCTAssertEqual(
@@ -421,13 +444,18 @@ final class ChunkStreamingGroundTests: XCTestCase {
 
     /// The **ground** nodes mounted in `scene.worldLayer`.
     ///
-    /// `GameScene` also mounts the player there (`CYBERPUN-17-6-t2`), and
-    /// every count in this file is a claim about the streamed resident
-    /// *window* -- comparing raw `children.count` against `boundedNodeCount`
-    /// would silently start measuring "ground plus whatever else the scene
-    /// mounts", which is not the property these tests exist to pin.
+    /// `GameScene` also mounts the player there (`CYBERPUN-17-6-t2`), and the
+    /// streamer mounts one building node per `Chunk.buildingPlacements`
+    /// record of every resident chunk (`CYBERPUN-17-5-t2`), while every count
+    /// in this file is a claim about the streamed resident *ground* window --
+    /// comparing raw `children.count` against `boundedNodeCount` (or against
+    /// the ground-only `mountedNodeCount`) would silently start measuring
+    /// "ground plus whatever else the scene mounts", which is not the
+    /// property these tests exist to pin. So this names the ground population
+    /// the same way `groundSprites(in:)` does, through
+    /// `GroundPlaneStreamer.nodeName`.
     private func groundChildren(of scene: GameScene) -> [SKNode] {
-        scene.worldLayer.children.filter { !($0 is PlayerNode) }
+        groundSprites(in: scene.worldLayer)
     }
 
     /// The chunk owning `position`, resolved through the same seam rule the
