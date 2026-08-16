@@ -179,6 +179,15 @@ final class RooftopSignSpriteAlignmentTests: XCTestCase {
     func test_everySignCell_contentRunsToTheBottomOfItsCell_withNoTransparentPaddingBelow() throws {
         let pixels = try signSheetPixels()
 
+        var measuredPads: [Int] = []
+        var measuredBands: [String] = []
+        for index in 0..<AtlasCellIndex.signs.count {
+            let measured = try measuredCell(atSignCellIndex: index, of: pixels)
+            measuredPads.append(measured.cell.height - measured.bounds.y.upperBound)
+            measuredBands.append("\(index):y\(measured.bounds.y)x\(measured.bounds.x)")
+        }
+        XCTFail("HARVEST pads=\(measuredPads) bands=[\(measuredBands.joined(separator: " "))]")
+
         for index in 0..<AtlasCellIndex.signs.count {
             let measured = try measuredCell(atSignCellIndex: index, of: pixels)
             // `Pixels` is top-left-origin and row-major top row first, so the

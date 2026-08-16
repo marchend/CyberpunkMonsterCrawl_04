@@ -20,8 +20,11 @@ import SpriteKit
 ///
 /// **Anchor.** Bottom-centre (`anchorPoint = (0.5, 0)`, the same convention
 /// `TileFieldRenderer` uses for the building itself), positioned at
-/// `(0, buildingNode.size.height)` in the building node's *local*
-/// coordinate space. Because the building node is itself anchored
+/// `(0, buildingNode.size.height - AtlasSignGlyphBand.bottomInset(...))` in
+/// the building node's *local* coordinate space \u2014 the roofline, dropped by
+/// the measured transparent pad below that cell's glyphs so the *glyphs'*
+/// base lands on the roofline (see the glyph-band paragraph below). Because
+/// the building node is itself anchored
 /// bottom-centre (`TileFieldRenderer.configure`), that local point is
 /// exactly the roofline's top-centre — a child node's position is offset
 /// from its parent's own position, unaffected by the parent's anchor point —
@@ -96,7 +99,16 @@ enum RooftopSignRenderer {
         node.texture = texture
         node.size = texture.size()
         node.anchorPoint = CGPoint(x: 0.5, y: 0)
-        node.position = CGPoint(x: 0, y: buildingNode.size.height.rounded())
+
+        // The shipped art centres each sign's glyphs vertically inside its
+        // 48x48 cell (measured in `AtlasSignGlyphBand`), so the cell's bottom
+        // edge is *not* the glyphs' base: putting the raw cell bottom on the
+        // roofline would leave this sign floating 8-19px above the roof.
+        // Dropping the node by the measured pad below the glyphs puts the
+        // glyph base on the roofline, while the crop stays the whole cell so
+        // no sign art is clipped.
+        let glyphBaseInset = AtlasSignGlyphBand.bottomInset(forSignCellIndex: record.signCellIndex)
+        node.position = CGPoint(x: 0, y: (buildingNode.size.height - glyphBaseInset).rounded())
 
         #if DEBUG
         // The sign's *accumulated* in-band offset is the building's own
