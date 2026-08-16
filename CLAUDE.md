@@ -87,7 +87,7 @@ CyberpunkMonsterCrawl/
   Sources/World/ChunkGenerator.swift        generate(chunkCoordinate:seed:reservations:) -> Chunk, calling classify once per tile in the chunk's own 8x8 world-tile footprint, no cross-chunk lookups
   Sources/World/ChunkStreamingManager.swift camera-driven resident-chunk window: updateCamera(worldPosition:) loads/evicts chunks within a fixed Chebyshev radius (3, sized from the worst-case 24-tile margin via coversViewport) of the camera's chunk, using IsometricProjection.tile(containing:) for camera tile ownership; owns the world's LotReservationStore; SpriteKit-free (plain TilePoint input) so it's unit-testable without a scene
   Sources/World/IsometricDepthSorting.swift building-specific zPosition(forBuildingFarCornerTile:) on top of DepthModel: keys off the footprint's far corner (max tileX+tileY across footprintTiles), not the base/lot tile, placed at DepthModel.buildingContentRange's floor — so a building can never draw over an actor standing in front of any part of its footprint; farCornerTile(amongFootprintTiles:) re-derives the far corner from the raw tile list
-  Sources/World/TileFieldRenderer.swift    makeBuildingNode(for: BuildingPlacementRecord) -> SKSpriteNode: whole-sprite texture from BuildingCatalog/BuildingSprite (index-mapped via BuildingSprite(rawValue:)), anchorPoint (0.5, 0) (bottom-centre) at the lot tile's screen point rounded to whole device pixels, zPosition from IsometricDepthSorting + DepthModel.worldLayerRelativeZ, finished with PixelCrispness.apply — the building counterpart of GroundTileRenderer; no production mount yet (a later story parents these into GameScene.worldLayer)
+  Sources/World/TileFieldRenderer.swift    makeBuildingNode(for: BuildingPlacementRecord) -> SKSpriteNode: whole-sprite texture from BuildingCatalog/BuildingSprite (index-mapped via BuildingSprite(rawValue:)), anchorPoint (0.5, 0) (bottom-centre) at the lot tile's screen point rounded to whole device pixels, zPosition from IsometricDepthSorting + DepthModel.worldLayerRelativeZ, finished with PixelCrispness.apply — the building counterpart of GroundTileRenderer; configure(_:for:) reconfigures a pooled node in place and asserts DepthModel.isWithinSupportedDepthRange(forTile:) on the far corner in DEBUG. Mounted in production by GroundPlaneStreamer, which parents one node per Chunk.buildingPlacements record straight into GameScene.worldLayer alongside that chunk's ground nodes and drops both when the chunk is evicted
   Sources/World/BuildingObstruction.swift  isObstructed(_:by:)/isObstructed(_:byAnyOf:): footprint-only obstruction query over BuildingPlacementRecord.footprintTiles, never a rendered node's bounding box — the primitive a later story's movement/collision resolver (CYBERPUN-17-7) will call
 CyberpunkMonsterCrawlTests/
   CyberpunkMonsterCrawlTests.swift         proof-of-life (GameViewController)
@@ -106,8 +106,9 @@ CyberpunkMonsterCrawlTests/
   AtlasGroundDiamondTests.swift            derives tileset_ground's 6 seams from pixel alpha (5x96+112)
   BuildingCatalogTests.swift               building catalog existence + distinctness gate (12 buildings)
   BuildingSpriteTests.swift                per-building table contract: measured size, footprint, height class
-  BuildingDepthAndAnchorTests.swift         TileFieldRenderer.makeBuildingNode anchor (0.5, 0) + whole-pixel position; IsometricDepthSorting keys off the footprint's far corner (not the base tile); an actor tile-sum smaller than the far corner's always resolves a greater z than the building
-  BuildingCollisionTests.swift              a tall (building_05) and a short (building_10) building sharing one footprint obstruct identically — same blocked tiles, same walkable approach boundary, and BuildingObstruction agrees between the two — while their rendered sprite heights differ enormously
+  BuildingSpriteBaseAlignmentTests.swift   the measured basis for TileFieldRenderer's (0.5, 0) anchor, re-derived from pixel alpha for all 12 buildings (the AtlasGroundDiamondTests pattern): opaque content horizontally centred in its own PNG, running to the PNG's bottom edge with no transparent padding below, and exactly the three .twoByTwo buildings measuring wider than one 96px lot
+  BuildingDepthAndAnchorTests.swift         TileFieldRenderer.makeBuildingNode anchor (0.5, 0) + whole-pixel position; IsometricDepthSorting keys off the footprint's far corner (not the base tile); an actor tile-sum smaller than the far corner's always resolves a greater z than the building; a 2x2 footprint (building_08) anchors at its base tile, not the merged footprint's centre, which projects exactly half a tile up-screen
+  BuildingCollisionTests.swift              a tall (building_05) and a short (building_10) building sharing one footprint obstruct identically — same blocked tiles, same walkable approach boundary, and BuildingObstruction agrees between the two — while their rendered sprite heights differ enormously (that fixture proves the parity half only, since it derives its tile kinds from the record); the generation half is asserted against ChunkGenerator.generate output instead: a generated chunk that placed both a tall (building_05) and a lowest (building_10) building has every footprint tile of both classified solid by CityLatticeGenerator, and the same holds for every placement across a swept chunk range
   NoBuildingGeometryConstructionTests.swift source scan: no per-face/per-storey/prism geometry-construction markers in building-related Sources/ files, and "tileset_structure" appears nowhere in Sources/
   Direction8Tests.swift                    screen-space (from(vector:)) sector-binning table, all 8 cases plus zero-vector (nil)
   PlayerAnimatorTests.swift                walk-cycle frame-timing: idle freezes to frame 0, 8fps progression, exhaustive frame table
@@ -366,9 +367,16 @@ docs/bootstrap.md                          original spec (source of truth)
   fingerprints must all differ; each lane crop's paint must be elongated
   along the tile axis its case name claims) - a swapped lane pair fails
   there, where a literal table compared against a copy of itself cannot see
-  it. Buildings and actors are the world content that is still missing; they
-  mount into the same `worldLayer`, alongside these ground nodes, with the
-  building-placement / integration-checkpoint PRs (`CYBERPUN-17-5` onward).
+  it. Buildings mount into this same `worldLayer` alongside these ground
+  nodes (`CYBERPUN-17-5-t2`): `mountChunk` walks each newly resident chunk's
+  `Chunk.buildingPlacements` in the same pass and parents one
+  `TileFieldRenderer` node per record just as directly, through a separate
+  `buildingNodesByChunk`/`buildingPool` pair (so the ground plane's own "one
+  node per resident tile" bound stays a statement about ground tiles, while
+  a chunk's building count varies with how many block interiors it owns), and
+  eviction drops a chunk's buildings in the same pass as its ground. The
+  remaining world wiring - movement, building-collision resolution and
+  camera-follow - is `CYBERPUN-17-7`'s.
   Nodes evicted from the resident window go into `GroundPlaneStreamer`'s
   recycle pool rather than being deallocated, and `unmountAll()` returns its
   nodes there too, so a restarted run re-mounts the window out of the pool;
@@ -474,7 +482,8 @@ docs/bootstrap.md                          original spec (source of truth)
 - Building sprite presence: anchor, depth-sort & footprint-only collision
   primitive (implemented — `Sources/World/TileFieldRenderer.swift`,
   `IsometricDepthSorting.swift`, `BuildingObstruction.swift`;
-  `BuildingDepthAndAnchorTests`, `BuildingCollisionTests`,
+  `BuildingDepthAndAnchorTests`, `BuildingSpriteBaseAlignmentTests`,
+  `BuildingCollisionTests`,
   `NoBuildingGeometryConstructionTests` — `CYBERPUN-17-5-t2`).
   `TileFieldRenderer.makeBuildingNode(for:)` turns a `BuildingPlacementRecord`
   into a whole-sprite `SKSpriteNode` (`BuildingSprite(rawValue:
@@ -487,6 +496,15 @@ docs/bootstrap.md                          original spec (source of truth)
   monotonic ordering then guarantees any actor tile with a smaller sum than
   the far corner resolves a strictly greater zPosition, so a building can
   never draw over an actor standing in front of any part of its footprint.
+  `GroundPlaneStreamer.mountChunk` is the **production mount** for these
+  nodes (not a later story): it parents one node per
+  `Chunk.buildingPlacements` record of every resident chunk directly into
+  `GameScene.worldLayer` and evicts them with that chunk's ground nodes, so
+  product gate 4 ("the city reads as a city ... building sprites placed
+  across the blocks") is observable by tapping PLAY rather than only through
+  a unit test that calls `makeBuildingNode` directly - the same reasoning
+  `GroundTileRenderer`/`GroundPlaneStreamer` already state for the ground
+  plane ("a factory with no caller renders nothing in a real build").
   `BuildingObstruction.isObstructed(_:by:)` is a small, named, footprint-only
   entry point (`BuildingPlacementRecord.footprintTiles` membership, never a
   rendered node's `calculateAccumulatedFrame()`/`size`) that a later story's
@@ -496,7 +514,23 @@ docs/bootstrap.md                          original spec (source of truth)
   chosen for that tile), which `BuildingCollisionTests` pins directly by
   showing a tall (`building_05`) and a short (`building_10`) building
   sharing one footprint obstruct identically despite wildly different
-  rendered heights. No live actor calls `BuildingObstruction` yet — the
+  rendered heights. That fixture-based case proves the *parity* half only,
+  because it derives its own tile kinds from the record it is testing, so the
+  generation half is asserted against real
+  `ChunkGenerator.generate(chunkCoordinate:seed:reservations:)` output as
+  well: a generated chunk that happened to place both a `.tall` and a
+  `.lowest` building has every footprint tile of both reported solid by
+  `CityLatticeGenerator.classify` (which never sees which sprite was chosen),
+  and the same holds for every placement across a swept chunk range.
+  The anchor itself rests on measurements rather than on a claim about how
+  the art was authored: `BuildingSpriteBaseAlignmentTests` re-derives from
+  pixel alpha, for all 12 buildings, that the opaque content is horizontally
+  centred in its own PNG and runs to the PNG's bottom edge, and that exactly
+  the three `.twoByTwo` buildings measure wider than one 96px lot, while
+  `BuildingDepthAndAnchorTests`'s 2x2 case pins the base-tile convention
+  against the merged-footprint-centre alternative (half a tile up-screen) -
+  the same treatment `GroundTileRenderer`'s anchor comment gives the 112px
+  `overhangLot` crop. No live actor calls `BuildingObstruction` yet — the
   player actor itself has since landed (`CYBERPUN-17-6`, next bullet), so the
   remaining wiring (movement, collision resolution, camera) is
   `CYBERPUN-17-7`'s

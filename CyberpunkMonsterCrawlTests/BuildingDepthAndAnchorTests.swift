@@ -62,6 +62,91 @@ final class BuildingDepthAndAnchorTests: XCTestCase {
         )
     }
 
+    /// Which tile of a **multi-tile** footprint the sprite anchors to \u2014 the
+    /// one thing the two 1x1 cases above structurally cannot see, because for
+    /// a 1x1 building the base tile, the merged footprint's centre and the
+    /// far corner are all the same tile.
+    ///
+    /// The convention is the base tile (`record.lotTile`), never the
+    /// footprint centre. A 2x2 footprint's merged diamond is centred at
+    /// tile-space `(lotX + 0.5, lotY + 0.5)`, which projects exactly
+    /// `IsometricProjection.tileHalfHeight` (24px \u2014 half a tile) further up
+    /// the screen, so that is the one plausible alternative and the exact
+    /// half-tile offset this pins against: without this case a half-tile
+    /// slip on `building_08`/`building_09`/`building_11` would ship green.
+    ///
+    /// Uses `building_08` (a real `.twoByTwo` entry, 144px wide against a
+    /// 96px lot) rather than a synthetic record, and asserts both of those
+    /// properties before the position, so the case cannot quietly degenerate
+    /// into another 1x1 test. Whether the *art* inside that 144px rect is
+    /// centred and bottom-aligned is measured separately, from pixel alpha,
+    /// by `BuildingSpriteBaseAlignmentTests`.
+    func test_makeBuildingNode_twoByTwoFootprint_anchorsAtTheBaseTile_notTheFootprintCentre() {
+        let lotTile = TileCoordinate(tileX: 4, tileY: 4)
+        let farCornerTile = TileCoordinate(tileX: 5, tileY: 5)
+        let footprintTiles = [
+            lotTile,
+            TileCoordinate(tileX: 5, tileY: 4),
+            TileCoordinate(tileX: 4, tileY: 5),
+            farCornerTile,
+        ]
+        let record = makeRecord(
+            lotTile: lotTile, footprintTiles: footprintTiles, farCornerTile: farCornerTile, buildingIndex: 8
+        )
+
+        XCTAssertEqual(
+            record.building.footprintSize, .twoByTwo,
+            "This case is only meaningful for a genuinely 2x2 building; building_08 must still be one."
+        )
+
+        let node = TileFieldRenderer.makeBuildingNode(for: record)
+
+        let tilePixelWidth = CGFloat(2 * IsometricProjection.tileHalfWidth)
+        XCTAssertGreaterThan(
+            node.size.width, tilePixelWidth,
+            "building_08's art (" + String(describing: node.size.width) + "px) must be wider than one "
+                + String(describing: tilePixelWidth) + "px lot, or this case is not exercising a "
+                + "wider-than-one-tile building at all."
+        )
+
+        let baseTilePoint = IsometricProjection.tileToScreen(
+            tileX: Double(lotTile.tileX),
+            tileY: Double(lotTile.tileY)
+        )
+        let footprintCentrePoint = IsometricProjection.tileToScreen(
+            tileX: Double(lotTile.tileX) + 0.5,
+            tileY: Double(lotTile.tileY) + 0.5
+        )
+
+        // Anti-vacuity: the two candidates must actually differ, by exactly
+        // half a tile in screen y \\u2014 otherwise the assertions below would
+        // pass under either convention.
+        XCTAssertEqual(
+            footprintCentrePoint.y - baseTilePoint.y,
+            CGFloat(IsometricProjection.tileHalfHeight),
+            accuracy: 1e-6,
+            "A 2x2 footprint's centre must sit exactly half a tile up-screen from its base tile."
+        )
+
+        XCTAssertEqual(node.position.x, baseTilePoint.x.rounded(), accuracy: 1e-6)
+        XCTAssertEqual(
+            node.position.y, baseTilePoint.y.rounded(), accuracy: 1e-6,
+            "A 2x2 building anchors at its base tile's screen point."
+        )
+        XCTAssertNotEqual(
+            node.position.y, footprintCentrePoint.y.rounded(), accuracy: 1e-6,
+            "A 2x2 building must not be anchored at its merged footprint's centre; that would lift "
+                + "building_08/09/11 half a tile up the screen off their own lots."
+        )
+
+        // The wider art does not change the anchor itself: still
+        // bottom-centre, still on whole device pixels.
+        XCTAssertEqual(node.anchorPoint.x, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(node.anchorPoint.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(node.position.x, node.position.x.rounded(), accuracy: 1e-6)
+        XCTAssertEqual(node.position.y, node.position.y.rounded(), accuracy: 1e-6)
+    }
+
     // MARK: - AC4: depth keys off the far corner across the whole footprint, not the base tile
 
     func test_farCornerTile_amongFootprintTiles_isTheMaxTileSum_notTheBaseTile() {
