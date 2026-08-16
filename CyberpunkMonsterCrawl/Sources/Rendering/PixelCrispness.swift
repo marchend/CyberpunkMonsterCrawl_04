@@ -56,4 +56,50 @@ enum PixelCrispness {
         let magnitude = max(1, abs(scale).rounded())
         return scale < 0 ? -magnitude : magnitude
     }
+
+    // MARK: - Camera-driven snapping (CYBERPUN-17-6-t3)
+
+    /// Snaps `position` to the nearest whole **device pixel** at `scale`
+    /// (a `UIView`/`SKView`'s `contentScaleFactor` -- `2` at `@2x`, `3` at
+    /// `@3x`), rather than merely the nearest whole *point* the way
+    /// `apply(to:)` above does.
+    ///
+    /// At today's integer device scales a whole-point snap already lands on
+    /// a device pixel boundary (every whole point is exactly 2 or 3 whole
+    /// device pixels), so for a node whose position is only ever assigned
+    /// from a fresh, un-drifted computation the two are equivalent. This
+    /// entry point exists for the case `apply(to:)` does not cover: a
+    /// position **derived through the camera's own tile** (`GameScene
+    /// .startPlayer()`'s screen position, re-derived from tile space on
+    /// every entry to `.gameplay`), where the projection's floating-point
+    /// arithmetic can drift the result a fraction of a device pixel off a
+    /// whole point even though it is still, numerically, "close enough" to
+    /// look whole. Taking `scale` explicitly (rather than assuming it) also
+    /// means this stays correct if a future consumer ever runs at a
+    /// non-integer scale.
+    ///
+    /// Note this snaps a *node's* position, not the camera's: a camera
+    /// parked on a fractional point re-introduces the sub-pixel offset for
+    /// every world-space child, whatever their own positions are. Snapping
+    /// `GameScene.cameraNode.position` belongs with `CYBERPUN-17-7`, which
+    /// is the ticket that first makes the camera move under gameplay.
+    ///
+    /// A non-positive `scale` has no meaningful pixel grid to snap to, so
+    /// `position` is returned unchanged rather than dividing by zero.
+    static func snappedPosition(for position: CGPoint, scale: CGFloat) -> CGPoint {
+        guard scale > 0 else { return position }
+        return CGPoint(
+            x: (position.x * scale).rounded() / scale,
+            y: (position.y * scale).rounded() / scale
+        )
+    }
+
+    /// Whether `scale` is a whole integer -- the same "whole-integer scale"
+    /// rule `apply(to:)` enforces on a node's `xScale`/`yScale`, exposed as a
+    /// standalone predicate so a caller (or a test simulating a `@2x`/`@3x`
+    /// device scale) can assert it directly without constructing a live
+    /// `SKSpriteNode`.
+    static func isIntegerScale(_ scale: CGFloat) -> Bool {
+        scale.truncatingRemainder(dividingBy: 1) == 0
+    }
 }

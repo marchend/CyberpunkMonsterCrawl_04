@@ -75,6 +75,27 @@ final class GroundPlaneStreamerTests: XCTestCase {
         XCTAssertEqual(streamer.pendingMountCount, 0, "Drain finished with chunks still queued.", file: file, line: line)
     }
 
+    /// Everything the **streamer** mounted in `scene.worldLayer`: since
+    /// `CYBERPUN-17-5-t2` that is the ground nodes *plus* one building node
+    /// per resident `Chunk.buildingPlacements` record, i.e. every direct
+    /// child except the scene's own player mount. Use `groundSprites(in:)` /
+    /// `buildingSprites(in:)` when an assertion means one population
+    /// specifically.
+    ///
+    /// The streamer-only tests above own their own bare `SKNode` layer, so
+    /// there `children.count` *is* the mount. A real `GameScene` also mounts
+    /// the player directly under `worldLayer` (`CYBERPUN-17-6-t2` — directly,
+    /// because `PlayerNode.updateDepth(atTilePosition:)` converts through
+    /// `DepthModel.worldLayerRelativeZ`, which is only correct for a direct
+    /// child), so a raw `children.count` in the scene-level tests would be
+    /// measuring "ground plus whatever else the scene mounts" rather than the
+    /// ground plane these assertions exist to pin. The player's own mount
+    /// contract — including "exactly one `PlayerNode`, never a second one on
+    /// RUN AGAIN" — belongs to `PlayerMountTests`.
+    private func groundChildren(of scene: GameScene) -> [SKNode] {
+        scene.worldLayer.children.filter { !($0 is PlayerNode) }
+    }
+
     // MARK: - Mounting
 
     func test_updateCamera_mountsOneNodePerTileOfEveryResidentChunk() {
@@ -247,15 +268,19 @@ final class GroundPlaneStreamerTests: XCTestCase {
         guard let plane = scene.groundPlane else {
             return XCTFail("Entering .gameplay must start the ground plane.")
         }
-        XCTAssertEqual(groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount)
+        XCTAssertEqual(
+            groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount,
+            "Every ground node the streamer reports must be in worldLayer, and worldLayer must hold no "
+                + "stale ground beyond them."
+        )
         XCTAssertEqual(buildingSprites(in: scene.worldLayer).count, plane.mountedBuildingNodeCount)
         XCTAssertEqual(
-            scene.worldLayer.children.count,
+            groundChildren(of: scene).count,
             plane.mountedNodeCount + plane.mountedBuildingNodeCount,
-            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports — "
-                + "any extra child is an orphan the mount lost track of."
+            "worldLayer must hold exactly the ground nodes plus the building nodes this mount reports "
+                + "(beyond the player's own mount) — any extra child is an orphan the mount lost track of."
         )
-        XCTAssertGreaterThan(scene.worldLayer.children.count, 0)
+        XCTAssertGreaterThan(groundSprites(in: scene.worldLayer).count, 0)
     }
 
     /// The mounted ground must not break either structural invariant the
@@ -281,7 +306,7 @@ final class GroundPlaneStreamerTests: XCTestCase {
         // ring synchronously; drain so `firstCount` is the steady state RUN
         // AGAIN is being compared against, not a mid-mount snapshot.
         drainIncrementalMount(scene.groundPlane)
-        let firstCount = scene.worldLayer.children.count
+        let firstCount = groundChildren(of: scene).count
 
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
@@ -293,10 +318,14 @@ final class GroundPlaneStreamerTests: XCTestCase {
         guard let plane = scene.groundPlane else {
             return XCTFail("Re-entering .gameplay must leave a ground plane mounted.")
         }
-        XCTAssertEqual(scene.worldLayer.children.count, firstCount)
-        XCTAssertEqual(groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount)
         XCTAssertEqual(
-            scene.worldLayer.children.count,
+            groundChildren(of: scene).count, firstCount,
+            "RUN AGAIN stacked a second ground plane on top of the first."
+        )
+        XCTAssertEqual(groundSprites(in: scene.worldLayer).count, plane.mountedNodeCount)
+        XCTAssertEqual(buildingSprites(in: scene.worldLayer).count, plane.mountedBuildingNodeCount)
+        XCTAssertEqual(
+            groundChildren(of: scene).count,
             plane.mountedNodeCount + plane.mountedBuildingNodeCount,
             "A restart stacked a second ground plane's nodes on top of the first — worldLayer must hold "
                 + "exactly one mount's ground plus building nodes."
