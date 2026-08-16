@@ -97,6 +97,25 @@ import UIKit
 /// view mid-teardown) there is no screen mapping to ask for, so
 /// `screenFrame(forSceneRect:in:)`'s view-space fallback is written straight
 /// into `accessibilityFrame` and the element still measures the button.
+///
+/// ## The fix, part 3: answer the hit test, not just the query
+///
+/// Publishing elements only closes the *query* half of the container
+/// contract - "what elements do you have, and where are they?". There is a
+/// second, independent half: "which element is at this point?", asked through
+/// `accessibilityHitTest(_:with:)`. XCUITest's `isHittable` is defined in
+/// terms of that question: it resolves an element's activation point from the
+/// frame we publish, asks the app which accessibility element sits there, and
+/// requires the *same* element back. Left unoverridden, that question is
+/// answered by `SKView`'s inherited SpriteKit implementation, which knows
+/// nothing about the elements this class vends - it is the camera-unaware
+/// path this class exists to bypass - so it can never hand one of them back
+/// and `isHittable` stays `false` even though the frame is exactly right.
+/// That is a uniquely nasty failure mode, because the element is *found*
+/// (`app.descendants(matching: .any)["PLAY"]` resolves) and a synthesized tap
+/// at those coordinates even works; only the hittability predicate fails.
+/// `accessibilityHitTest(_:with:)` below therefore answers from the same
+/// published rects, so the two halves cannot disagree.
 final class AccessibleSKView: SKView {
 
     /// The elements handed out by `publishedAccessibilityElements()`, keyed
@@ -107,6 +126,30 @@ final class AccessibleSKView: SKView {
     /// class comment), and an accessibility client that comes back for them a
     /// message later finds nothing.
     private var elementCache: [String: UIAccessibilityElement] = [:]
+
+    /// One published element together with the **view-space** rect it was
+    /// published with, in scene-graph order.
+    ///
+    /// This is the other half of the container contract (see
+    /// `accessibilityHitTest(_:with:)`): publishing a frame answers "where is
+    /// this element?", hit testing answers "which element is at this point?",
+    /// and an out-of-process driver needs *both* answers to agree before it
+    /// will call an element hittable.
+    private struct PublishedElement {
+        let element: UIAccessibilityElement
+        /// The rect handed to UIKit, in this view's own coordinate space.
+        let viewRect: CGRect
+        /// `true` when the node had no size of its own and `publishableRect(_:)`
+        /// synthesised a 1pt rect for it (a marker such as `menu.container`).
+        /// Such a rect exists to keep the element findable, not to be tapped,
+        /// so a real-sized element under the same point wins.
+        let isMarker: Bool
+    }
+
+    /// The elements from the most recent publish, with the rects they were
+    /// published with - the lookup table `accessibilityHitTest(_:with:)`
+    /// answers from.
+    private var publishedElements: [PublishedElement] = []
 
     // MARK: - Init
 
@@ -217,6 +260,7 @@ final class AccessibleSKView: SKView {
     override func presentScene(_ scene: SKScene?) {
         super.presentScene(scene)
         elementCache.removeAll()
+        publishedElements.removeAll()
         UIAccessibility.post(notification: .layoutChanged, argument: nil)
     }
 
@@ -238,6 +282,7 @@ final class AccessibleSKView: SKView {
 
         var live: [String: UIAccessibilityElement] = [:]
         var ordered: [UIAccessibilityElement] = []
+        var hitTargets: [PublishedElement] = []
 
         for node in gameScene.accessibleUINodes() {
             guard let sceneFrame = gameScene.accessibilityFrameInScene(for: node) else { continue }
@@ -248,17 +293,79 @@ final class AccessibleSKView: SKView {
             element.accessibilityIdentifier = node.accessibilityIdentifier
             element.accessibilityLabel = node.accessibilityLabel
             element.accessibilityTraits = node.accessibilityTraits
-            applyFrame(sceneRect: sceneFrame, to: element, in: gameScene)
+            let rawViewRect = viewRect(forSceneRect: sceneFrame, in: gameScene)
+            let publishedRect = applyFrame(sceneRect: sceneFrame, to: element, in: gameScene)
 
             live[key] = element
             ordered.append(element)
+            hitTargets.append(
+                PublishedElement(
+                    element: element,
+                    viewRect: publishedRect,
+                    isMarker: isDegenerate(rawViewRect)
+                )
+            )
         }
 
         // Assigning (rather than merging) drops every key the walk no longer
         // produces, so a swapped-out screen releases its elements.
         elementCache = live
+        publishedElements = hitTargets
 
         return ordered.isEmpty ? nil : ordered
+    }
+
+    // MARK: - UIAccessibility hit testing
+
+    /// The element at `point`, so an out-of-process driver's hittability
+    /// check resolves to the *same* element whose frame it aimed at.
+    ///
+    /// Answered from the rects published by
+    /// `publishedAccessibilityElements()` rather than from `SKView`'s
+    /// inherited implementation, which knows nothing about them (see the
+    /// class comment, "part 3"). Scene-graph order is walked in reverse so a
+    /// node drawn later - i.e. on top - wins, and a size-less marker's
+    /// synthesised 1pt rect only wins when nothing real covers the point:
+    /// `menu.container` sits at the menu's centre, which is inside the PLAY
+    /// button, and answering the marker there would make PLAY unhittable
+    /// just as surely as answering nothing at all.
+    ///
+    /// Falls back to `super` when nothing of ours is under the point, so a
+    /// state this class does not understand keeps SpriteKit's own behaviour.
+    override func accessibilityHitTest(_ point: CGPoint, with event: UIEvent?) -> Any? {
+        // Republish first: the elements (and their rects) must reflect the
+        // live scene graph, exactly as they do for a query.
+        guard publishedAccessibilityElements() != nil else {
+            return super.accessibilityHitTest(point, with: event)
+        }
+
+        if let hit = publishedElement(atViewPoint: point) { return hit }
+
+        // `accessibilityHitTest(_:with:)` takes its point in the receiver's
+        // own coordinate space, like `hitTest(_:with:)`. Should a caller hand
+        // over a window-space point instead, converting it costs nothing and
+        // is a no-op for this app's full-bleed window.
+        if window != nil {
+            let converted = convert(point, from: nil)
+            if converted != point, let hit = publishedElement(atViewPoint: converted) {
+                return hit
+            }
+        }
+
+        return super.accessibilityHitTest(point, with: event)
+    }
+
+    /// The topmost published element whose view-space rect contains `point`,
+    /// preferring a real-sized element over a marker's synthesised 1pt rect.
+    private func publishedElement(atViewPoint point: CGPoint) -> UIAccessibilityElement? {
+        var marker: UIAccessibilityElement?
+
+        for published in publishedElements.reversed() where published.viewRect.contains(point) {
+            guard published.isMarker else { return published.element }
+            if marker == nil { marker = published.element }
+        }
+
+        return marker
     }
 
     /// The stable identity an element is cached under. Identifier first (that
@@ -284,14 +391,36 @@ final class AccessibleSKView: SKView {
     /// window there is no screen mapping to ask for, so
     /// `screenFrame(forSceneRect:in:)`'s view-space fallback goes straight
     /// into `accessibilityFrame`.
-    private func applyFrame(sceneRect: CGRect, to element: UIAccessibilityElement, in scene: SKScene) {
+    ///
+    /// Returns the rect in **view space** whichever branch was taken - the
+    /// number `accessibilityHitTest(_:with:)` matches a point against, so the
+    /// frame published and the frame hit-tested are one value, not two.
+    @discardableResult
+    private func applyFrame(
+        sceneRect: CGRect,
+        to element: UIAccessibilityElement,
+        in scene: SKScene
+    ) -> CGRect {
+        let rect = publishableRect(viewRect(forSceneRect: sceneRect, in: scene))
         if window != nil {
-            element.accessibilityFrameInContainerSpace =
-                publishableRect(viewRect(forSceneRect: sceneRect, in: scene))
+            element.accessibilityFrameInContainerSpace = rect
         } else {
             element.accessibilityFrame =
                 publishableRect(screenFrame(forSceneRect: sceneRect, in: scene))
         }
+        return rect
+    }
+
+    /// Whether `rect` is one `publishableRect(_:)` has to synthesise a size
+    /// for - a marker node's empty (or non-finite) frame.
+    private func isDegenerate(_ rect: CGRect) -> Bool {
+        guard
+            rect.origin.x.isFinite, rect.origin.y.isFinite,
+            rect.size.width.isFinite, rect.size.height.isFinite
+        else {
+            return true
+        }
+        return rect.size.width <= 0 || rect.size.height <= 0
     }
 
     /// `rect` made safe to hand to UIAccessibility.

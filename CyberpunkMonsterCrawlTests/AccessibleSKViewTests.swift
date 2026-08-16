@@ -337,6 +337,138 @@ final class AccessibleSKViewTests: XCTestCase {
         XCTAssertEqual(afterIdentifiers, ["highScores.backToMenuButton"])
     }
 
+    // MARK: - The hit-test half of the container contract
+
+    /// Publishing a correct frame is only half of what an out-of-process
+    /// driver needs. XCUITest's `isHittable` resolves an element's activation
+    /// point from that frame, asks the app *which accessibility element is at
+    /// this point*, and requires the same element back - so a container that
+    /// answers the query but not the hit test leaves PLAY findable and
+    /// un-hittable (`CyberpunkMonsterCrawlUITests` failed on exactly that
+    /// assertion, one line after finding the element). Hit-testing the centre
+    /// of the frame we published must return the element we published.
+    func test_accessibilityHitTest_atThePublishedPlayFrameCentre_returnsThatElement() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton", in: view)
+        let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
+
+        let hit = try XCTUnwrap(
+            view.accessibilityHitTest(centre, with: nil),
+            "the view must answer the hit test itself; SKView's inherited answer knows nothing "
+                + "about the elements we publish"
+        )
+
+        XCTAssertTrue(
+            hit as AnyObject === play,
+            "hit-testing the published frame's centre must return that very element - identity is what "
+                + "isHittable compares, so an equal-but-different object is still a failure"
+        )
+    }
+
+    /// `menu.container` is a size-less marker published at a synthesised 1pt
+    /// rect, and it sits at the menu's centre - i.e. *inside* the PLAY
+    /// button. Answering the marker there would make PLAY unhittable just as
+    /// surely as answering nothing, so a real-sized element must win.
+    func test_accessibilityHitTest_prefersTheButtonOverTheMarkerSharingThePoint() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton", in: view)
+        let marker = try publishedElement("menu.container", in: view)
+        XCTAssertTrue(
+            play.accessibilityFrame.contains(
+                CGPoint(x: marker.accessibilityFrame.midX, y: marker.accessibilityFrame.midY)
+            ),
+            "this test is only meaningful while the marker really does sit inside the button"
+        )
+
+        let hit = try XCTUnwrap(
+            view.accessibilityHitTest(
+                CGPoint(x: marker.accessibilityFrame.midX, y: marker.accessibilityFrame.midY),
+                with: nil
+            )
+        )
+
+        XCTAssertTrue(hit as AnyObject === play)
+        XCTAssertFalse(hit as AnyObject === marker)
+    }
+
+    /// The other button, so the hit test is picking an element rather than
+    /// always answering the same one.
+    func test_accessibilityHitTest_atTheHighScoresFrameCentre_returnsThatElement() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        let highScores = try publishedElement("menu.highScoresButton", in: view)
+        let centre = CGPoint(
+            x: highScores.accessibilityFrame.midX,
+            y: highScores.accessibilityFrame.midY
+        )
+
+        XCTAssertTrue(view.accessibilityHitTest(centre, with: nil) as AnyObject === highScores)
+    }
+
+    /// A point no published element covers must not be attributed to one of
+    /// them - a container that claims every point is as wrong as one that
+    /// claims none.
+    func test_accessibilityHitTest_outsideEveryPublishedFrame_returnsNoneOfOurElements() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        let elements = try XCTUnwrap(view.publishedAccessibilityElements())
+        let corner = CGPoint(x: 1, y: 1)
+        for element in elements {
+            XCTAssertFalse(
+                element.accessibilityFrame.contains(corner),
+                "this test is only meaningful while the corner really is empty"
+            )
+        }
+
+        let hit = view.accessibilityHitTest(corner, with: nil)
+
+        XCTAssertFalse(
+            elements.contains { $0 === (hit as AnyObject) },
+            "an empty corner must fall through to super, not resolve to a published element"
+        )
+    }
+
+    /// Hit testing republishes, so it follows a screen swap exactly as a
+    /// query does - the stale-frame defect wearing its hit-test hat.
+    func test_accessibilityHitTest_followsAScreenSwap() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton", in: view)
+        let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
+        XCTAssertTrue(view.accessibilityHitTest(centre, with: nil) as AnyObject === play)
+
+        XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
+
+        let back = try publishedElement("highScores.backToMenuButton", in: view)
+        let backCentre = CGPoint(x: back.accessibilityFrame.midX, y: back.accessibilityFrame.midY)
+
+        XCTAssertTrue(view.accessibilityHitTest(backCentre, with: nil) as AnyObject === back)
+        XCTAssertFalse(view.accessibilityHitTest(backCentre, with: nil) as AnyObject === play)
+    }
+
+    /// With the camera off-centre the published frame is unmoved (the pixels
+    /// did not move), so the hit test must still resolve there - the two
+    /// halves of the container contract have to agree in the configuration
+    /// the original defect needed.
+    func test_offCentreCamera_accessibilityHitTest_stillResolvesToThePlayElement() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        moveCameraOffCentre(scene)
+
+        let play = try publishedElement("menu.playButton", in: view)
+        let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
+
+        XCTAssertTrue(view.accessibilityHitTest(centre, with: nil) as AnyObject === play)
+    }
+
     // MARK: - Off-centre camera (the configuration the bug actually needed)
 
     /// Every other test in this file runs with the camera parked on the
