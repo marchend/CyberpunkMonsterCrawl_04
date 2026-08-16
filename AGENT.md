@@ -120,6 +120,7 @@ CyberpunkMonsterCrawlTests/
   AtlasContractConventionTests.swift       scans the app target for raw texture-crop rects outside the contract
   AtlasCatalogNoExtraneousAssetsTests.swift whole-catalog scan: no stray @2x/@3x, no tileset_structure/preview art
   DocumentationParityTests.swift           AGENT.md and CLAUDE.md must stay byte-identical
+  JourneyManifestTests.swift               .mothership/journeys/*.json scan: every journey's demonstrates field within the observed-safe ceiling (asserted twice, in String.count *and* UTF-8 bytes, because the probe's unit is unpublished), non-empty steps each carrying an action, serialized file within its own byte budget, plus the anti-vacuity assert that at least one journey file was found (an unreachable directory fails rather than skipping)
   GameStateMachineTests.swift              exhaustive legal/illegal transition matrix for GameStateMachine
   LayerOrderingTests.swift                 zPosition ordering invariant (named constants) + hostile out-of-band descendants caught by the band audit
   TouchRoutingTests.swift                  UI-first touch routing: an overlapping UI node always wins over a world node
@@ -131,7 +132,7 @@ CyberpunkMonsterCrawlUITests/
   CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run and lands on the gameplay screen
   AppLaunchAndRotationUITests.swift        launch shows the menu in portrait, rotation re-lays it out in landscape with nothing off-screen, PLAY dismisses the menu
 docs/bootstrap.md                          original spec (source of truth)
-.mothership/journeys/menu-to-gameplay.json product-verification journey: launch -> screenshot the menu -> navigate to PLAY (described in plain language, located visually) -> screenshot the streamed city (ground plane + building sprites + rooftop signs, player actor) with no placeholder text over it
+.mothership/journeys/menu-to-gameplay.json product-verification journey: launch -> screenshot the menu -> navigate to PLAY (described in plain language, located visually) -> screenshot the streamed city (ground plane + building sprites + rooftop signs, player actor) with no placeholder text over it. Keep demonstrates short: an over-long field makes the external probe SKIP the journey, so only the launch screen is captured and the run still reports green. The ceiling JourneyManifestTests enforces (500) is an observed-safe figure measured on CYBERPUN-17-5-t5 - the ~1,300-character field was skipped, the ~480-character rewrite runs - NOT a limit published by the probe, whose real number and unit this repo cannot source; it is therefore asserted in both String.count and UTF-8 bytes, and the serialized file is bounded separately in case the real cap covers the whole journey rather than the one field. Sentences describing what the journey does NOT prove (rooftop signs are not guaranteed in frame, and only among BUILDING blocks; the vision-located navigate step does not replace the element-driven PLAY tap owned by CyberpunkMonsterCrawlUITests.test_launchesIntoMenu_withAHittablePlayButton_thatStartsARun, because a finger tap can pass while an element-driven tap - XCUITest, the runtime probe, VoiceOver - misses PLAY entirely) survive trimming ahead of the descriptive half, which is re-derivable from steps and the screenshot
 ```
 
 > `AGENT.md` and `CLAUDE.md` are the same document under two names. Every edit
@@ -708,7 +709,12 @@ docs/bootstrap.md                          original spec (source of truth)
   (CYBERPUN-17-5-t3), and the player actor mounts with CYBERPUN-17-6. Product
   gate 4 is therefore reachable in a real build, which is precisely the
   justification for the CYBERPUN-17-5-t4 placeholder-label removal described
-  below
+  below. CYBERPUN-17-5-t5 deliberately carries **no rendering code**: t1-t4
+  landed the placement, rendering, sign and placeholder-removal work, so t5 is
+  the story's verification tail - the
+  `.mothership/journeys/menu-to-gameplay.json` `demonstrates` text, these
+  notes, and `JourneyManifestTests`. A t5 diff that touches only journey, doc
+  and test files is therefore the expected shape, not a missing commit
 - Final gameplay HUD, death-screen run-summary rows and the high-scores list
   are explicitly out of scope for CYBERPUN-17-2 (see the story's "Out of
   scope" section): navigation (PLAY, RUN AGAIN, back-to-menu) is real; the
