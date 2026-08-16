@@ -534,6 +534,35 @@ docs/bootstrap.md                          original spec (source of truth)
   player actor itself has since landed (`CYBERPUN-17-6`, next bullet), so the
   remaining wiring (movement, collision resolution, camera) is
   `CYBERPUN-17-7`'s
+- Rooftop sign rendering & scene streaming wiring (implemented —
+  `Sources/Rendering/RooftopSignRenderer.swift`,
+  `Sources/World/GroundPlaneStreamer.swift` (extended, not a new sibling
+  streamer); `RooftopSignRenderingTests`, `BuildingSceneIntegrationTests` —
+  `CYBERPUN-17-5-t3`). `RooftopSignRenderer.makeSignNode(for:parent:)` turns
+  a `RooftopSignRecord` into a **distinct** `sprite_signs`-textured
+  `SKSpriteNode`, added as a *child* of its carrier building node rather
+  than composited into the building's own texture (AC7's rendering half):
+  bottom-centre anchor at `(0, buildingNode.size.height)` in the building
+  node's own local coordinate space — exactly the roofline's top-centre,
+  since a child's position is unaffected by its parent's anchor point — and
+  a small positive child `zPosition` so it draws in front of the roof.
+  `GroundPlaneStreamer.mountChunk` already generically mounted/evicted
+  building nodes per chunk (`CYBERPUN-17-5-t2`), so this task extended that
+  existing streamer rather than adding a new sibling: it now also looks up
+  `chunk.roofSigns` by `carrierLotTile` and attaches the matching sign as a
+  child in the same pass a building node is mounted. Because a sign is only
+  ever a *child* of its building node, it carries no bookkeeping of its own
+  (no `signNodesByChunk` map, no separate pool) — mount, recycle and
+  eviction all follow the parent building node's lifecycle for free;
+  `dequeueOrMakeBuildingNode` strips any stale sign child
+  (`removeAllChildren()`) before reconfiguring a pooled node, so a recycled
+  building never keeps rendering a previous occupant's sign.
+  `BuildingSceneIntegrationTests` drives the same production mount
+  (`GroundPlaneStreamer`, not `TileFieldRenderer` called in isolation) and
+  checks the AC1 "city reads visually" claim as far as it is checkable
+  off-device: building nodes are actually mounted, carry non-nil textures,
+  and their art carries a real alpha channel with transparent pixels outside
+  the silhouette (never an opaque "navy placeholder box").
 - Player sprite: row/mirror table, walk-cycle timing and node assembly
   (implemented — `Sources/Actors/Direction8.swift`,
   `PlayerAnimator.swift`, `PlayerSpriteSheet.swift`, `PlayerNode.swift`,
