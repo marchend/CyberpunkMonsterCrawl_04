@@ -52,7 +52,7 @@ final class RooftopSignRenderingTests: XCTestCase {
         )
         XCTAssertNotEqual(
             signTexture.size(), buildingNode.size,
-            "The sign's 48\u00d748 sprite_signs cell must not coincidentally equal this building's own texture size."
+            "The sign's 48×48 sprite_signs cell must not coincidentally equal this building's own texture size."
         )
 
         let expectedCell = AtlasCellIndex.signs[signRecord.signCellIndex]
