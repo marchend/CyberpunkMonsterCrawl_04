@@ -6,18 +6,22 @@ import XCTest
 /// anchor (CYBERPUN-17-5-t3 AC7).
 ///
 /// `RooftopSignRenderer.makeSignNode` places every sign at
-/// `anchorPoint = (0.5, 0)` on `(0, buildingNode.size.height)` — the
-/// roofline's top-centre in the building node's own local space. That only
-/// *reads* correctly if the neon glyphs sit bottom-aligned and horizontally
-/// centred inside their own 48×48 `sprite_signs` cell. `AtlasSheet.signs`
-/// pins the sheet geometry (192×144px, 48×48 cells, 12 of them) and
-/// `SpriteSheet.init`'s precondition measures that against the shipped PNG —
-/// but neither says anything about *where the opaque pixels sit inside a
-/// cell*. If a cell's glyphs were vertically centred, or carried a glow pad
-/// below them, the sign would render floating above the roofline or clipped
-/// into the roof, and every assertion in `RooftopSignRenderingTests` would
-/// still pass: those check anchor/position values, which are self-consistent
-/// by construction.
+/// `anchorPoint = (0.5, 0)` on
+/// `(0, buildingNode.size.height - AtlasSignGlyphBand.bottomInset(...))` —
+/// the roofline's top-centre in the building node's own local space, dropped
+/// by the transparent pad the shipped art carries *below* its glyphs. That
+/// only reads correctly if the glyphs are horizontally centred in their own
+/// 48×48 `sprite_signs` cell, and if that pad is the measured one rather
+/// than a guess. `AtlasSheet.signs` pins the sheet geometry (192×144px,
+/// 48×48 cells, 12 of them) and `SpriteSheet.init`'s precondition measures
+/// that against the shipped PNG — but neither says anything about *where the
+/// opaque pixels sit inside a cell*, and the shipped art turns out **not**
+/// to be bottom-flush: its glyphs sit in a vertically centred band, which is
+/// exactly why the renderer cannot simply mount the raw cell at the
+/// roofline. Get that pad wrong and the sign renders floating above the roof
+/// or clipped into it, while every assertion in `RooftopSignRenderingTests`
+/// still passes: those check anchor/position values, which are
+/// self-consistent by construction.
 ///
 /// This file gives the sign anchor the same treatment
 /// `BuildingSpriteBaseAlignmentTests` gives `TileFieldRenderer`'s building
@@ -33,10 +37,12 @@ import XCTest
 /// 2. each cell's opaque content is horizontally centred inside that cell —
 ///    what makes `anchorPoint.x = 0.5` put the sign over the roof's centre
 ///    rather than off one side of it;
-/// 3. each cell's content runs to the bottom of its own cell, with no
-///    transparent padding below it — what makes `anchorPoint.y = 0` at
-///    `buildingNode.size.height` put the sign's base *on* the roofline
-///    instead of some pixels above it.
+/// 3. each cell's glyph band is exactly the one `AtlasSignGlyphBand.glyphRows`
+///    declares, so `bottomInset(forSignCellIndex:)` — the drop that puts the
+///    *glyphs'* base on the roofline rather than the cell's empty bottom
+///    edge — is the measured pad and not a stale number. Art re-authored
+///    bottom-flush, or re-cut on a different grid, fails here instead of
+///    silently un-tuning the renderer.
 final class RooftopSignSpriteAlignmentTests: XCTestCase {
 
     /// Re-derived from the sheet manifest rather than re-typed, so a change
@@ -163,47 +169,52 @@ final class RooftopSignSpriteAlignmentTests: XCTestCase {
         }
     }
 
-    /// **Fact 3 — `anchorPoint.y = 0` at the roofline.** The glyphs' base is
-    /// the bottom row of their own cell: transparent padding below the
-    /// silhouette would lift every sign off the roofline by exactly that many
-    /// pixels — the visible-gap/floating-sign failure the brief calls out,
-    /// and one nothing else in the pipeline would flag (the anchor and
-    /// position assertions in `RooftopSignRenderingTests` are self-consistent
-    /// by construction).
+    /// **Fact 3 — the roofline drop is the *measured* pad.** The shipped
+    /// glyphs are not flush with their cell's bottom edge: they sit in a
+    /// vertically centred band, so mounting the raw cell at the roofline
+    /// would leave every sign floating above the roof it stands on — the
+    /// visible-gap failure the brief calls out, and one nothing else in the
+    /// pipeline would flag (the anchor and position assertions in
+    /// `RooftopSignRenderingTests` are self-consistent by construction).
     ///
-    /// Stated as "at most 4 rows" rather than exactly zero so a single-row
-    /// authoring artifact or a faint glow row does not fail the suite; 4px of
-    /// a 48px cell is under a tenth of the sign, while the failure this is
-    /// aimed at — glyphs centred inside their cell, or a real glow pad — is
-    /// 12px or more.
-    func test_everySignCell_contentRunsToTheBottomOfItsCell_withNoTransparentPaddingBelow() throws {
+    /// `RooftopSignRenderer` compensates with
+    /// `AtlasSignGlyphBand.bottomInset(forSignCellIndex:)`. This test is what
+    /// keeps those declared bands honest: each is re-derived from the alpha
+    /// channel here and asserted equal to the declaration, so re-authored or
+    /// re-cut art turns the suite red rather than quietly un-tuning the
+    /// renderer's offset.
+    func test_everySignCellsDeclaredGlyphBand_matchesTheMeasuredAlphaBand() throws {
         let pixels = try signSheetPixels()
 
-        var measuredPads: [Int] = []
-        var measuredBands: [String] = []
-        for index in 0..<AtlasCellIndex.signs.count {
-            let measured = try measuredCell(atSignCellIndex: index, of: pixels)
-            measuredPads.append(measured.cell.height - measured.bounds.y.upperBound)
-            measuredBands.append("\(index):y\(measured.bounds.y)x\(measured.bounds.x)")
-        }
-        XCTFail("HARVEST pads=\(measuredPads) bands=[\(measuredBands.joined(separator: " "))]")
+        XCTAssertEqual(
+            AtlasSignGlyphBand.glyphRows.count, AtlasCellIndex.signs.count,
+            "AtlasSignGlyphBand must declare one measured glyph band per sprite_signs cell."
+        )
 
         for index in 0..<AtlasCellIndex.signs.count {
             let measured = try measuredCell(atSignCellIndex: index, of: pixels)
             // `Pixels` is top-left-origin and row-major top row first, so the
-            // *bottom* edge of the cell is `height` and the content's lowest
-            // occupied row is `bounds.y.upperBound`.
-            let transparentRowsBelowContent = measured.cell.height - measured.bounds.y.upperBound
+            // content's own row band is directly comparable to the declared
+            // one and the *bottom* pad is `height - bounds.y.upperBound`.
+            XCTAssertEqual(
+                measured.bounds.y, AtlasSignGlyphBand.glyphRows[index],
+                "sprite_signs cell \(index)'s glyphs occupy rows \(measured.bounds.y) of its "
+                    + "\(measured.cell.height)-row cell, but AtlasSignGlyphBand declares "
+                    + "\(AtlasSignGlyphBand.glyphRows[index]). RooftopSignRenderer drops the sign by the "
+                    + "declared pad to put the glyph base on the roofline, so a stale band mounts every "
+                    + "sign of this variant off the roof."
+            )
 
-            XCTAssertLessThanOrEqual(
-                transparentRowsBelowContent, 4,
-                "sprite_signs cell \(index) has \(transparentRowsBelowContent) fully transparent rows under "
-                    + "its glyphs. RooftopSignRenderer anchors at (0.5, 0) on the building's roofline, i.e. "
-                    + "the cell's bottom edge, so that padding would leave the sign floating that far above "
-                    + "the roof."
+            let measuredPadBelowGlyphs = CGFloat(measured.cell.height - measured.bounds.y.upperBound)
+            XCTAssertEqual(
+                AtlasSignGlyphBand.bottomInset(forSignCellIndex: index), measuredPadBelowGlyphs,
+                accuracy: 1e-9,
+                "bottomInset for sprite_signs cell \(index) must equal the measured "
+                    + "\(measuredPadBelowGlyphs) transparent rows below its glyphs — that inset is exactly "
+                    + "the distance the sign has to drop for its glyph base to rest on the roofline."
             )
             XCTAssertGreaterThanOrEqual(
-                transparentRowsBelowContent, 0,
+                measuredPadBelowGlyphs, 0,
                 "sprite_signs cell \(index)'s content bounds fall outside its own cell."
             )
         }

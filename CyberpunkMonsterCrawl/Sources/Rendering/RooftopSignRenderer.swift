@@ -21,7 +21,7 @@ import SpriteKit
 /// **Anchor.** Bottom-centre (`anchorPoint = (0.5, 0)`, the same convention
 /// `TileFieldRenderer` uses for the building itself), positioned at
 /// `(0, buildingNode.size.height - AtlasSignGlyphBand.bottomInset(...))` in
-/// the building node's *local* coordinate space \u2014 the roofline, dropped by
+/// the building node's *local* coordinate space — the roofline, dropped by
 /// the measured transparent pad below that cell's glyphs so the *glyphs'*
 /// base lands on the roofline (see the glyph-band paragraph below). Because
 /// the building node is itself anchored
@@ -47,10 +47,13 @@ import SpriteKit
 /// - each cell's opaque content is horizontally centred inside its own 48px
 ///   cell (measured to within 4px, a twelfth of the cell), which is what
 ///   makes `anchorPoint.x = 0.5` put the sign over the roof's centre;
-/// - each cell's content runs to the bottom of its own 48px cell with at
-///   most 4 transparent rows below it, which is what makes
-///   `anchorPoint.y = 0` at `buildingNode.size.height` put the sign's base
-///   *on* the roofline rather than some pixels above it;
+/// - the art is *not* bottom-flush: each cell's glyphs sit in a vertically
+///   centred band (cell 0 occupies rows 18..<30 of its 48-row cell), leaving
+///   8-19 transparent rows below them. Those measured bands are declared in
+///   `AtlasSignGlyphBand.glyphRows` and asserted equal to the re-derived
+///   ones, which is what makes `bottomInset(forSignCellIndex:)` — the drop
+///   applied below — land the *glyphs'* base on the roofline instead of the
+///   cell's empty bottom edge;
 /// - all 12 cells decode at that geometry with real opaque content, so
 ///   neither measurement can pass vacuously on an empty or mis-sliced
 ///   sheet.
@@ -88,7 +91,7 @@ enum RooftopSignRenderer {
         node.name = signNodeName
 
         // `AtlasCellIndex.signs` is the owning index list for the
-        // `sprite_signs` family (`docs/bootstrap.md` \u00a72: "one owning index
+        // `sprite_signs` family (`docs/bootstrap.md` §2: "one owning index
         // list per family"); `record.signCellIndex` is a plain `Int` so the
         // `World` layer that produced it never imports `Sources/Assets`, and
         // this is the one place that translates it back into a `(col, row)`

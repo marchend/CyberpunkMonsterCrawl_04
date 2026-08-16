@@ -81,8 +81,23 @@ final class RooftopSignRenderingTests: XCTestCase {
         // building's own top-centre extent regardless of the building's
         // absolute screen position — a child's position is offset from its
         // parent's position, unaffected by the parent's own anchorPoint.
+        //
+        // Vertically it is that roofline *dropped by the measured transparent
+        // pad below this cell's glyphs* (`AtlasSignGlyphBand`, pinned against
+        // the shipped alpha channel by `RooftopSignSpriteAlignmentTests`), so
+        // the glyph base — not the cell's empty bottom edge — rests on the
+        // roof. Anchoring the raw cell would leave this sign floating.
+        let glyphBaseInset = AtlasSignGlyphBand.bottomInset(forSignCellIndex: signRecord.signCellIndex)
+        XCTAssertGreaterThan(
+            glyphBaseInset, 0,
+            "Anti-vacuity: cell \(signRecord.signCellIndex) is expected to carry a real transparent pad "
+                + "below its glyphs, or this assertion collapses into the un-inset roofline it is "
+                + "distinguishing itself from."
+        )
         XCTAssertEqual(signNode.position.x, 0, accuracy: 1e-6)
-        XCTAssertEqual(signNode.position.y, buildingNode.size.height.rounded(), accuracy: 1e-6)
+        XCTAssertEqual(
+            signNode.position.y, (buildingNode.size.height - glyphBaseInset).rounded(), accuracy: 1e-6
+        )
     }
 
     func test_differentSignCellIndices_produceDistinctAtlasCrops() {

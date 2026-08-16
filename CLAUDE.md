@@ -543,9 +543,12 @@ docs/bootstrap.md                          original spec (source of truth)
   a `RooftopSignRecord` into a **distinct** `sprite_signs`-textured
   `SKSpriteNode`, added as a *child* of its carrier building node rather
   than composited into the building's own texture (AC7's rendering half):
-  bottom-centre anchor at `(0, buildingNode.size.height)` in the building
-  node's own local coordinate space — exactly the roofline's top-centre,
-  since a child's position is unaffected by its parent's anchor point — and
+  bottom-centre anchor at
+  `(0, buildingNode.size.height - AtlasSignGlyphBand.bottomInset(...))` in
+  the building node's own local coordinate space — the roofline's top-centre
+  (a child's position is unaffected by its parent's anchor point), dropped by
+  the measured transparent pad below that cell's glyphs so the glyph base,
+  not the cell's empty bottom edge, rests on the roof — and
   `DepthModel.signContentOffset` as its child `zPosition` (owned by
   `DepthModel`, whose `buildingContentRange` names rooftop signs as its
   content, not a literal invented at the renderer; asserted against
@@ -553,10 +556,13 @@ docs/bootstrap.md                          original spec (source of truth)
   the roof. That anchor is a *measurement*, not an inference from the 48×48
   cell size: `RooftopSignSpriteAlignmentTests` re-derives from `sprite_signs`'
   alpha channel, for all 12 cells, that each cell's opaque content is
-  horizontally centred (±4px) and runs to the bottom of its own cell (≤4
-  transparent rows below), which is what makes a bottom-centre anchor at the
-  roofline read correctly instead of floating above it or clipping into the
-  roof — the same treatment `BuildingSpriteBaseAlignmentTests` gives the
+  horizontally centred (±4px), and that its glyphs sit in a *vertically
+  centred* band (cell 0 occupies rows 18..<30 of its 48-row cell — the art is
+  not bottom-flush) exactly matching the bands `AtlasSignGlyphBand.glyphRows`
+  declares. That is what makes the renderer's `bottomInset` drop land a sign
+  on the roofline instead of floating it 8-19px above the roof, and it turns
+  re-authored or re-cut art red here rather than silently un-tuning the
+  offset — the same treatment `BuildingSpriteBaseAlignmentTests` gives the
   building anchor.
   `GroundPlaneStreamer.mountChunk` already generically mounted/evicted
   building nodes per chunk (`CYBERPUN-17-5-t2`), so this task extended that
