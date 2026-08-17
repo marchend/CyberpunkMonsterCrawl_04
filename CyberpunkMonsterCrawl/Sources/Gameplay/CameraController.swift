@@ -9,10 +9,10 @@ import SpriteKit
 /// camera-lock geometry only \u2014 it does not decide *which* scene node plays
 /// the role of `container` in a real build (`GameScene.worldLayer` versus
 /// the existing `cameraNode`) or drive it from `GameScene.update(_:)`; that
-/// is scene wiring, and scene wiring (along with deleting
-/// `PlayerScaffoldingDriver` and the `SCAFFOLDING(CYBERPUN-17-7)` debug
-/// camera pan) is explicitly out of scope here \u2014 "does not touch input or
-/// scene wiring" \u2014 and lands in a later PR of this same story.
+/// is scene wiring, and scene wiring (along with having since deleted
+/// `PlayerScaffoldingDriver` and the debug
+/// camera pan) was explicitly out of scope here \u2014 "does not touch input or
+/// scene wiring" \u2014 and landed in a later PR of this same story.
 ///
 /// **AGENT.md's camera-lock rationale, and why this never touches
 /// `SKCameraNode`.** `GameScene.uiLayer` is already parented to a single

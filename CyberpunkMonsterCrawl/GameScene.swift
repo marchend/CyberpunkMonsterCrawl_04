@@ -110,9 +110,9 @@ final class GameScene: SKScene {
     /// `advanceMovementAndCamera(currentTime:)` drives this node's position,
     /// depth and visual state every frame: `thumbstick` -> `movementController`
     /// -> `CollisionResolver` -> commit position -> `cameraController`. This
-    /// is the real replacement for the `SCAFFOLDING(CYBERPUN-17-7)` demo
-    /// driver an earlier PR of this story stood in with while movement,
-    /// collision and camera-follow did not exist yet.
+    /// is the real replacement for the earlier PR's now-deleted demo driver,
+    /// which this story stood in with while movement, collision and
+    /// camera-follow did not exist yet.
     private(set) var player: PlayerNode?
 
     /// The player's current position in tile space -- the single source of
@@ -418,11 +418,11 @@ final class GameScene: SKScene {
     /// `cameraController` (world-layer offset + chunk streaming) from that
     /// same resolved position.
     ///
-    /// This is the real replacement for the `SCAFFOLDING(CYBERPUN-17-7)`
-    /// demo driver an earlier PR of this story used while the thumbstick,
-    /// `PlayerMovementController` and `CollisionResolver` existed but were
-    /// not yet wired into a live scene. A no-op before the first
-    /// `.gameplay` entry (`player`/`playerWorldPosition` are both `nil`).
+    /// This is the real replacement for the earlier PR's now-deleted demo
+    /// driver, used while the thumbstick, `PlayerMovementController` and
+    /// `CollisionResolver` existed but were not yet wired into a live scene.
+    /// A no-op before the first `.gameplay` entry (`player`/
+    /// `playerWorldPosition` are both `nil`).
     private func advanceMovementAndCamera(currentTime: TimeInterval) {
         // The player's visual/animation deltaTime is derived independently
         // of `movementController`'s own internal clock (which additionally

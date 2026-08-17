@@ -30,7 +30,7 @@ final class MenuScreenNode: ScreenNode {
     /// independent of any one button.
     ///
     /// Unlike `GameplayScreenNode`'s `gameplay.container` (which is
-    /// `SCAFFOLDING(CYBERPUN-17-7)`-tagged scaffolding for a screen with no
+    /// still-scaffolded, tagged temporary scaffolding for a screen with no
     /// real content yet), `menu.container` is a **durable accessibility
     /// contract**: the menu is a shipping screen, and VoiceOver plus any
     /// future UI test needs a stable way to identify it that survives the

@@ -45,7 +45,7 @@ struct StickState: Equatable {
 /// touch handling is not yet extended to route `touchesMoved`/`touchesEnded`
 /// to it (today it only reacts to `touchesBegan` -- see
 /// `GameScene.touchesBegan(_:with:)`). That wiring, together with replacing
-/// `PlayerScaffoldingDriver`'s scripted `SCAFFOLDING(CYBERPUN-17-7)` demo
+/// `PlayerScaffoldingDriver`'s now-deleted scripted demo
 /// vector with this node's real `StickState` fed through
 /// `PlayerMovementController`, building collision and camera-follow, lands
 /// in a later PR of this same story -- this PR's own scope is explicitly

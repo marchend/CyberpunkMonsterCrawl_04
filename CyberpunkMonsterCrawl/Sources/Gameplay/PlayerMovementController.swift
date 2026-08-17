@@ -14,8 +14,8 @@ import Foundation
 /// structural rather than documented-against -- the same discipline
 /// `TilePoint` applies to keeping tile space and screen space apart.
 ///
-/// **This is the real replacement for the demo cycle.** Where
-/// `SCAFFOLDING(CYBERPUN-17-7)`'s `PlayerScaffoldingDriver` synthesises a
+/// **This is the real replacement for the demo cycle.** Where the story's
+/// now-deleted `PlayerScaffoldingDriver` synthesised a
 /// scripted vector with no stick at all, this type derives the same *shape*
 /// of output (a SpriteKit-space facing vector, plus a tile-space
 /// displacement) from a real `StickState` -- so `GameScene`'s eventual call
@@ -29,8 +29,8 @@ import Foundation
 /// be*.
 /// It does not touch `PlayerNode.position`, does not resolve building
 /// collision, and is not yet wired into `GameScene.update(_:)` in place of
-/// `PlayerScaffoldingDriver` -- that wiring (which also deletes the
-/// `SCAFFOLDING(CYBERPUN-17-7)` demo driver and debug camera pan) lands in a
+/// `PlayerScaffoldingDriver` -- that wiring (which also deleted the
+/// demo driver and debug camera pan) landed in a
 /// later PR of this same story, alongside collision and camera-follow. See
 /// `FloatingThumbstickNode`'s own doc comment for the same scope note on the
 /// producer side.
