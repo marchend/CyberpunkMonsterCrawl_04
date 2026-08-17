@@ -93,8 +93,24 @@ final class TouchRoutingTests: XCTestCase {
         // future HUD too, hence points away from the centre. The camera stays
         // at the origin in a view-less test scene, so scene coordinates map
         // straight through to uiLayer.
+        //
+        // `worldLayer` is a different story: entering `.gameplay` above
+        // also runs `CameraController.update(focus:viewportSize:)`, which
+        // (per that type's own doc comment) repositions `worldLayer` itself
+        // to `viewportCentre - projected(focus)` so the spawn point lands
+        // centred on screen. That offset is essentially never `.zero` (the
+        // spawn tile practically never projects exactly onto the viewport
+        // centre), so a stand-in node meant to occupy `worldPoint` *in
+        // scene space* must be positioned at `worldPoint` converted into
+        // `worldLayer`'s own (now-shifted) local space - the same
+        // conversion `GameScene.routeTouch(at:)` itself performs
+        // (`worldLayer.convert(scenePoint, from: self)`) before hit-testing
+        // - rather than at `worldPoint` taken as a `worldLayer`-local
+        // position directly, which would silently drift off the intended
+        // scene point by exactly that camera offset.
         for worldPoint in [CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 400), CGPoint(x: 350, y: 700)] {
-            let worldNode = makeHitTestableNode(at: worldPoint)
+            let worldLocalPoint = scene.worldLayer.convert(worldPoint, from: scene)
+            let worldNode = makeHitTestableNode(at: worldLocalPoint)
             // Entering `.gameplay` above also starts the real streamed ground
             // plane (`GameScene.updateWorldContent(for:)`), so `worldLayer`
             // already holds real ground tiles under these points by the time
