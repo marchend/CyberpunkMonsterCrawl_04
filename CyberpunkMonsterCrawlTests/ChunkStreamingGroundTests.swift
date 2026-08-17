@@ -30,10 +30,11 @@ import XCTest
 /// the old sign) would ship green behind mount-time assertions.
 ///
 /// Everything here drives the production streaming API. In particular
-/// nothing references `GameScene.debugPanEnabled`: the
-/// `SCAFFOLDING(CYBERPUN-17-7)` debug pan is a manual-inspection aid, and a
-/// test asserting its behaviour would mean `CYBERPUN-17-7` could not remove
-/// it without removing a green test.
+/// nothing ever referenced `GameScene.debugPanEnabled`: the
+/// `SCAFFOLDING(CYBERPUN-17-7)` debug pan was a manual-inspection aid, and a
+/// test asserting its behaviour would have meant `CYBERPUN-17-7` could not
+/// remove it without removing a green test. It has since been deleted, and
+/// this suite needed no change for that.
 final class ChunkStreamingGroundTests: XCTestCase {
 
     private let seed = WorldSeed(rawValue: 90_210)
@@ -391,11 +392,11 @@ final class ChunkStreamingGroundTests: XCTestCase {
     /// no node bypassing the scene's own touch dispatch.
     ///
     /// Driven through `GameScene.groundPlane`'s own `updateCamera` rather
-    /// than through the `SCAFFOLDING(CYBERPUN-17-7)` debug pan. The property
-    /// under test is a *streaming* property, and pinning it to the debug pan
-    /// would mean `CYBERPUN-17-7` could not delete that scaffolding without
-    /// deleting a green test — which is how temporary code becomes
-    /// permanent. Nothing in this suite references `debugPanEnabled`.
+    /// than through the `SCAFFOLDING(CYBERPUN-17-7)` debug pan that used to
+    /// exist. The property under test is a *streaming* property, and pinning
+    /// it to the debug pan would have meant `CYBERPUN-17-7` could not delete
+    /// that scaffolding without deleting a green test — which is how
+    /// temporary code becomes permanent. It deleted cleanly instead.
     func test_streamingAcrossChunkBoundariesInAScene_keepsEverySceneInvariantIntact() {
         let scene = GameScene(size: CGSize(width: 400, height: 800))
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))

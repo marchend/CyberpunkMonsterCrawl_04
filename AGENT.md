@@ -45,7 +45,7 @@ CyberpunkMonsterCrawl/
   AppDelegate.swift, SceneDelegate.swift   UIKit scene wiring
   GameViewController.swift                 composition root: hosts the SKView, builds GameScene, registers all four screens, presents it
   GameStateMachine.swift                   menu/gameplay/death/highScores GKStateMachine wrapper
-  GameScene.swift                          three persistent layers (worldLayer/effectsLayer/uiLayer), state-driven screen registry, UI-first touch dispatch; mounts the streamed ground plane + PlayerNode on entry to .gameplay, snapping the player's screen position via PixelCrispness.snappedPosition on every mount/reposition and driving PlayerNode.update each frame with a .zero vector until real input lands (a DEBUG build can opt into GameScene.debugPlayerDemoEnabled to substitute the SCAFFOLDING(CYBERPUN-17-7) PlayerScaffoldingDriver demo vector; the production call site sits outside that #if DEBUG block)
+  GameScene.swift                          three persistent layers (worldLayer/effectsLayer/uiLayer), state-driven screen registry, UI-first touch dispatch; mounts the streamed ground plane + PlayerNode on entry to .gameplay, snapping the player's screen position via PixelCrispness.snappedPosition on every mount/reposition; mounts the floating thumbstick in uiLayer and routes touchesBegan/Moved/Ended/Cancelled to it (activeStickTouch); runs the per-frame run pipeline in advanceMovementAndCamera(currentTime:): thumbstick -> PlayerMovementController -> CollisionResolver -> PlayerNode position/depth/visual state -> CameraController (CYBERPUN-17-7). The SCAFFOLDING(CYBERPUN-17-7) PlayerScaffoldingDriver demo vector, its debugPlayerDemoEnabled flag and the debug camera pan are deleted
   Layers/LayerConstants.swift              named zPosition bands enforcing worldLayer < effectsLayer < uiLayer
   Layers/ScreenNode.swift                  ScreenNode protocol + PlaceholderScreenNode test double
   Layers/TouchResponder.swift              touch-consumer protocol + the "scene is the sole dispatcher" contract
@@ -55,7 +55,7 @@ CyberpunkMonsterCrawl/
   Layers/SKNodeAccessibilityIdentifier.swift  Swift-side accessibilityIdentifier storage for SKNode (SKNode never adopts UIAccessibilityIdentification); AccessibleSKView is what carries the value into a real accessibility element, and only for nodes under uiLayer in an AccessibleSKView-hosted scene - world/effects-layer identifiers stay invisible to XCUITest
   Layers/AccessibleSKView.swift            the hosted SKView subclass: publishes one UIAccessibilityElement per accessible uiLayer node, with a screen-space accessibilityFrame derived from the same coordinate path routeTouch(at:) hit-tests, so identifier/element-driven taps (XCUITest, the runtime probe, VoiceOver) land on the button instead of missing it
   Screens/MenuScreenNode.swift             the menu: title + neon PLAY button + placeholder HIGH SCORES entry, registered for .menu
-  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; mounts no full-bleed backdrop and, since CYBERPUN-17-5-t4, no text of its own, so the streamed city + player render through it and world touches fall through; its only remaining content is the SCAFFOLDING(CYBERPUN-17-7) non-visual gameplay.container accessibility marker
+  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; mounts no full-bleed backdrop and, since CYBERPUN-17-5-t4, no text of its own, so the streamed city + player render through it and world touches fall through; its only remaining content is the SCAFFOLDING(CYBERPUN-17-7) non-visual gameplay.container accessibility marker (removal still outstanding, owned by CYBERPUN-17-7: no durable re-point target for its two assertions until the HUD lands)
   Screens/DeathScreenNode.swift            skeleton .death screen; real RUN AGAIN / back-to-menu buttons, SCAFFOLDING(CYBERPUN-17-16) placeholder run-summary content
   Screens/HighScoresScreenNode.swift       skeleton .highScores screen; real back-to-menu button, SCAFFOLDING(CYBERPUN-17-16) placeholder scores content
   PrivacyInfo.xcprivacy, *.entitlements
@@ -68,7 +68,6 @@ CyberpunkMonsterCrawl/
   Sources/Actors/PlayerSpriteSheet.swift   measured Direction8 -> (row, mirrored) table, anchor point and 14x10 hitbox for sprite_player_walk
   Sources/Actors/PlayerNode.swift          SKNode assembling the cached-per-cell walk-cycle body + ActorShadowNode + facing/frame state machine; update(deltaTime:movementVector:) resolves facing/frame/mirror but never touches position itself
   Sources/Actors/ActorShadowNode.swift     reusable 2:1-ellipse actor shadow, z-ordered beneath the body, actor-agnostic (no PlayerSpriteSheet/Direction8 coupling) so future actors (raccoon swarm, CYBERPUN-17-8) reuse it unmodified
-  Sources/Actors/PlayerScaffoldingDriver.swift  SCAFFOLDING(CYBERPUN-17-7): #if DEBUG-only, opt-in (GameScene.debugPlayerDemoEnabled, off by default) deltaTime-driven generator returning all 8 Direction8 vectors plus a trailing idle beat (S->SE->E->NE->N->NW->W->SW->idle) from currentVector(advancedBy:); it only supplies a vector - the scene stays the caller of PlayerNode.update - and no test pins its behaviour, so CYBERPUN-17-7 deletes it in one commit without deleting a green test or the production call site
   Sources/Assets/TextureLoading.swift      centralized nearest-filtering texture factory
   Sources/Assets/SpriteSheet.swift         measured-geometry contract: pixel/cell size, texture(col:row:)
   Sources/Assets/AtlasSheet.swift          the 10 sheet declarations + tileset_ground's 6 diamond sub-rects
@@ -384,19 +383,18 @@ docs/bootstrap.md                          original spec (source of truth)
   is unchanged (same seed = same city) and replaces it only when the seed
   changes, since a discarded streamer takes its pool with it
   (`ChunkStreamingGroundTests` pins both sequences)
-- `GameScene` carries one `SCAFFOLDING(CYBERPUN-17-7)` artifact in
-  production code: a debug camera pan (`debugPanEnabled`,
-  `debugPanTilesPerSecond` and `advanceDebugPanIfNeeded`, all `#if DEBUG`
-  and off by default) that exists only so multi-chunk streaming can be
-  watched end-to-end during a manual run, since there is no camera-follow
-  yet. `CYBERPUN-17-7` deletes the block when real player/camera movement
-  lands. Deliberately **not** covered by any test, so removing it cannot
-  mean deleting a green test. The `update(_:)` override that calls it is
-  **not** part of that scaffolding (`CYBERPUN-17-4-t4`): it also drains
+- `GameScene` no longer carries the `SCAFFOLDING(CYBERPUN-17-7)` debug
+  camera pan (`debugPanEnabled`, `debugPanTilesPerSecond`,
+  `advanceDebugPanIfNeeded`): it existed only so multi-chunk streaming could
+  be watched end-to-end during a manual run while there was no
+  camera-follow, and `CYBERPUN-17-7` deleted it when real player/camera
+  movement landed. It was deliberately **not** covered by any test, so the
+  removal cost no green test. The `update(_:)` override that used to call it
+  was **not** part of that scaffolding (`CYBERPUN-17-4-t4`): it also drains
   `groundPlane`'s incremental-mount queue every frame, unconditionally, in
   Release builds too — that half is a correctness fix (see
-  `GroundPlaneStreamer` above), so `CYBERPUN-17-7` must keep the override and
-  delete only the `#if DEBUG` call inside it
+  `GroundPlaneStreamer` above), so `CYBERPUN-17-7` kept the override (which
+  now also drives `advanceMovementAndCamera`) and deleted only its DEBUG call
 - Pure-function per-tile world generation `(tileX, tileY, seed) → TileInfo`
   (implemented — `Sources/World/CityLatticeGenerator.swift`,
   `Sources/World/SeedMixer.swift`, `Sources/World/WorldSeed.swift`,
@@ -638,37 +636,29 @@ docs/bootstrap.md                          original spec (source of truth)
   camera moves off a whole device pixel every world-space child inherits the
   sub-pixel offset again — snapping the camera belongs with
   `CYBERPUN-17-7`, the ticket that first makes it move under gameplay.
-  Movement itself is still `CYBERPUN-17-7`'s (the floating thumbstick,
-  building collision, camera) — until then the scene passes `.zero` and a
-  shipped build shows the mounted player idle on frame 0.
-  `PlayerScaffoldingDriver`
-  (`Sources/Actors/PlayerScaffoldingDriver.swift`, tagged
-  `SCAFFOLDING(CYBERPUN-17-7)`) can supply a deterministic
-  S/SE/E/NE/N/NW/W/SW demo vector (plus a trailing idle beat) instead so the
-  mounted player is visibly animating ahead of real input — but the whole
-  driver is `#if DEBUG` and off by default behind
-  `GameScene.debugPlayerDemoEnabled`, exactly like the sibling debug camera
-  pan, so a Release build physically cannot auto-walk the player. The scene
-  (not the driver) stays the caller of
-  `PlayerNode.update(deltaTime:movementVector:)`, and no test pins the
-  driver's behaviour, so `CYBERPUN-17-7` deletes the driver, the flag and
-  the vector substitution without deleting the production per-frame call
-  site or a green test
+  Movement itself landed with `CYBERPUN-17-7` (floating thumbstick, building
+  collision, camera-follow), so a shipped build now walks the mounted player
+  from real input: `GameScene.advanceMovementAndCamera(currentTime:)` pipes
+  the stick through `PlayerMovementController` and `CollisionResolver`,
+  commits position/depth, then drives `CameraController`. The scene (not any
+  driver) is still the caller of `PlayerNode.update(deltaTime:movementVector:)`.
+  `PlayerScaffoldingDriver`, `debugPlayerDemoEnabled` and the debug camera
+  pan are deleted, costing no green test and no production call site
 - Floating thumbstick input + player movement computation, the first PR of
   `CYBERPUN-17-7` (implemented — `Sources/UI/FloatingThumbstickNode.swift`,
   `Sources/Gameplay/PlayerMovementController.swift`;
   `FloatingThumbstickNodeTests`, `PlayerMovementControllerTests`,
-  `ThumbstickMovementSeamTests`). Two
-  self-contained, exhaustively unit-tested types, deliberately **not yet
-  wired into a live scene**: `FloatingThumbstickNode` is the input
+  `ThumbstickMovementSeamTests`). Two self-contained, exhaustively
+  unit-tested types, both **wired into the live scene** by `GameScene`
+  (mount, touch routing, per-frame pipeline): `FloatingThumbstickNode` is the input
   *producer* — appears at first-touch location within the left half of the
   safe content area (excluding a reserved bottom-left HUD slot stacked
   above it for the future pulse-ability button, `CYBERPUN-17-10`), tracks
   a drag, clamps at `maxRadius`, and reports a plain `StickState` (unit
   direction, `0...1` magnitude, `isBeyondDeadZone`) — driven directly via
-  `beginTouch(at:)`/`updateTouch(at:)`/`endTouch()` rather than through
-  `touchesBegan`/`touchesMoved`/`touchesEnded`, since `GameScene` does not
-  yet route the latter two. `PlayerMovementController` is the *consumer*:
+  `beginTouch(at:)`/`updateTouch(at:)`/`endTouch()` rather than by owning
+  `UITouch` itself; `GameScene` routes all four touch phases into that seam
+  via `activeStickTouch`. `PlayerMovementController` is the *consumer*:
   given a `StickState` and the render clock, it derives
   `frameDisplacement` (named for what it is — `deltaTime` is already folded
   in, so a caller must never re-apply the timestep; a tile-space step
@@ -696,19 +686,19 @@ docs/bootstrap.md                          original spec (source of truth)
   already cancels an in-flight drag), and asserts in DEBUG that
   `layout(for:safeAreaInsets:)` has run, since a `.zero` `currentSize`
   makes `leftRegion` degenerate and would otherwise silently refuse every
-  touch. Because both halves are unwired for now,
-  `ThumbstickMovementSeamTests` drives a real laid-out node through
-  `beginTouch`/`updateTouch`/`endTouch` and pipes its own `stickState`
-  straight into a real controller, so a y-sign, unit-vs-raw or dead-zone
-  disagreement between producer and consumer cannot ship green. Replacing
-  `PlayerScaffoldingDriver`'s `SCAFFOLDING(CYBERPUN-17-7)` demo vector with
-  this controller's output, extending `GameScene`'s touch dispatch to drive
-  the stick, building collision and camera-follow are a later PR under the
-  `CYBERPUN-17-7` story (follow-up task requested on `CYBERPUN-17-7-t1`)
+  touch. `ThumbstickMovementSeamTests` still drives a real laid-out node
+  through `beginTouch`/`updateTouch`/`endTouch` and pipes its own
+  `stickState` straight into a real controller, so a y-sign, unit-vs-raw or
+  dead-zone disagreement between producer and consumer cannot ship green
+  even now that the scene owns the seam. The wiring itself (touch dispatch,
+  `PlayerScaffoldingDriver` deletion, collision, camera-follow) landed in
+  the later PRs of `CYBERPUN-17-7`; still open on the story are a per-run
+  `worldSeed` and deleting `GameplayScreenNode`'s `gameplay.container`
+  marker (both listed under "not built yet" below)
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid. `BuildingObstruction` (discrete) and the continuous,
-  sliding `CollisionResolver` (`Sources/Gameplay/`, `CYBERPUN-17-7` PR 2)
-  exist, unwired; deferred to `CYBERPUN-17-7`'s wiring PR (`CYBERPUN-17-7-t1`)
+  sliding `CollisionResolver` (`Sources/Gameplay/`, `CYBERPUN-17-7`) are wired
+  into `advanceMovementAndCamera`, against `residentObstructions` each frame
 - City lattice: 6-tile period per axis, 3×3 building block ringed by a
   3-tile street corridor that doubles as the navmesh, `TileKind` +
   walkability, ~1-in-4 empty lots, every intersection tile street under
@@ -781,13 +771,13 @@ docs/bootstrap.md                          original spec (source of truth)
   one remaining `SCAFFOLDING(CYBERPUN-17-7)` artifact is the non-visual
   `gameplay.container` accessibility marker, whose *presence* both
   `ScreensTests.test_gameplayScreenNode_exposesAContainerAccessibilityAnchor`
-  and `CyberpunkMonsterCrawlUITests` assert - so CYBERPUN-17-7's definition
-  of done is deleting the marker **and** re-pointing both assertions at real
-  HUD content, not the node alone. Its `layout(for: safeAreaInsets:)` is now
-  deliberately a no-op
-- Tile-grid collision: `BuildingObstruction` (discrete) and the continuous
-  `CollisionResolver`/`CameraController` (`CYBERPUN-17-7` PR 2) exist,
-  unwired; deferred to `CYBERPUN-17-7`'s wiring PR (`CYBERPUN-17-7-t1`)
+  and `CyberpunkMonsterCrawlUITests` assert, so done means deleting it **and**
+  re-pointing both assertions. Still outstanding: the thumbstick sets
+  `isAccessibilityElement = false`, so no re-point target exists until the HUD
+  (CYBERPUN-17-12). Its `layout(for: safeAreaInsets:)` is deliberately a no-op
+- Per-run `worldSeed`: nothing in the app writes it, so every run spawns at
+  the identical junction (`GameScene.spawnTilePosition()`); tracked on the
+  `CYBERPUN-17-7` story (requested on `-t3`, re-stated on `-t4`), no ticket yet
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
 - Audio, app icon art, launch screen polish, App Store metadata/submission

@@ -6,15 +6,17 @@ import Foundation
 /// rather than zeroing the whole move or letting the player stick to the
 /// last legal frame.
 ///
-/// **Scope of this PR (`CYBERPUN-17-7` PR 2).** This is the world-reaction
+/// **Where this fits (`CYBERPUN-17-7`).** This is the world-reaction
 /// half of the story: given a proposed movement delta (the shape
 /// `PlayerMovementController.frameDisplacement` already produces \u2014 a
 /// tile-space `CGVector` with `deltaTime` already folded in) and a focus
 /// point, decide where the mover actually ends up. It does not compute the
 /// proposed delta itself (that is `PlayerMovementController`'s job, PR 1 of
-/// this story) and it is not wired into `GameScene`/`PlayerNode.position`
-/// yet \u2014 that wiring, together with deleting `PlayerScaffoldingDriver` and
-/// the debug camera pan, lands in a later PR of this same story.
+/// this story) and it never moves the player itself:
+/// `GameScene.advanceMovementAndCamera(currentTime:)` is the production
+/// caller, handing the proposed delta plus
+/// `GroundPlaneStreamer.residentObstructions` here every frame and
+/// committing the resolved position to `PlayerNode` and `CameraController`.
 ///
 /// **Flat-base collision only, per `docs/bootstrap.md` \u00a71: "Buildings are
 /// flat base-diamond footprints on a tile grid; collision is a tile query,

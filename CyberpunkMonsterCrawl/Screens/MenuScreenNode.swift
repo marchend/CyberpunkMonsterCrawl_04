@@ -30,8 +30,11 @@ final class MenuScreenNode: ScreenNode {
     /// independent of any one button.
     ///
     /// Unlike `GameplayScreenNode`'s `gameplay.container` (which is
-    /// still-scaffolded, tagged temporary scaffolding for a screen with no
-    /// real content yet), `menu.container` is a **durable accessibility
+    /// `SCAFFOLDING(CYBERPUN-17-7)`-tagged scaffolding for a screen with no
+    /// real HUD content of its own yet -- still live at head, and still
+    /// owned for removal by CYBERPUN-17-7: see that file's marker comment
+    /// for why the removal is outstanding and what has to move with it),
+    /// `menu.container` is a **durable accessibility
     /// contract**: the menu is a shipping screen, and VoiceOver plus any
     /// future UI test needs a stable way to identify it that survives the
     /// buttons being restyled, renamed or reordered. Keep this identifier

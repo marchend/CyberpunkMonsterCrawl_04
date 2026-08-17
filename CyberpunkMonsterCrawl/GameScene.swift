@@ -286,12 +286,15 @@ final class GameScene: SKScene {
     /// spawn); it is not "a new starting junction per run", and this story
     /// should not be recorded as having delivered that half. What is missing
     /// is a per-run `worldSeed`, which belongs to whichever story owns run
-    /// setup: no such ticket exists yet, so -- following the same convention
-    /// as `PlayerMovementController`'s deferred-scope note rather than
-    /// inventing an ID here -- it is tracked on the `CYBERPUN-17-7` story
-    /// itself, requested as a follow-up on this PR's task,
-    /// `CYBERPUN-17-7-t3`. The moment `worldSeed` varies per run, this
-    /// method varies the junction with it and needs no change.
+    /// setup. No separate ticket for it exists yet, and rather than invent
+    /// an ID here (the convention `PlayerMovementController`'s
+    /// outstanding-scope note follows) it is tracked on the `CYBERPUN-17-7`
+    /// story itself: requested as a follow-up on `CYBERPUN-17-7-t3` and
+    /// re-stated on `CYBERPUN-17-7-t4`, so the request outlives whichever
+    /// task closes first. Until that follow-up is filed **and** delivered,
+    /// this half of the story's spawn goal is recorded as not delivered
+    /// rather than quietly deferred. The moment `worldSeed` varies per run,
+    /// this method varies the junction with it and needs no change.
     private func spawnTilePosition() -> TilePoint {
         let tile = RunSpawnSelector.selectSpawnTile(seed: worldSeed)
         return TilePoint(x: Double(tile.tileX), y: Double(tile.tileY))

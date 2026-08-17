@@ -47,8 +47,24 @@ import UIKit
 /// and after CYBERPUN-17-5-t4 removed the placeholder label it is the *only*
 /// scaffolding artifact left on this screen. CYBERPUN-17-7 ("Wire the
 /// floating thumbstick, player movement, building collision and camera")
-/// adds the first real HUD content this screen gains and should delete the
-/// marker then.
+/// owns its removal.
+///
+/// **Status at head: the trigger has fired and the marker is still here.**
+/// 17-7 has shipped the first in-run control (`GameScene.thumbstick`,
+/// mounted in `uiLayer` and shown while `isRunActive`), so the condition
+/// above is met. It is not a legal re-point target, though:
+/// `FloatingThumbstickNode` deliberately sets `isAccessibilityElement =
+/// false`, and no other durable in-run content exists until the HUD lands
+/// with CYBERPUN-17-12. Deleting the marker today would therefore mean
+/// deleting the two assertions below rather than re-pointing them, which
+/// trades scaffolding for lost coverage of "PLAY landed on a real screen".
+/// So the removal is recorded as **outstanding, not done and not dropped**:
+/// the literal tags above and below stay greppable, and the removal is
+/// tracked on the CYBERPUN-17-7 story, requested as a follow-up on this
+/// PR's task (`CYBERPUN-17-7-t4`) rather than given an invented ticket ID
+/// here -- the same convention `PlayerMovementController` and
+/// `GameScene.spawnTilePosition()` follow. Whoever mounts durable HUD
+/// content (CYBERPUN-17-12 at the latest) deletes the marker with it.
 ///
 /// Deleting the marker alone turns two green assertions red, so 17-7's
 /// definition of done is "delete the marker **and** re-point both
@@ -67,9 +83,12 @@ final class GameplayScreenNode: ScreenNode {
     /// durable accessibility contract - it exists only because the skeleton
     /// screen mounts no HUD content of its own for
     /// `CyberpunkMonsterCrawlUITests` to assert against yet. CYBERPUN-17-7
-    /// adds the first real HUD content and should delete this marker then,
-    /// re-pointing the assertions below at that content rather than keeping
-    /// the marker alive to satisfy them.
+    /// owns deleting this marker and re-pointing the assertions below at
+    /// real content rather than keeping the marker alive to satisfy them.
+    /// That removal has **not** happened yet: 17-7 shipped the thumbstick,
+    /// but it sets `isAccessibilityElement = false` on purpose, so there is
+    /// no durable re-point target until the HUD lands (CYBERPUN-17-12) --
+    /// see this type's own doc comment above for the full status note.
     ///
     /// Two green assertions currently require this node to *exist*, and both
     /// are part of 17-7's definition of done, not just the node itself:

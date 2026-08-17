@@ -6,11 +6,12 @@ import SpriteKit
 /// state machine (`PlayerAnimator` + `Direction8` + `PlayerSpriteSheet`,
 /// `CYBERPUN-17-6-t1`) that drives the body's texture and mirroring.
 ///
-/// **Who mounts this in a real build:** `GameScene.startPlayer()` parents
+/// **Who mounts this in a real build:** `GameScene.startPlayer(at:)` parents
 /// one of these directly under `GameScene.worldLayer` on entry to
-/// `.gameplay`, at the camera's tile and with its depth resolved through
-/// `DepthBanding`, and `GameScene.update(_:)` drives
-/// `update(deltaTime:movementVector:)` once per frame. This follows the rule
+/// `.gameplay`, at the run's spawn tile and with its depth resolved through
+/// `DepthBanding`, and `GameScene.advanceMovementAndCamera(currentTime:)`
+/// (called from `update(_:)`) drives `update(deltaTime:movementVector:)`
+/// once per frame. This follows the rule
 /// `GroundTileRenderer`'s type doc writes down for this repo -- *"a factory
 /// with no production caller is exactly the shape of feature that never gets
 /// switched on"* -- so the anchor, shadow and depth integration is
@@ -20,15 +21,15 @@ import SpriteKit
 /// visual state only. There is no physics body and no movement of this
 /// node's own `position` -- `update(deltaTime:movementVector:)` only reads
 /// the vector to resolve facing/animation, it never applies it. The scene
-/// therefore passes `.zero` in a shipped build today and the mounted player
-/// stands idle on frame 0; a DEBUG build that opts into
-/// `GameScene.debugPlayerDemoEnabled` substitutes a scripted
-/// `SCAFFOLDING(CYBERPUN-17-7)` demo vector so the facing/animation state
-/// machine can be watched running, which still moves nothing but the
-/// texture. Movement, the floating thumbstick and camera-follow land with
-/// `CYBERPUN-17-7`, which replaces that `.zero` with the resolved input
-/// vector and separately updates `position` (and this node's depth as the
-/// player crosses tiles).
+/// passed `.zero` while nothing produced real input, and the mounted player
+/// stood idle on frame 0. Movement, the floating thumbstick and
+/// camera-follow have since landed with `CYBERPUN-17-7`:
+/// `GameScene.advanceMovementAndCamera(currentTime:)` resolves the stick
+/// against building collision, commits `position` and this node's depth
+/// itself, and passes the resulting movement vector here purely for facing
+/// and frame state. The scripted `SCAFFOLDING(CYBERPUN-17-7)` demo driver,
+/// and the `GameScene.debugPlayerDemoEnabled` flag that gated it, are
+/// deleted.
 final class PlayerNode: SKNode {
 
     /// The player's ground-collision hitbox size -- delegated to

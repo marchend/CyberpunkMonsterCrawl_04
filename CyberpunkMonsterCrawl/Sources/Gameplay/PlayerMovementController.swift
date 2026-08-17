@@ -15,40 +15,47 @@ import Foundation
 /// `TilePoint` applies to keeping tile space and screen space apart.
 ///
 /// **This is the real replacement for the demo cycle.** Where the story's
-/// now-deleted `PlayerScaffoldingDriver` synthesised a
-/// scripted vector with no stick at all, this type derives the same *shape*
-/// of output (a SpriteKit-space facing vector, plus a tile-space
-/// displacement) from a real `StickState` -- so `GameScene`'s eventual call
-/// site needs only a source swap, not a rewrite. Building this as a small,
+/// now-deleted `PlayerScaffoldingDriver` synthesised a scripted vector with
+/// no stick at all, this type derives the same *shape* of output (a
+/// SpriteKit-space facing vector, plus a tile-space displacement) from a
+/// real `StickState` -- which is what let `GameScene`'s call site swap
+/// source without a rewrite. Building this as a small,
 /// pure type with no `SKNode`/`SKScene` reference is what makes it
 /// exhaustively unit-testable without a live scene.
 ///
-/// **Scope of this PR (`CYBERPUN-17-7` PR 1).** This is the input
-/// *consumer* half of the story: given a `StickState` and the render clock,
-/// it computes what the player's displacement/facing/moving state *should
-/// be*.
-/// It does not touch `PlayerNode.position`, does not resolve building
-/// collision, and is not yet wired into `GameScene.update(_:)` in place of
-/// `PlayerScaffoldingDriver` -- that wiring (which also deleted the
-/// demo driver and debug camera pan) landed in a
-/// later PR of this same story, alongside collision and camera-follow. See
-/// `FloatingThumbstickNode`'s own doc comment for the same scope note on the
-/// producer side.
+/// **Where this fits (`CYBERPUN-17-7`).** This is the input *consumer* half
+/// of the story: given a `StickState` and the render clock, it computes what
+/// the player's displacement/facing/moving state *should be*. It stays pure
+/// by design -- it never touches `PlayerNode.position` and never resolves
+/// building collision; the scene owns both. It is wired into a real build:
+/// `GameScene.advanceMovementAndCamera(currentTime:)` calls
+/// `update(stickState:currentTime:)` with `GameScene.thumbstick`'s live
+/// reading every frame, feeds `frameDisplacement` through
+/// `CollisionResolver.resolve(...)`, commits the resolved position and depth
+/// to the mounted `PlayerNode`, and drives `CameraController` from that same
+/// position. See `FloatingThumbstickNode`'s doc comment for the producer
+/// side.
 ///
-/// **Where the deferred half is tracked.** "A later PR of this same story"
-/// names nothing anyone can look up, so, concretely: the outstanding wiring
-/// is tracked on the `CYBERPUN-17-7` story itself, and a follow-up task
-/// under it has been requested on this PR's task, `CYBERPUN-17-7-t1` -- not
-/// given an invented ticket ID here. The authoritative list of what is
-/// implemented versus still deferred for this story is the
+/// **What is still outstanding on the story, and where it is tracked.** The
+/// movement/collision/camera wiring above is done; two items are not, and
+/// neither is given an invented ticket ID here. (1) The run's spawn junction
+/// is identical on every run, because nothing in the app writes
+/// `GameScene.worldSeed` -- see `GameScene.spawnTilePosition()` for the full
+/// note. (2) `GameplayScreenNode`'s `SCAFFOLDING(CYBERPUN-17-7)`
+/// `gameplay.container` marker is still mounted, because no durable in-run
+/// content exists for its two assertions to re-point at yet -- see that
+/// type's doc comment. Both are tracked on the `CYBERPUN-17-7` story itself,
+/// requested as follow-ups on its tasks. The authoritative list of what is
+/// implemented versus still outstanding for this story is the
 /// `CYBERPUN-17-7` entry in AGENT.md/CLAUDE.md; read that rather than
 /// inferring the remaining scope from these doc comments.
 ///
-/// Because that split leaves both halves without a production call site for
-/// now, `ThumbstickMovementSeamTests` drives a real `FloatingThumbstickNode`
-/// drag straight into this controller: the producer and consumer cannot
-/// silently disagree about y-sign, unit-vs-raw direction or dead-zone
-/// semantics while waiting to be wired together.
+/// Both halves now share one production call site, and
+/// `ThumbstickMovementSeamTests` still drives a real
+/// `FloatingThumbstickNode` drag straight into this controller: the producer
+/// and consumer cannot silently disagree about y-sign, unit-vs-raw direction
+/// or dead-zone semantics without turning a test red, whatever the scene
+/// does.
 final class PlayerMovementController {
 
     /// On-screen distance (points) covered by a one-tile step along a single

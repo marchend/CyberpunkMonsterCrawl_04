@@ -5,14 +5,16 @@ import SpriteKit
 /// centre of the viewport by repositioning a container node, and drives
 /// chunk streaming with that same focus point every call.
 ///
-/// **Scope of this PR (`CYBERPUN-17-7` PR 2).** This is the pure
-/// camera-lock geometry only \u2014 it does not decide *which* scene node plays
-/// the role of `container` in a real build (`GameScene.worldLayer` versus
-/// the existing `cameraNode`) or drive it from `GameScene.update(_:)`; that
-/// is scene wiring, and scene wiring (along with having since deleted
-/// `PlayerScaffoldingDriver` and the debug
-/// camera pan) was explicitly out of scope here \u2014 "does not touch input or
-/// scene wiring" \u2014 and landed in a later PR of this same story.
+/// **Where this fits (`CYBERPUN-17-7`).** This type is the pure camera-lock
+/// geometry: it does not decide *which* scene node plays the role of
+/// `container` in a real build (`GameScene.worldLayer` versus the existing
+/// `cameraNode`), because that choice is scene wiring and the scene makes
+/// it. In the composed app `GameScene.commonInit()` builds one of these
+/// over `worldLayer`, and `GameScene.advanceMovementAndCamera(currentTime:)`
+/// drives it every frame from the collision-resolved player position, so
+/// the camera follows real thumbstick input. `PlayerScaffoldingDriver` and
+/// the debug camera pan that stood in before that pipeline existed have
+/// both been deleted.
 ///
 /// **AGENT.md's camera-lock rationale, and why this never touches
 /// `SKCameraNode`.** `GameScene.uiLayer` is already parented to a single
@@ -20,7 +22,8 @@ import SpriteKit
 /// once world-camera scrolling lands \u2014 that camera already exists, and
 /// this type must not introduce a second one. `container` here is
 /// deliberately a plain `SKNode`: the geometry below (see "The formula")
-/// works identically whether a future wiring PR hands it `worldLayer`
+/// works identically whether the scene hands it `worldLayer` (what
+/// `GameScene` does today)
 /// (offsetting world content so the focus lands at screen centre while
 /// `cameraNode` stays fixed \u2014 `GameScene.centreCameraOnScene()`'s existing
 /// behaviour) or some other container the world's content is parented
