@@ -50,7 +50,11 @@ struct StickState: Equatable {
 /// `PlayerMovementController`, building collision and camera-follow, lands
 /// in a later PR of this same story -- this PR's own scope is explicitly
 /// "one producer (stick state), one consumer (displacement/facing/isMoving);
-/// no collision, camera, or world logic".
+/// no collision, camera, or world logic". That deferred half is tracked on
+/// the `CYBERPUN-17-7` story itself, with a follow-up task under it
+/// requested on this PR's task, `CYBERPUN-17-7-t1`; see
+/// `PlayerMovementController`'s doc comment and the `CYBERPUN-17-7` entry in
+/// AGENT.md/CLAUDE.md for the implemented-versus-deferred list.
 ///
 /// Until that wiring lands, `ThumbstickMovementSeamTests` pipes this node's
 /// own `stickState` from a real drag straight into

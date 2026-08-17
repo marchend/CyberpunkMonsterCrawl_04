@@ -35,6 +35,15 @@ import Foundation
 /// `FloatingThumbstickNode`'s own doc comment for the same scope note on the
 /// producer side.
 ///
+/// **Where the deferred half is tracked.** "A later PR of this same story"
+/// names nothing anyone can look up, so, concretely: the outstanding wiring
+/// is tracked on the `CYBERPUN-17-7` story itself, and a follow-up task
+/// under it has been requested on this PR's task, `CYBERPUN-17-7-t1` -- not
+/// given an invented ticket ID here. The authoritative list of what is
+/// implemented versus still deferred for this story is the
+/// `CYBERPUN-17-7` entry in AGENT.md/CLAUDE.md; read that rather than
+/// inferring the remaining scope from these doc comments.
+///
 /// Because that split leaves both halves without a production call site for
 /// now, `ThumbstickMovementSeamTests` drives a real `FloatingThumbstickNode`
 /// drag straight into this controller: the producer and consumer cannot

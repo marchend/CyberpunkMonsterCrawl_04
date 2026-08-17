@@ -703,8 +703,8 @@ docs/bootstrap.md                          original spec (source of truth)
   disagreement between producer and consumer cannot ship green. Replacing
   `PlayerScaffoldingDriver`'s `SCAFFOLDING(CYBERPUN-17-7)` demo vector with
   this controller's output, extending `GameScene`'s touch dispatch to drive
-  the stick, building collision and camera-follow are a later PR of this
-  same story
+  the stick, building collision and camera-follow are a later PR under the
+  `CYBERPUN-17-7` story (follow-up task requested on `CYBERPUN-17-7-t1`)
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid. The footprint-only obstruction primitive exists
   (`BuildingObstruction`, above); wiring it into a live movement resolver is
