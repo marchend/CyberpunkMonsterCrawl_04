@@ -38,6 +38,30 @@ final class GameViewController: UIViewController {
     /// writes it.
     private(set) var skView: AccessibleSKView!
 
+    /// The plain `UIView` that presents the scene's UI to UIAccessibility, as
+    /// a set of real invisible subviews mirroring the accessible `SKNode`s.
+    ///
+    /// It has to be a **sibling installed above** `skView`, not a child of
+    /// it: `SceneAccessibilityContainerView` silences SpriteKit's competing
+    /// (camera-unaware) accessibility tree by setting
+    /// `accessibilityElementsHidden` on the `SKView`, and that flag hides a
+    /// view's whole accessibility subtree - a nested container would be
+    /// hidden with it. It draws nothing, and although it *is* interactive (a
+    /// non-interactive view is invisible to the hit-test walk the
+    /// accessibility point lookup is built on) it hands every real touch back
+    /// to the scene by forwarding it, converted into scene space, into
+    /// `GameScene.dispatchTouch(atScenePoint:)` - so the only thing this line
+    /// changes for a real finger is nothing at all. What it changes for
+    /// XCUITest / VoiceOver is that
+    /// `menu.playButton` becomes *hittable* instead of merely findable - real
+    /// views are natively resolvable from a point, which hand-vended
+    /// `UIAccessibilityElement`s were not (see `AccessibleSKView`, parts 2
+    /// and 3).
+    ///
+    /// `private(set)` so `AccessibleSKViewTests` can pin the wiring and catch
+    /// a silent regression back to the `SKView`-as-container arrangement.
+    private(set) var accessibilityContainerView: SceneAccessibilityContainerView!
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
@@ -48,7 +72,26 @@ final class GameViewController: UIViewController {
         view.addSubview(skView)
         self.skView = skView
 
+        let accessibilityContainerView = SceneAccessibilityContainerView(sceneView: skView)
+        accessibilityContainerView.frame = view.bounds
+        accessibilityContainerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(accessibilityContainerView)
+        self.accessibilityContainerView = accessibilityContainerView
+
+        // Presenting last, with the container already wired up, so the first
+        // set of accessibility mirrors is built from the scene the app
+        // actually launches into (`presentScene` refreshes them).
         skView.presentScene(makeGameScene(size: view.bounds.size))
+    }
+
+    /// The container's mirrors are geometry, so they have to follow every
+    /// layout pass - a rotation resizes the scene and moves every
+    /// camera-locked button on screen. Refreshing here (as well as from the
+    /// container's own `layoutSubviews()` and from each accessibility query)
+    /// keeps `AppLaunchAndRotationUITests`' post-rotation frames honest.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        accessibilityContainerView?.refreshAccessibilityMirrors()
     }
 
     /// Builds the scene and registers every screen. Separated from

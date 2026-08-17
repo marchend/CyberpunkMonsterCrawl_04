@@ -33,11 +33,15 @@ private enum AccessibilityIdentifierAssociation {
 /// genuinely forwards (`isAccessibilityElement`, `accessibilityLabel`,
 /// `accessibilityHint`, `accessibilityTraits`) travel that route.
 ///
-/// What closes the gap is `AccessibleSKView.publishedAccessibilityElements()`,
-/// which builds the `UIAccessibilityElement`s itself and copies
-/// `node.accessibilityIdentifier` onto each one. That is what makes an
-/// XCUITest subscript query like
-/// `app.descendants(matching: .any)["menu.playButton"]` resolve, and
+/// What closes the gap is `AccessibleSKView.accessibilityDescriptors()`, which
+/// reads `node.accessibilityIdentifier` into one descriptor per accessible
+/// node, together with
+/// `SceneAccessibilityContainerView.refreshAccessibilityMirrors()`, which
+/// copies each descriptor's identifier onto a real (invisible) subview -
+/// a `SceneAccessibilityMirrorView`. That is what makes an XCUITest subscript
+/// query like `app.descendants(matching: .any)["menu.playButton"]` resolve,
+/// and - because the mirrors are genuine sibling views rather than elements we
+/// vend by hand - hittable rather than merely findable.
 /// `AppLaunchAndRotationUITests` relies on exactly that.
 ///
 /// Consequences, so nobody re-learns this the hard way:
@@ -55,8 +59,9 @@ private enum AccessibilityIdentifierAssociation {
 /// - A unit-test assertion on `node.accessibilityIdentifier` still only
 ///   proves this extension stored and returned a string. Evidence that the
 ///   value is reachable by a driver comes from `AccessibleSKViewTests`
-///   asserting on `publishedAccessibilityElements()`, so pin it there when
-///   the value is meant to be externally observable.
+///   asserting on the `SceneAccessibilityMirrorView`s the container
+///   publishes, so pin it there when the value is meant to be externally
+///   observable.
 /// - If `AccessibleSKView` is ever swapped back out for a plain `SKView`,
 ///   every identifier-based UI-test query goes dark again. That swap is
 ///   guarded by `GameViewControllerCompositionTests`.

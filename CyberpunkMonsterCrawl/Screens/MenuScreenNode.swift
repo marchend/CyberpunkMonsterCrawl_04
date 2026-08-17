@@ -36,6 +36,17 @@ final class MenuScreenNode: ScreenNode {
     /// future UI test needs a stable way to identify it that survives the
     /// buttons being restyled, renamed or reordered. Keep this identifier
     /// stable; do not remove it when the menu's visuals change.
+    ///
+    /// It is positioned in `layout(for:safeAreaInsets:)` *clear of every
+    /// button* rather than left at the screen's centre. A marker node has no
+    /// visual content, so its accumulated frame is empty and
+    /// `AccessibleSKView` has to synthesise a minimum-size rect to keep it
+    /// findable - and at `(0, 0)` that synthesised rect landed **inside** the
+    /// PLAY button (`playButton` sits within ~32pt of the centre in portrait).
+    /// Two accessibility elements sharing a point is exactly the ambiguity
+    /// that can make PLAY report `isHittable == false`, so the marker is
+    /// parked in the gap between the title and PLAY where nothing tappable
+    /// can overlap it.
     private let containerMarker = SKNode()
 
     /// - Parameters:
@@ -99,5 +110,11 @@ final class MenuScreenNode: ScreenNode {
         titleLabel.position = CGPoint(x: 0, y: verticalShift + titleOffset)
         playButton.position = CGPoint(x: 0, y: verticalShift)
         highScoresButton.position = CGPoint(x: 0, y: verticalShift - highScoresOffset)
+
+        // Halfway between the title and PLAY: still unmistakably "the menu",
+        // but outside every button's frame, so the size-less marker's
+        // synthesised accessibility rect can never share a point with a
+        // tappable element (see `containerMarker`).
+        containerMarker.position = CGPoint(x: 0, y: verticalShift + titleOffset * 0.6)
     }
 }

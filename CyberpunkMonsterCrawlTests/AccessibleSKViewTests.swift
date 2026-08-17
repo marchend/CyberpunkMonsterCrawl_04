@@ -26,37 +26,115 @@ final class AccessibleSKViewTests: XCTestCase {
 
     private let sceneSize = CGSize(width: 400, height: 800)
 
+    /// The root view `makePresentedView(_:viewSize:)` builds, retained for the
+    /// lifetime of the test so the sibling pair below cannot be torn down
+    /// mid-assertion.
+    private var hostView: UIView!
+
+    /// The plain `UIView` the elements are actually vended from - the class
+    /// UIKit asks both "what elements are there?" and "which element is at
+    /// this point?", now that the container has moved off `SKView` (see
+    /// `AccessibleSKView`, "part 3").
+    private var containerView: SceneAccessibilityContainerView!
+
+    override func tearDown() {
+        hostView = nil
+        containerView = nil
+        super.tearDown()
+    }
+
     /// The real composed scene (menu mounted, all four screens registered),
     /// so these tests measure what ships rather than a hand-built stand-in.
     private func makeMenuScene() -> GameScene {
         GameViewController().makeGameScene(size: sceneSize)
     }
 
-    /// A presented `AccessibleSKView` with no window - enough for every
-    /// conversion the class performs (scene size, view bounds, scale mode and
-    /// camera are all it needs), and paused so no render loop can mutate the
-    /// scene mid-assertion.
+    /// A presented `AccessibleSKView` with no window, wired to a
+    /// `SceneAccessibilityContainerView` sibling exactly as
+    /// `GameViewController` wires them - enough for every conversion the
+    /// classes perform (scene size, view bounds, scale mode and camera are
+    /// all they need), and paused so no render loop can mutate the scene
+    /// mid-assertion.
+    ///
+    /// The container is reachable as `containerView` rather than returned,
+    /// so the tests that only care about published geometry stay unchanged.
     ///
     /// `viewSize` defaults to the scene size (the 1:1 case) but can be given
     /// a different value so the scale factor the conversion depends on is
     /// actually exercised - see
     /// `test_halfScaleView_publishedPlayElement_stillPointsAtTheButton`.
     private func makePresentedView(_ scene: GameScene, viewSize: CGSize? = nil) -> AccessibleSKView {
-        let view = AccessibleSKView(frame: CGRect(origin: .zero, size: viewSize ?? sceneSize))
+        let bounds = CGRect(origin: .zero, size: viewSize ?? sceneSize)
+        let host = UIView(frame: bounds)
+        let view = AccessibleSKView(frame: bounds)
+        host.addSubview(view)
+
+        let container = SceneAccessibilityContainerView(sceneView: view)
+        container.frame = bounds
+        host.addSubview(container)
+
         view.presentScene(scene)
         view.isPaused = true
+
+        hostView = host
+        containerView = container
         return view
     }
 
+    /// Every element the container currently publishes, in z-order (bottom
+    /// first), refreshed beforehand so the list is the one an accessibility
+    /// snapshot would see.
+    ///
+    /// The published objects are **real invisible subviews**
+    /// (`SceneAccessibilityMirrorView`), not synthesized
+    /// `UIAccessibilityElement`s: that swap is the fix (see
+    /// `AccessibleSKView`, "part 2"), so the assertions below read the very
+    /// views UIKit resolves rather than objects we vend by hand.
+    private func publishedMirrors() -> [SceneAccessibilityMirrorView] {
+        containerView.refreshAccessibilityMirrors()
+        return containerView.subviews.compactMap { $0 as? SceneAccessibilityMirrorView }
+    }
+
     /// The published element a driver would resolve for `identifier`.
-    private func publishedElement(
-        _ identifier: String,
-        in view: AccessibleSKView
-    ) throws -> UIAccessibilityElement {
-        let elements = try XCTUnwrap(view.publishedAccessibilityElements())
-        return try XCTUnwrap(
-            elements.first { $0.accessibilityIdentifier == identifier },
+    private func publishedElement(_ identifier: String) throws -> SceneAccessibilityMirrorView {
+        try XCTUnwrap(
+            publishedMirrors().first { $0.accessibilityIdentifier == identifier },
             "no published element carries the identifier \(identifier)"
+        )
+    }
+
+    /// The centre of `element`'s published frame, in container coordinates -
+    /// the point a driver resolves from the frame the app publishes.
+    private func publishedCentre(of element: SceneAccessibilityMirrorView) -> CGPoint {
+        CGPoint(x: element.frame.midX, y: element.frame.midY)
+    }
+
+    /// The element UIKit's point lookup lands on for `point` (container
+    /// coordinates), resolved the way a driver resolves it: by hit-testing
+    /// **from the root view** with no event, which is the walk
+    /// `accessibilityHitTest(_:)` - and with it XCUITest's `isHittable` - is
+    /// built on.
+    ///
+    /// Starting at the root rather than at the container is load-bearing:
+    /// `UIView.hitTest(_:with:)` returns `nil` for a non-interactive view and
+    /// never descends into its subviews, so an overlay that opted out of
+    /// interaction was skipped entirely and the point resolved to the
+    /// (accessibility-silenced) `SKView` underneath - PLAY findable,
+    /// `isHittable == false`. A helper that began the walk inside the
+    /// container could not see that, so this one begins where a driver does.
+    private func elementResolved(atContainerPoint point: CGPoint) throws -> SceneAccessibilityMirrorView {
+        _ = publishedMirrors()
+        let root = try XCTUnwrap(hostView, "the presented host view is what a driver walks from")
+        let pointInRoot = root.convert(point, from: containerView)
+
+        let resolved = try XCTUnwrap(
+            root.hitTest(pointInRoot, with: nil),
+            "no view at all resolves at \(point) - the accessibility point lookup would answer nothing"
+        )
+        return try XCTUnwrap(
+            resolved as? SceneAccessibilityMirrorView,
+            "the point lookup at \(point) resolved to \(type(of: resolved)) instead of a mirror - the "
+                + "overlay is not taking part in hit-testing, which is what makes PLAY un-hittable"
         )
     }
 
@@ -242,11 +320,12 @@ final class AccessibleSKViewTests: XCTestCase {
 
     func test_publishedElements_carryTheIdentifiersLabelsAndTraitsADriverMatchesOn() throws {
         let scene = makeMenuScene()
-        let view = makePresentedView(scene)
+        _ = makePresentedView(scene)
 
-        let elements = try XCTUnwrap(
-            view.publishedAccessibilityElements(),
-            "the hosting view must publish the menu's elements itself, not leave it to SpriteKit"
+        let elements = publishedMirrors()
+        XCTAssertFalse(
+            elements.isEmpty,
+            "the container must publish the menu's elements itself, not leave it to SpriteKit"
         )
 
         let play = try XCTUnwrap(elements.first { $0.accessibilityIdentifier == "menu.playButton" })
@@ -259,7 +338,11 @@ final class AccessibleSKViewTests: XCTestCase {
             0,
             "the element must carry .button, or a driver will not treat it as tappable"
         )
-        XCTAssertFalse(play.accessibilityFrame.isEmpty, "a zero frame is exactly what made PLAY untappable")
+        XCTAssertFalse(play.frame.isEmpty, "a zero frame is exactly what made PLAY untappable")
+        XCTAssertTrue(
+            play.isAccessibilityElement,
+            "a mirror must be a leaf element, or a driver resolves the container instead of the button"
+        )
 
         let highScores = try XCTUnwrap(
             elements.first { $0.accessibilityIdentifier == "menu.highScoresButton" }
@@ -269,7 +352,120 @@ final class AccessibleSKViewTests: XCTestCase {
         let container = try XCTUnwrap(elements.first { $0.accessibilityIdentifier == "menu.container" })
         XCTAssertEqual(container.accessibilityLabel, "Menu")
 
-        XCTAssertEqual(view.accessibilityElementCount(), elements.count)
+        // The elements UIKit reads are the container view's own subviews, not
+        // anything the SKView vends - that move is the fix, so assert it
+        // where UIKit looks.
+        XCTAssertEqual(containerView.mirrorViews.count, elements.count)
+        XCTAssertFalse(
+            containerView.isAccessibilityElement,
+            "a container that reports itself as an element collapses everything it vends"
+        )
+    }
+
+    // MARK: - The container has to be the plain UIView, not the SKView
+
+    /// The entry-point wiring for the hit-test half of the fix.
+    ///
+    /// `SKView` ships its own camera-unaware accessibility implementation and
+    /// the accessibility server keeps consulting *that* one for an `SKView`,
+    /// whatever this app overrides on it - which is why PLAY resolved by
+    /// label yet `isHittable` stayed `false`. So the elements are vended from
+    /// a plain `UIView` sibling *above* the `SKView`, and SpriteKit's
+    /// competing tree is silenced. Both halves of that are load-bearing and
+    /// invisible to every other test in this file, so they are pinned here.
+    func test_compositionRoot_vendsTheElementsFromAPlainViewAboveTheSKView() throws {
+        let controller = GameViewController()
+        controller.loadViewIfNeeded()
+
+        let container = try XCTUnwrap(
+            controller.accessibilityContainerView,
+            "the composition root must install the plain-UIView accessibility container"
+        )
+        XCTAssertFalse(
+            container is SKView,
+            "the container must not be an SKView - SpriteKit's own implementation answers for those"
+        )
+        XCTAssertTrue(container.superview === controller.view)
+        XCTAssertTrue(
+            controller.skView.superview === controller.view,
+            "the two must be siblings: accessibilityElementsHidden on the SKView would hide a child"
+        )
+
+        let subviews = controller.view.subviews
+        let skViewIndex = try XCTUnwrap(subviews.firstIndex { $0 === controller.skView })
+        let containerIndex = try XCTUnwrap(subviews.firstIndex { $0 === container })
+        XCTAssertGreaterThan(
+            containerIndex,
+            skViewIndex,
+            "the container must sit above the SKView, or the accessibility walk reaches SpriteKit first"
+        )
+
+        XCTAssertTrue(
+            controller.skView.accessibilityElementsHidden,
+            "SpriteKit's competing accessibility tree must be silenced, or it answers the hit test"
+        )
+        XCTAssertFalse(container.accessibilityElementsHidden)
+
+        // The overlay must take part in hit-testing (a non-interactive view
+        // answers nil for every point and hides its subtree from the
+        // accessibility point lookup, which is what left PLAY un-hittable)...
+        XCTAssertTrue(
+            container.isUserInteractionEnabled,
+            "an overlay that opts out of interaction is skipped by the hit-test walk the "
+                + "accessibility point lookup is built on"
+        )
+
+        // ...and it must answer a hit test carrying a real event exactly as it
+        // answers an event-less one. Hittability cannot be made to depend on
+        // telling the two apart: XCUITest's `isHittable` *is* the point-lookup
+        // half of the accessibility contract, and an overlay that returned
+        // `nil` whenever an event was attached left PLAY findable and
+        // un-hittable in the simulator while this suite stayed green.
+        let centre = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+        XCTAssertTrue(
+            container.hitTest(centre, with: UIEvent()) === container.hitTest(centre, with: nil),
+            "a touch hit test and an accessibility point lookup must resolve the same view - "
+                + "discriminating on the event is what made PLAY findable but un-hittable"
+        )
+    }
+
+    /// Every element must live in the container's own view hierarchy: an
+    /// element inside the `SKView` is read back through SpriteKit's tree,
+    /// which is the arrangement that failed.
+    func test_publishedElements_areOwnedByTheContainerView() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        let elements = publishedMirrors()
+        XCTAssertFalse(elements.isEmpty)
+
+        for element in elements {
+            XCTAssertTrue(
+                element.superview === containerView,
+                "\(element.accessibilityIdentifier ?? "?") must be vended by the container view"
+            )
+            XCTAssertFalse(
+                element.isDescendant(of: view),
+                "an element inside the SKView is answered for by SpriteKit's own tree"
+            )
+            XCTAssertTrue(
+                element.isUserInteractionEnabled,
+                "a non-interactive mirror is skipped by the hit-test walk the accessibility point "
+                    + "lookup is built on, which is what made PLAY findable but un-hittable"
+            )
+
+            // Interactive, and resolved for a *real* touch too - the mirror
+            // hands that touch back to the scene itself
+            // (`forwardTouch(atContainerPoint:phase:)`) rather than relying on
+            // being invisible to it, so the point lookup `isHittable` performs
+            // cannot disagree with the frame this same view published.
+            let centre = publishedCentre(of: element)
+            XCTAssertTrue(
+                containerView.hitTest(centre, with: UIEvent()) === element,
+                "an event-carrying hit test at \(element.accessibilityIdentifier ?? "?") must resolve "
+                    + "to that very mirror, exactly as an event-less lookup does"
+            )
+        }
     }
 
     /// The published frame must be the button's real size, not a guess: the
@@ -277,33 +473,32 @@ final class AccessibleSKViewTests: XCTestCase {
     /// element's frame must measure the same as the node's accumulated frame.
     func test_publishedElementFrame_measuresTheButton() throws {
         let scene = makeMenuScene()
-        let view = makePresentedView(scene)
+        _ = makePresentedView(scene)
         let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
 
-        let elements = try XCTUnwrap(view.publishedAccessibilityElements())
-        let play = try XCTUnwrap(elements.first { $0.accessibilityIdentifier == "menu.playButton" })
+        let play = try publishedElement("menu.playButton")
 
         let accumulated = menu.playButton.calculateAccumulatedFrame()
-        XCTAssertEqual(play.accessibilityFrame.width, accumulated.width, accuracy: 1e-3)
-        XCTAssertEqual(play.accessibilityFrame.height, accumulated.height, accuracy: 1e-3)
+        XCTAssertEqual(play.frame.width, accumulated.width, accuracy: 1e-3)
+        XCTAssertEqual(play.frame.height, accumulated.height, accuracy: 1e-3)
     }
 
     /// The end-to-end shape of the fix: take the frame a driver would aim at,
     /// convert its centre back through the view into scene space, dispatch
     /// there, and land in `.gameplay`.
     ///
-    /// The view has no window in a unit test, so `screenFrame(forSceneRect:in:)`
-    /// stops after the scene -> view step (there is no window through which
-    /// to reach screen space, see the guard in `AccessibleSKView`), and the
-    /// published frame is in view coordinates. Round-tripping through the
-    /// view is therefore the honest inverse of what the class published.
+    /// A mirror's `frame` is the node's camera-aware rect in the container's
+    /// coordinate space; UIKit takes it the rest of the way to the screen
+    /// coordinates a driver aims at, from the view's own geometry. So the
+    /// honest inverse of what the app published is: container -> view ->
+    /// scene, which is what this round trip walks.
     func test_publishedPlayElement_pointsAtASceneLocationThatStartsARun() throws {
         let scene = makeMenuScene()
         let view = makePresentedView(scene)
         let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
 
-        let play = try publishedElement("menu.playButton", in: view)
-        let centreInView = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
+        let play = try publishedElement("menu.playButton")
+        let centreInView = view.convert(publishedCentre(of: play), from: containerView)
 
         let scenePoint = view.convert(centreInView, to: scene)
 
@@ -324,17 +519,231 @@ final class AccessibleSKViewTests: XCTestCase {
     /// hat).
     func test_publishedElements_areRebuiltAfterAScreenSwap() throws {
         let scene = makeMenuScene()
-        let view = makePresentedView(scene)
+        _ = makePresentedView(scene)
 
-        let before = try XCTUnwrap(view.publishedAccessibilityElements())
-        let beforeIdentifiers = Set(before.compactMap(\.accessibilityIdentifier))
+        let beforeIdentifiers = Set(publishedMirrors().compactMap(\.accessibilityIdentifier))
         XCTAssertTrue(beforeIdentifiers.contains("menu.playButton"))
 
         XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
 
-        let after = try XCTUnwrap(view.publishedAccessibilityElements())
+        // Read through the property UIKit itself consults once per
+        // accessibility snapshot - no explicit refresh - because that is the
+        // hook that has to rebuild the mirrors for a real driver.
+        _ = containerView.accessibilityElements
+
+        let after = containerView.mirrorViews
         let afterIdentifiers = Set(after.compactMap(\.accessibilityIdentifier))
         XCTAssertEqual(afterIdentifiers, ["highScores.backToMenuButton"])
+    }
+
+    // MARK: - The hit-test half of the container contract
+
+    /// Publishing a correct frame is only half of what an out-of-process
+    /// driver needs. XCUITest's `isHittable` resolves an element's activation
+    /// point from that frame, asks the app *which accessibility element is at
+    /// this point*, and requires the same element back - so a container that
+    /// answers the query but not the hit test leaves PLAY findable and
+    /// un-hittable (`CyberpunkMonsterCrawlUITests` failed on exactly that
+    /// assertion, one line after finding the element). Hit-testing the centre
+    /// of the frame we published must return the element we published.
+    ///
+    /// Asked of the *container view*: the `SKView` cannot answer this
+    /// question, because SpriteKit's own accessibility implementation is what
+    /// the accessibility server consults for one - which is why the container
+    /// moved onto a plain `UIView` (see `AccessibleSKView`, "part 3").
+    func test_accessibilityHitTest_atThePublishedPlayFrameCentre_returnsThatElement() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton")
+
+        let hit = try elementResolved(atContainerPoint: publishedCentre(of: play))
+
+        XCTAssertTrue(
+            hit === play,
+            "hit-testing the published frame's centre must return that very element - identity is what "
+                + "isHittable compares, so an equal-but-different object is still a failure"
+        )
+    }
+
+    /// The replacement for the old "an event-carrying hit test resolves to
+    /// nothing" guarantee, which was the bug rather than the contract: PLAY
+    /// was findable, tappable *and* `isHittable == false`, because an overlay
+    /// that answers `nil` whenever a `UIEvent` is attached only stays
+    /// point-resolvable for as long as the accessibility lookup really does
+    /// arrive without one - and in a live simulator it does not.
+    ///
+    /// So the two halves of the contract are pinned together here: a hit test
+    /// carrying a real event resolves to the *same* mirror an event-less
+    /// lookup does (what hittability needs), **and** the touch that mirror now
+    /// owns still reaches `GameScene`'s dispatcher and starts a run (what a
+    /// finger needs). Either one alone is a regression.
+    func test_eventCarryingHitTest_resolvesThePlayMirror_andForwardsTheTouchToTheScene() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton")
+        let centre = publishedCentre(of: play)
+
+        let touched = try XCTUnwrap(
+            containerView.hitTest(centre, with: UIEvent()),
+            "a real touch over PLAY must resolve to something in the overlay, or the point lookup "
+                + "isHittable performs resolves the AX-silenced SKView instead"
+        )
+        XCTAssertTrue(
+            touched === play,
+            "the touch and the accessibility lookup must resolve the same mirror - identity is what "
+                + "isHittable compares"
+        )
+
+        // ...and owning the touch must not swallow it: the mirror forwards it,
+        // converted into scene space, into the scene's own dispatcher.
+        XCTAssertTrue(
+            containerView.forwardTouch(atContainerPoint: centre, phase: .began),
+            "the container must forward a touch it owns while a GameScene is presented"
+        )
+        XCTAssertEqual(
+            scene.stateMachine.currentState,
+            .gameplay,
+            "a touch the overlay resolved must still reach PLAY's responder and start a run - the "
+                + "scene stays the sole dispatcher"
+        )
+    }
+
+    /// Forwarding is the mirror's own contract too (that is the object UIKit
+    /// delivers the touch to), and the later messages of a sequence must be
+    /// absorbed rather than re-dispatched - a `moved` that reached
+    /// `dispatchTouch(atScenePoint:)` would fire PLAY again mid-drag.
+    func test_forwardedTouch_dispatchesOnBeganOnly() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let centre = publishedCentre(of: try publishedElement("menu.playButton"))
+
+        for phase in [SceneAccessibilityContainerView.TouchForwardingPhase.moved, .ended, .cancelled] {
+            XCTAssertTrue(containerView.forwardTouch(atContainerPoint: centre, phase: phase))
+            XCTAssertEqual(
+                scene.stateMachine.currentState,
+                .menu,
+                "only the began message may reach the scene's dispatcher, or one drag over PLAY "
+                    + "starts a run repeatedly"
+            )
+        }
+
+        XCTAssertTrue(containerView.forwardTouch(atContainerPoint: centre, phase: .began))
+        XCTAssertEqual(scene.stateMachine.currentState, .gameplay)
+    }
+
+    /// `menu.container` is a size-less marker published at a synthesised 1pt
+    /// rect. Answering the marker where a button is would make that button
+    /// unhittable just as surely as answering nothing at all, so two
+    /// independent guarantees keep it harmless: `MenuScreenNode` parks the
+    /// marker clear of every button, and `SceneAccessibilityContainerView`
+    /// keeps markers at the bottom of the z-order, where UIKit's
+    /// topmost-sibling rule makes a real-sized element win any point the two
+    /// ever did share.
+    func test_publishedMarker_staysClearOfTheButtons_andBelowThemInTheZOrder() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let mirrors = publishedMirrors()
+        let play = try publishedElement("menu.playButton")
+        let highScores = try publishedElement("menu.highScoresButton")
+        let marker = try publishedElement("menu.container")
+
+        XCTAssertFalse(
+            play.frame.intersects(marker.frame),
+            "the size-less marker must not overlap PLAY - two elements sharing a point is the "
+                + "ambiguity that can make PLAY report isHittable == false"
+        )
+        XCTAssertFalse(highScores.frame.intersects(marker.frame))
+
+        // Published subview order *is* the z-order UIKit resolves a point
+        // with, so the marker coming first is what makes a real element win.
+        let markerIndex = try XCTUnwrap(mirrors.firstIndex { $0 === marker })
+        let playIndex = try XCTUnwrap(mirrors.firstIndex { $0 === play })
+        XCTAssertLessThan(
+            markerIndex,
+            playIndex,
+            "a marker must sit below every real element, or it can answer a point a button owns"
+        )
+
+        // ...and it still owns its own point, so it stays findable.
+        let hit = try elementResolved(atContainerPoint: publishedCentre(of: marker))
+        XCTAssertTrue(hit === marker)
+    }
+
+    /// The other button, so the hit test is picking an element rather than
+    /// always answering the same one.
+    func test_accessibilityHitTest_atTheHighScoresFrameCentre_returnsThatElement() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let highScores = try publishedElement("menu.highScoresButton")
+
+        let hit = try elementResolved(atContainerPoint: publishedCentre(of: highScores))
+
+        XCTAssertTrue(hit === highScores)
+    }
+
+    /// A point no published element covers must not be attributed to one of
+    /// them - a container that claims every point is as wrong as one that
+    /// claims none.
+    func test_accessibilityHitTest_outsideEveryPublishedFrame_returnsNoneOfOurElements() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let elements = publishedMirrors()
+        XCTAssertFalse(elements.isEmpty, "this test is only meaningful while something is published")
+
+        let corner = CGPoint(x: 1, y: 1)
+        for element in elements {
+            XCTAssertFalse(
+                element.frame.contains(corner),
+                "this test is only meaningful while the corner really is empty"
+            )
+        }
+
+        XCTAssertNil(
+            publishedMirrors().last { $0.frame.contains(corner) },
+            "an empty corner must fall through to the view underneath, not resolve to a published element"
+        )
+    }
+
+    /// Hit testing republishes, so it follows a screen swap exactly as a
+    /// query does - the stale-frame defect wearing its hit-test hat.
+    func test_accessibilityHitTest_followsAScreenSwap() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton")
+        let hitBefore = try elementResolved(atContainerPoint: publishedCentre(of: play))
+        XCTAssertTrue(hitBefore === play)
+
+        XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
+
+        let back = try publishedElement("highScores.backToMenuButton")
+        let hitAfter = try elementResolved(atContainerPoint: publishedCentre(of: back))
+
+        XCTAssertTrue(hitAfter === back)
+        XCTAssertFalse(hitAfter === play)
+    }
+
+    /// With the camera off-centre the published frame is unmoved (the pixels
+    /// did not move), so the hit test must still resolve there - the two
+    /// halves of the container contract have to agree in the configuration
+    /// the original defect needed.
+    func test_offCentreCamera_accessibilityHitTest_stillResolvesToThePlayElement() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        moveCameraOffCentre(scene)
+
+        let play = try publishedElement("menu.playButton")
+
+        let hit = try elementResolved(atContainerPoint: publishedCentre(of: play))
+
+        XCTAssertTrue(hit === play)
     }
 
     // MARK: - Off-centre camera (the configuration the bug actually needed)
@@ -355,15 +764,15 @@ final class AccessibleSKViewTests: XCTestCase {
     /// exactly.
     func test_offCentreCamera_keepsTheCameraLockedButtonWhereItIsOnScreen() throws {
         let scene = makeMenuScene()
-        let view = makePresentedView(scene)
+        _ = makePresentedView(scene)
         let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
 
-        let publishedBefore = try publishedElement("menu.playButton", in: view).accessibilityFrame
+        let publishedBefore = try publishedElement("menu.playButton").frame
         let sceneFrameBefore = try XCTUnwrap(scene.accessibilityFrameInScene(for: menu.playButton))
 
         moveCameraOffCentre(scene)
 
-        let publishedAfter = try publishedElement("menu.playButton", in: view).accessibilityFrame
+        let publishedAfter = try publishedElement("menu.playButton").frame
         let sceneFrameAfter = try XCTUnwrap(scene.accessibilityFrameInScene(for: menu.playButton))
 
         // The camera-locked button really did move in scene space...
@@ -389,8 +798,8 @@ final class AccessibleSKViewTests: XCTestCase {
 
         moveCameraOffCentre(scene)
 
-        let play = try publishedElement("menu.playButton", in: view)
-        let centreInView = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
+        let play = try publishedElement("menu.playButton")
+        let centreInView = view.convert(publishedCentre(of: play), from: containerView)
         let scenePoint = view.convert(centreInView, to: scene)
 
         let hit = try XCTUnwrap(
@@ -415,18 +824,18 @@ final class AccessibleSKViewTests: XCTestCase {
         let view = makePresentedView(scene, viewSize: CGSize(width: 200, height: 400))
         let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
 
-        let play = try publishedElement("menu.playButton", in: view)
+        let play = try publishedElement("menu.playButton")
         let accumulated = menu.playButton.calculateAccumulatedFrame()
 
         XCTAssertEqual(
-            play.accessibilityFrame.width,
+            play.frame.width,
             accumulated.width * 0.5,
             accuracy: 1e-2,
             "a half-scale view must publish a half-size frame, or a driver aims at the wrong pixels"
         )
-        XCTAssertEqual(play.accessibilityFrame.height, accumulated.height * 0.5, accuracy: 1e-2)
+        XCTAssertEqual(play.frame.height, accumulated.height * 0.5, accuracy: 1e-2)
 
-        let centreInView = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
+        let centreInView = view.convert(publishedCentre(of: play), from: containerView)
         let scenePoint = view.convert(centreInView, to: scene)
 
         let hit = try XCTUnwrap(scene.routeTouch(at: scenePoint))
@@ -446,8 +855,8 @@ final class AccessibleSKViewTests: XCTestCase {
 
         moveCameraOffCentre(scene)
 
-        let play = try publishedElement("menu.playButton", in: view)
-        let centreInView = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
+        let play = try publishedElement("menu.playButton")
+        let centreInView = view.convert(publishedCentre(of: play), from: containerView)
         let scenePoint = view.convert(centreInView, to: scene)
 
         let hit = try XCTUnwrap(scene.routeTouch(at: scenePoint))
@@ -492,21 +901,34 @@ final class AccessibleSKViewTests: XCTestCase {
     }
 
     /// `accessibilityFrame` is documented in **screen** coordinates, which
-    /// are reached through the window - so an off-window view has no screen
-    /// mapping and `screenFrame(forSceneRect:in:)` falls back to the
-    /// view-space rect rather than publishing the degenerate rect UIKit
-    /// would answer with. Pinning that keeps every windowless assertion in
-    /// this file meaningful instead of accidentally asserting on zeroes.
-    func test_screenFrame_withoutAWindow_fallsBackToTheViewSpaceRect() {
+    /// are reached through the window - and this suite runs off-window,
+    /// where a view has no screen mapping at all. That is exactly why the app
+    /// no longer computes a screen rect itself: a mirror carries the node's
+    /// camera-aware rect as its own `frame`, in the container's coordinate
+    /// space, and UIKit derives the screen-space `accessibilityFrame` from
+    /// that real view's geometry once there *is* a window.
+    ///
+    /// Pinning the conversion is what keeps every frame assertion in this
+    /// file meaningful: what a mirror publishes is precisely
+    /// `viewRect(forSceneRect:in:)` carried into container space, never a
+    /// degenerate off-window rect.
+    func test_publishedMirrorFrame_isTheViewSpaceRectInContainerSpace() throws {
         let scene = makeMenuScene()
         let view = makePresentedView(scene)
         XCTAssertNil(view.window, "this test is about the off-window path")
 
-        let sceneRect = CGRect(x: 40, y: 60, width: 120, height: 30)
-
-        XCTAssertEqual(
-            view.screenFrame(forSceneRect: sceneRect, in: scene),
-            view.viewRect(forSceneRect: sceneRect, in: scene)
+        let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
+        let sceneRect = try XCTUnwrap(scene.accessibilityFrameInScene(for: menu.playButton))
+        let expected = containerView.convert(
+            view.viewRect(forSceneRect: sceneRect, in: scene),
+            from: view
         )
+
+        let play = try publishedElement("menu.playButton")
+
+        XCTAssertEqual(play.frame.minX, expected.minX, accuracy: 1e-6)
+        XCTAssertEqual(play.frame.minY, expected.minY, accuracy: 1e-6)
+        XCTAssertEqual(play.frame.width, expected.width, accuracy: 1e-6)
+        XCTAssertEqual(play.frame.height, expected.height, accuracy: 1e-6)
     }
 }
