@@ -110,18 +110,31 @@ final class AccessibleSKViewTests: XCTestCase {
     }
 
     /// The element UIKit's point lookup lands on for `point` (container
-    /// coordinates): of the sibling mirrors covering it, the topmost wins.
+    /// coordinates), resolved the way a driver resolves it: by hit-testing
+    /// **from the root view** with no event, which is the walk
+    /// `accessibilityHitTest(_:)` - and with it XCUITest's `isHittable` - is
+    /// built on.
     ///
-    /// The container deliberately overrides no hit test any more - answering
-    /// "which element is at this point?" ourselves, from hand-vended
-    /// elements, is exactly what left PLAY findable and un-hittable - so the
-    /// hit-test half of the contract is now UIKit's ordinary sibling rule
-    /// applied to the published subview order, and that is what these tests
-    /// evaluate.
+    /// Starting at the root rather than at the container is load-bearing:
+    /// `UIView.hitTest(_:with:)` returns `nil` for a non-interactive view and
+    /// never descends into its subviews, so an overlay that opted out of
+    /// interaction was skipped entirely and the point resolved to the
+    /// (accessibility-silenced) `SKView` underneath - PLAY findable,
+    /// `isHittable == false`. A helper that began the walk inside the
+    /// container could not see that, so this one begins where a driver does.
     private func elementResolved(atContainerPoint point: CGPoint) throws -> SceneAccessibilityMirrorView {
-        try XCTUnwrap(
-            publishedMirrors().last { $0.frame.contains(point) },
-            "no published element covers \(point)"
+        _ = publishedMirrors()
+        let root = try XCTUnwrap(hostView, "the presented host view is what a driver walks from")
+        let pointInRoot = root.convert(point, from: containerView)
+
+        let resolved = try XCTUnwrap(
+            root.hitTest(pointInRoot, with: nil),
+            "no view at all resolves at \(point) - the accessibility point lookup would answer nothing"
+        )
+        return try XCTUnwrap(
+            resolved as? SceneAccessibilityMirrorView,
+            "the point lookup at \(point) resolved to \(type(of: resolved)) instead of a mirror - the "
+                + "overlay is not taking part in hit-testing, which is what makes PLAY un-hittable"
         )
     }
 
@@ -392,9 +405,22 @@ final class AccessibleSKViewTests: XCTestCase {
             "SpriteKit's competing accessibility tree must be silenced, or it answers the hit test"
         )
         XCTAssertFalse(container.accessibilityElementsHidden)
-        XCTAssertFalse(
+
+        // The overlay must take part in hit-testing (a non-interactive view
+        // answers nil for every point and hides its subtree from the
+        // accessibility point lookup, which is what left PLAY un-hittable)...
+        XCTAssertTrue(
             container.isUserInteractionEnabled,
-            "the overlay must never take a touch away from the SKView underneath"
+            "an overlay that opts out of interaction is skipped by the hit-test walk the "
+                + "accessibility point lookup is built on"
+        )
+
+        // ...while still never taking a touch away from the SKView
+        // underneath: a hit test carrying a real event resolves to nothing.
+        let centre = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+        XCTAssertNil(
+            container.hitTest(centre, with: UIEvent()),
+            "a real touch must fall straight through to the SKView - the scene is the sole dispatcher"
         )
     }
 
@@ -417,9 +443,19 @@ final class AccessibleSKViewTests: XCTestCase {
                 element.isDescendant(of: view),
                 "an element inside the SKView is answered for by SpriteKit's own tree"
             )
-            XCTAssertFalse(
+            XCTAssertTrue(
                 element.isUserInteractionEnabled,
-                "a mirror must never take the touch the SKView underneath is waiting for"
+                "a non-interactive mirror is skipped by the hit-test walk the accessibility point "
+                    + "lookup is built on, which is what made PLAY findable but un-hittable"
+            )
+
+            // Interactive, yet still never the target of a real touch: the
+            // container hands every event-carrying hit test back to the
+            // SKView, so the finger the scene is waiting for still arrives.
+            let centre = publishedCentre(of: element)
+            XCTAssertNil(
+                containerView.hitTest(centre, with: UIEvent()),
+                "a real touch at \(element.accessibilityIdentifier ?? "?") must fall through to the SKView"
             )
         }
     }

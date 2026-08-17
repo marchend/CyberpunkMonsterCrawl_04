@@ -46,12 +46,16 @@ final class GameViewController: UIViewController {
     /// (camera-unaware) accessibility tree by setting
     /// `accessibilityElementsHidden` on the `SKView`, and that flag hides a
     /// view's whole accessibility subtree - a nested container would be
-    /// hidden with it. It draws nothing and takes no touches, so the only
-    /// thing this line changes for a real finger is nothing at all; what it
-    /// changes for XCUITest / VoiceOver is that `menu.playButton` becomes
-    /// *hittable* instead of merely findable - real views are natively
-    /// resolvable from a point, which hand-vended `UIAccessibilityElement`s
-    /// were not (see `AccessibleSKView`, "part 2").
+    /// hidden with it. It draws nothing, and although it *is* interactive (a
+    /// non-interactive view is invisible to the hit-test walk the
+    /// accessibility point lookup is built on) it hands every real touch back
+    /// by answering `nil` from `hitTest(_:with:)` whenever an event is
+    /// attached - so the only thing this line changes for a real finger is
+    /// nothing at all. What it changes for XCUITest / VoiceOver is that
+    /// `menu.playButton` becomes *hittable* instead of merely findable - real
+    /// views are natively resolvable from a point, which hand-vended
+    /// `UIAccessibilityElement`s were not (see `AccessibleSKView`, parts 2
+    /// and 3).
     ///
     /// `private(set)` so `AccessibleSKViewTests` can pin the wiring and catch
     /// a silent regression back to the `SKView`-as-container arrangement.
