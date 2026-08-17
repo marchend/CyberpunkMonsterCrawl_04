@@ -38,6 +38,23 @@ final class GameViewController: UIViewController {
     /// writes it.
     private(set) var skView: AccessibleSKView!
 
+    /// The plain `UIView` that presents the scene's UI to UIAccessibility.
+    ///
+    /// It has to be a **sibling installed above** `skView`, not a child of
+    /// it: `SceneAccessibilityContainerView` silences SpriteKit's competing
+    /// (camera-unaware) accessibility tree by setting
+    /// `accessibilityElementsHidden` on the `SKView`, and that flag hides a
+    /// view's whole accessibility subtree - a nested container would be
+    /// hidden with it. It draws nothing and takes no touches, so the only
+    /// thing this line changes for a real finger is nothing at all; what it
+    /// changes for XCUITest / VoiceOver is that `menu.playButton` becomes
+    /// *hittable* instead of merely findable (see `AccessibleSKView`,
+    /// "part 3").
+    ///
+    /// `private(set)` so `AccessibleSKViewTests` can pin the wiring and catch
+    /// a silent regression back to the `SKView`-as-container arrangement.
+    private(set) var accessibilityContainerView: SceneAccessibilityContainerView!
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
@@ -47,6 +64,12 @@ final class GameViewController: UIViewController {
         skView.ignoresSiblingOrder = true
         view.addSubview(skView)
         self.skView = skView
+
+        let accessibilityContainerView = SceneAccessibilityContainerView(sceneView: skView)
+        accessibilityContainerView.frame = view.bounds
+        accessibilityContainerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(accessibilityContainerView)
+        self.accessibilityContainerView = accessibilityContainerView
 
         skView.presentScene(makeGameScene(size: view.bounds.size))
     }

@@ -26,25 +26,58 @@ final class AccessibleSKViewTests: XCTestCase {
 
     private let sceneSize = CGSize(width: 400, height: 800)
 
+    /// The root view `makePresentedView(_:viewSize:)` builds, retained for the
+    /// lifetime of the test so the sibling pair below cannot be torn down
+    /// mid-assertion.
+    private var hostView: UIView!
+
+    /// The plain `UIView` the elements are actually vended from - the class
+    /// UIKit asks both "what elements are there?" and "which element is at
+    /// this point?", now that the container has moved off `SKView` (see
+    /// `AccessibleSKView`, "part 3").
+    private var containerView: SceneAccessibilityContainerView!
+
+    override func tearDown() {
+        hostView = nil
+        containerView = nil
+        super.tearDown()
+    }
+
     /// The real composed scene (menu mounted, all four screens registered),
     /// so these tests measure what ships rather than a hand-built stand-in.
     private func makeMenuScene() -> GameScene {
         GameViewController().makeGameScene(size: sceneSize)
     }
 
-    /// A presented `AccessibleSKView` with no window - enough for every
-    /// conversion the class performs (scene size, view bounds, scale mode and
-    /// camera are all it needs), and paused so no render loop can mutate the
-    /// scene mid-assertion.
+    /// A presented `AccessibleSKView` with no window, wired to a
+    /// `SceneAccessibilityContainerView` sibling exactly as
+    /// `GameViewController` wires them - enough for every conversion the
+    /// classes perform (scene size, view bounds, scale mode and camera are
+    /// all they need), and paused so no render loop can mutate the scene
+    /// mid-assertion.
+    ///
+    /// The container is reachable as `containerView` rather than returned,
+    /// so the tests that only care about published geometry stay unchanged.
     ///
     /// `viewSize` defaults to the scene size (the 1:1 case) but can be given
     /// a different value so the scale factor the conversion depends on is
     /// actually exercised - see
     /// `test_halfScaleView_publishedPlayElement_stillPointsAtTheButton`.
     private func makePresentedView(_ scene: GameScene, viewSize: CGSize? = nil) -> AccessibleSKView {
-        let view = AccessibleSKView(frame: CGRect(origin: .zero, size: viewSize ?? sceneSize))
+        let bounds = CGRect(origin: .zero, size: viewSize ?? sceneSize)
+        let host = UIView(frame: bounds)
+        let view = AccessibleSKView(frame: bounds)
+        host.addSubview(view)
+
+        let container = SceneAccessibilityContainerView(sceneView: view)
+        container.frame = bounds
+        host.addSubview(container)
+
         view.presentScene(scene)
         view.isPaused = true
+
+        hostView = host
+        containerView = container
         return view
     }
 
@@ -269,7 +302,84 @@ final class AccessibleSKViewTests: XCTestCase {
         let container = try XCTUnwrap(elements.first { $0.accessibilityIdentifier == "menu.container" })
         XCTAssertEqual(container.accessibilityLabel, "Menu")
 
-        XCTAssertEqual(view.accessibilityElementCount(), elements.count)
+        // The count UIKit reads comes from the container view, not from the
+        // SKView - that move is the fix, so assert it where UIKit looks.
+        XCTAssertEqual(containerView.accessibilityElementCount(), elements.count)
+        XCTAssertEqual(
+            (containerView.accessibilityElements as? [UIAccessibilityElement])?.count,
+            elements.count
+        )
+        XCTAssertFalse(
+            containerView.isAccessibilityElement,
+            "a container that reports itself as an element collapses everything it vends"
+        )
+    }
+
+    // MARK: - The container has to be the plain UIView, not the SKView
+
+    /// The entry-point wiring for the hit-test half of the fix.
+    ///
+    /// `SKView` ships its own camera-unaware accessibility implementation and
+    /// the accessibility server keeps consulting *that* one for an `SKView`,
+    /// whatever this app overrides on it - which is why PLAY resolved by
+    /// label yet `isHittable` stayed `false`. So the elements are vended from
+    /// a plain `UIView` sibling *above* the `SKView`, and SpriteKit's
+    /// competing tree is silenced. Both halves of that are load-bearing and
+    /// invisible to every other test in this file, so they are pinned here.
+    func test_compositionRoot_vendsTheElementsFromAPlainViewAboveTheSKView() throws {
+        let controller = GameViewController()
+        controller.loadViewIfNeeded()
+
+        let container = try XCTUnwrap(
+            controller.accessibilityContainerView,
+            "the composition root must install the plain-UIView accessibility container"
+        )
+        XCTAssertFalse(
+            container is SKView,
+            "the container must not be an SKView - SpriteKit's own implementation answers for those"
+        )
+        XCTAssertTrue(container.superview === controller.view)
+        XCTAssertTrue(
+            controller.skView.superview === controller.view,
+            "the two must be siblings: accessibilityElementsHidden on the SKView would hide a child"
+        )
+
+        let subviews = controller.view.subviews
+        let skViewIndex = try XCTUnwrap(subviews.firstIndex { $0 === controller.skView })
+        let containerIndex = try XCTUnwrap(subviews.firstIndex { $0 === container })
+        XCTAssertGreaterThan(
+            containerIndex,
+            skViewIndex,
+            "the container must sit above the SKView, or the accessibility walk reaches SpriteKit first"
+        )
+
+        XCTAssertTrue(
+            controller.skView.accessibilityElementsHidden,
+            "SpriteKit's competing accessibility tree must be silenced, or it answers the hit test"
+        )
+        XCTAssertFalse(container.accessibilityElementsHidden)
+        XCTAssertFalse(
+            container.isUserInteractionEnabled,
+            "the overlay must never take a touch away from the SKView underneath"
+        )
+    }
+
+    /// Every element must name the container as its owner: an element whose
+    /// `accessibilityContainer` is the `SKView` is read back through
+    /// SpriteKit's tree, which is the arrangement that failed.
+    func test_publishedElements_areOwnedByTheContainerView() throws {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+
+        let elements = try XCTUnwrap(view.publishedAccessibilityElements())
+        XCTAssertFalse(elements.isEmpty)
+
+        for element in elements {
+            XCTAssertTrue(
+                element.accessibilityContainer as AnyObject === containerView,
+                "\(element.accessibilityIdentifier ?? "?") must be vended by the container view"
+            )
+        }
     }
 
     /// The published frame must be the button's real size, not a guess: the
@@ -347,6 +457,11 @@ final class AccessibleSKViewTests: XCTestCase {
     /// un-hittable (`CyberpunkMonsterCrawlUITests` failed on exactly that
     /// assertion, one line after finding the element). Hit-testing the centre
     /// of the frame we published must return the element we published.
+    ///
+    /// Asked of the *container view*: the `SKView` cannot answer this
+    /// question, because SpriteKit's own accessibility implementation is what
+    /// the accessibility server consults for one - which is why the container
+    /// moved onto a plain `UIView` (see `AccessibleSKView`, "part 3").
     func test_accessibilityHitTest_atThePublishedPlayFrameCentre_returnsThatElement() throws {
         let scene = makeMenuScene()
         let view = makePresentedView(scene)
@@ -355,9 +470,8 @@ final class AccessibleSKViewTests: XCTestCase {
         let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
 
         let hit = try XCTUnwrap(
-            view.accessibilityHitTest(centre, event: nil),
-            "the view must answer the hit test itself; SKView's inherited answer knows nothing "
-                + "about the elements we publish"
+            containerView.accessibilityHitTest(centre, event: nil),
+            "the plain-UIView container must resolve the point to one of the elements it vends"
         )
 
         XCTAssertTrue(
@@ -385,7 +499,7 @@ final class AccessibleSKViewTests: XCTestCase {
         )
 
         let hit = try XCTUnwrap(
-            view.accessibilityHitTest(
+            containerView.accessibilityHitTest(
                 CGPoint(x: marker.accessibilityFrame.midX, y: marker.accessibilityFrame.midY),
                 event: nil
             )
@@ -407,7 +521,7 @@ final class AccessibleSKViewTests: XCTestCase {
             y: highScores.accessibilityFrame.midY
         )
 
-        XCTAssertTrue(view.accessibilityHitTest(centre, event: nil) as AnyObject === highScores)
+        XCTAssertTrue(containerView.accessibilityHitTest(centre, event: nil) as AnyObject === highScores)
     }
 
     /// A point no published element covers must not be attributed to one of
@@ -426,7 +540,7 @@ final class AccessibleSKViewTests: XCTestCase {
             )
         }
 
-        let hit = view.accessibilityHitTest(corner, event: nil)
+        let hit = containerView.accessibilityHitTest(corner, event: nil)
 
         XCTAssertFalse(
             elements.contains { $0 === (hit as AnyObject) },
@@ -442,15 +556,15 @@ final class AccessibleSKViewTests: XCTestCase {
 
         let play = try publishedElement("menu.playButton", in: view)
         let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
-        XCTAssertTrue(view.accessibilityHitTest(centre, event: nil) as AnyObject === play)
+        XCTAssertTrue(containerView.accessibilityHitTest(centre, event: nil) as AnyObject === play)
 
         XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
 
         let back = try publishedElement("highScores.backToMenuButton", in: view)
         let backCentre = CGPoint(x: back.accessibilityFrame.midX, y: back.accessibilityFrame.midY)
 
-        XCTAssertTrue(view.accessibilityHitTest(backCentre, event: nil) as AnyObject === back)
-        XCTAssertFalse(view.accessibilityHitTest(backCentre, event: nil) as AnyObject === play)
+        XCTAssertTrue(containerView.accessibilityHitTest(backCentre, event: nil) as AnyObject === back)
+        XCTAssertFalse(containerView.accessibilityHitTest(backCentre, event: nil) as AnyObject === play)
     }
 
     /// With the camera off-centre the published frame is unmoved (the pixels
@@ -466,7 +580,7 @@ final class AccessibleSKViewTests: XCTestCase {
         let play = try publishedElement("menu.playButton", in: view)
         let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
 
-        XCTAssertTrue(view.accessibilityHitTest(centre, event: nil) as AnyObject === play)
+        XCTAssertTrue(containerView.accessibilityHitTest(centre, event: nil) as AnyObject === play)
     }
 
     // MARK: - Off-centre camera (the configuration the bug actually needed)
