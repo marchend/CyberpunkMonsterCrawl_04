@@ -560,7 +560,21 @@ final class GameScene: SKScene {
     /// registered for `state`). A state with no registered screen at all
     /// (not possible in the composed app today, but exercised directly by
     /// unit tests) simply clears `activeScreen`.
+    ///
+    /// A screen swap replaces the whole accessible UI without resizing the
+    /// hosting view, so it triggers no `layoutSubviews()` /
+    /// `didMoveToWindow()` / `presentScene(_:)` pass - and
+    /// `SceneAccessibilityContainerView` deliberately no longer rebuilds its
+    /// mirrors lazily from an accessibility query (doing so mutated the
+    /// hierarchy a driver was mid-way through resolving, which is what made a
+    /// correctly-framed PLAY button report `isHittable == false`). This is
+    /// therefore the explicit refresh point for the change: the `defer` runs
+    /// on *every* exit path, including the early return for a state with no
+    /// registered screen, so mirrors for an unmounted screen (`menu.*`, most
+    /// obviously) are always retired.
     func transitionScreens(to state: GameState) {
+        defer { (view as? AccessibleSKView)?.refreshSceneAccessibility() }
+
         if let current = activeScreen {
             current.willExit()
             current.node.removeFromParent()
