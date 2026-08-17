@@ -38,7 +38,8 @@ final class GameViewController: UIViewController {
     /// writes it.
     private(set) var skView: AccessibleSKView!
 
-    /// The plain `UIView` that presents the scene's UI to UIAccessibility.
+    /// The plain `UIView` that presents the scene's UI to UIAccessibility, as
+    /// a set of real invisible subviews mirroring the accessible `SKNode`s.
     ///
     /// It has to be a **sibling installed above** `skView`, not a child of
     /// it: `SceneAccessibilityContainerView` silences SpriteKit's competing
@@ -48,8 +49,9 @@ final class GameViewController: UIViewController {
     /// hidden with it. It draws nothing and takes no touches, so the only
     /// thing this line changes for a real finger is nothing at all; what it
     /// changes for XCUITest / VoiceOver is that `menu.playButton` becomes
-    /// *hittable* instead of merely findable (see `AccessibleSKView`,
-    /// "part 3").
+    /// *hittable* instead of merely findable - real views are natively
+    /// resolvable from a point, which hand-vended `UIAccessibilityElement`s
+    /// were not (see `AccessibleSKView`, "part 2").
     ///
     /// `private(set)` so `AccessibleSKViewTests` can pin the wiring and catch
     /// a silent regression back to the `SKView`-as-container arrangement.
@@ -71,7 +73,20 @@ final class GameViewController: UIViewController {
         view.addSubview(accessibilityContainerView)
         self.accessibilityContainerView = accessibilityContainerView
 
+        // Presenting last, with the container already wired up, so the first
+        // set of accessibility mirrors is built from the scene the app
+        // actually launches into (`presentScene` refreshes them).
         skView.presentScene(makeGameScene(size: view.bounds.size))
+    }
+
+    /// The container's mirrors are geometry, so they have to follow every
+    /// layout pass - a rotation resizes the scene and moves every
+    /// camera-locked button on screen. Refreshing here (as well as from the
+    /// container's own `layoutSubviews()` and from each accessibility query)
+    /// keeps `AppLaunchAndRotationUITests`' post-rotation frames honest.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        accessibilityContainerView?.refreshAccessibilityMirrors()
     }
 
     /// Builds the scene and registers every screen. Separated from
