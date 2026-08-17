@@ -81,6 +81,11 @@ final class GameScene: SKScene {
     /// story owns run setup can set this per run before `.gameplay` is
     /// entered, and the whole world follows from it — `WorldSeed`'s contract
     /// is that the same seed reproduces the identical city forever.
+    ///
+    /// **Nothing in the app writes this today** (only tests do), which is why
+    /// the run's spawn junction is currently the same on every run rather
+    /// than a new one each time — see `spawnTilePosition()` for the full
+    /// note and where that gap is tracked.
     var worldSeed = WorldSeed(rawValue: 0x0C17_5EED)
 
     /// The mounted ground plane, streamed into `worldLayer` while a run is in
@@ -153,6 +158,12 @@ final class GameScene: SKScene {
     /// without `FloatingThumbstickNode` itself needing to know about
     /// `UITouch` at all (see that type's own "touch-input agnostic" doc
     /// note). Held weakly: UIKit, not this scene, owns a touch's lifetime.
+    ///
+    /// A *concurrent* touch really can arrive: `GameViewController` sets
+    /// `isMultipleTouchEnabled` on the hosting view, and
+    /// `touchesBegan(_:with:)` routes every touch of an event set rather than
+    /// only `touches.first`. Until both of those were true this property was
+    /// bookkeeping for a case UIKit could never deliver.
     private weak var activeStickTouch: UITouch?
 
     // MARK: - Init
@@ -265,6 +276,22 @@ final class GameScene: SKScene {
     /// entry via `RunSpawnSelector` -- a street-intersection tile,
     /// guaranteed street under every seed (see that type's own doc
     /// comment).
+    ///
+    /// **As composed today this is the same junction on every run.**
+    /// `RunSpawnSelector.selectSpawnTile(seed:)` is a pure function of
+    /// `worldSeed`, and nothing in the app ever *writes* `worldSeed` -- it is
+    /// a fixed default (see that property's own doc comment), so every RUN
+    /// AGAIN and every app launch selects the identical tile. That is the
+    /// selector working exactly as specified (same seed => same city, same
+    /// spawn); it is not "a new starting junction per run", and this story
+    /// should not be recorded as having delivered that half. What is missing
+    /// is a per-run `worldSeed`, which belongs to whichever story owns run
+    /// setup: no such ticket exists yet, so -- following the same convention
+    /// as `PlayerMovementController`'s deferred-scope note rather than
+    /// inventing an ID here -- it is tracked on the `CYBERPUN-17-7` story
+    /// itself, requested as a follow-up on this PR's task,
+    /// `CYBERPUN-17-7-t3`. The moment `worldSeed` varies per run, this
+    /// method varies the junction with it and needs no change.
     private func spawnTilePosition() -> TilePoint {
         let tile = RunSpawnSelector.selectSpawnTile(seed: worldSeed)
         return TilePoint(x: Double(tile.tileX), y: Double(tile.tileY))
@@ -412,11 +439,16 @@ final class GameScene: SKScene {
 
         movementController.update(stickState: thumbstick.stickState, currentTime: currentTime)
 
-        let obstructions = groundPlane?.streaming.residentChunks.values.flatMap { $0.buildingPlacements } ?? []
+        // `GroundPlaneStreamer.residentObstructions` is derived once per
+        // residency change rather than rebuilt here every frame: the obvious
+        // spelling (`residentChunks.values.flatMap(\.buildingPlacements)`
+        // handed to `resolve(obstructedBy:)`) allocates two arrays across the
+        // full 49-chunk resident window per frame, in a subsystem that pools
+        // aggressively to avoid exactly that.
         let resolvedPosition = CollisionResolver.resolve(
             currentPosition: currentPosition,
             proposedDelta: movementController.frameDisplacement,
-            obstructedBy: obstructions
+            obstructions: groundPlane?.residentObstructions ?? []
         )
         playerWorldPosition = resolvedPosition
 
@@ -673,17 +705,35 @@ final class GameScene: SKScene {
     /// touch, and only then is `thumbstick.beginTouch(at:)` offered it --
     /// which itself refuses outside the left region / the reserved
     /// pulse-button slot / while no run is active (`canBeginTouch(at:)`).
+    ///
+    /// **Every touch in the set is routed, not just `touches.first`.** This
+    /// game is two-thumbed by design (`FloatingThumbstickNode` reserves
+    /// `reservedPulseButtonSlot` directly above the stick for
+    /// `CYBERPUN-17-10`), so a button press and a stick drag can legitimately
+    /// arrive in the same event set once
+    /// `GameViewController` has switched the hosting view's
+    /// `isMultipleTouchEnabled` on -- and dropping every touch but the first
+    /// would silently lose one of them. Iterating here is also what makes the
+    /// `activeStickTouch` bookkeeping load-bearing rather than theoretical.
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        guard let touch = touches.first else { return }
-        let scenePoint = touch.location(in: self)
 
-        if dispatchTouch(atScenePoint: scenePoint) != nil {
-            return
-        }
+        for touch in touches {
+            let scenePoint = touch.location(in: self)
 
-        if thumbstick.beginTouch(at: uiLayer.convert(scenePoint, from: self)) {
-            activeStickTouch = touch
+            if dispatchTouch(atScenePoint: scenePoint) != nil {
+                continue
+            }
+
+            // Only one touch may drive the stick at a time: a second finger
+            // landing in the left region mid-drag must not steal the stick
+            // out from under the first, which `FloatingThumbstickNode` would
+            // otherwise happily re-centre on the newcomer.
+            guard activeStickTouch == nil else { continue }
+
+            if thumbstick.beginTouch(at: uiLayer.convert(scenePoint, from: self)) {
+                activeStickTouch = touch
+            }
         }
     }
 

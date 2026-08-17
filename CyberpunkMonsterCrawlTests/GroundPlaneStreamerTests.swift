@@ -510,4 +510,95 @@ final class GroundPlaneStreamerTests: XCTestCase {
         )
         XCTAssertEqual(streamer.mountedChunks, Set(streamer.streaming.residentChunks.keys))
     }
+
+    // MARK: - Cached collision obstructions (CYBERPUN-17-7)
+
+    /// The footprint bounds the collision resolver is handed every frame,
+    /// derived from `ChunkStreamingManager`'s own residency rather than from
+    /// anything the cache computes. `CollisionResolver.FootprintBounds` is
+    /// `Equatable` but not `Hashable`, so the comparisons below are by count
+    /// plus membership rather than by set.
+    private func expectedObstructions(
+        of streamer: GroundPlaneStreamer
+    ) -> [CollisionResolver.FootprintBounds] {
+        residentPlacements(of: streamer).map(CollisionResolver.footprintBounds(for:))
+    }
+
+    private func assertSameObstructions(
+        _ actual: [CollisionResolver.FootprintBounds],
+        _ expected: [CollisionResolver.FootprintBounds],
+        _ message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(actual.count, expected.count, message, file: file, line: line)
+        for bounds in expected {
+            XCTAssertTrue(actual.contains(bounds), "\(message) (missing \(bounds))", file: file, line: line)
+        }
+    }
+
+    /// `GameScene.advanceMovementAndCamera(currentTime:)` reads this every
+    /// frame instead of re-deriving the set from `residentChunks`, so it has
+    /// to be the *same* set the generator produced - a cache that drifts from
+    /// the resident window is worse than the per-frame rebuild it replaced.
+    func test_residentObstructions_coverEveryResidentChunksBuildingFootprints() {
+        let worldLayer = SKNode()
+        let streamer = makeStreamer(worldLayer: worldLayer)
+
+        streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+
+        let expected = expectedObstructions(of: streamer)
+        XCTAssertFalse(expected.isEmpty, "Precondition: the resident window must contain some buildings.")
+        assertSameObstructions(
+            streamer.residentObstructions, expected,
+            "The cached obstruction set must be the footprints of every resident chunk - one FootprintBounds "
+                + "per resident placement, none dropped"
+        )
+    }
+
+    /// Chunk residency is exactly the window around the camera's *chunk*, so
+    /// the cache is keyed on that. Crossing into a new chunk must refresh it;
+    /// a stale set would let the player walk through a building that streamed
+    /// in (or collide with one that streamed out).
+    func test_residentObstructions_refresh_whenTheCameraCrossesIntoANewChunk() {
+        let worldLayer = SKNode()
+        let streamer = makeStreamer(worldLayer: worldLayer)
+
+        streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        let atOrigin = streamer.residentObstructions
+
+        // Far enough that the resident window shares no chunk with the first.
+        let farAway = Double((ChunkStreamingManager.residentRadius * 2 + 2) * Chunk.size)
+        streamer.updateCamera(worldPosition: TilePoint(x: farAway, y: farAway))
+
+        let afterMove = streamer.residentObstructions
+        assertSameObstructions(
+            afterMove, expectedObstructions(of: streamer),
+            "The cache must follow the resident window rather than stay pinned to the run's first chunk"
+        )
+        XCTAssertFalse(
+            afterMove.contains(where: { atOrigin.contains($0) }),
+            "Precondition: a disjoint window must have brought entirely different footprints into residency."
+        )
+    }
+
+    /// A camera that has not left its chunk leaves residency untouched
+    /// (`updateCamera` is idempotent for it), so the obstruction set must be
+    /// unchanged too - that stability is what lets the per-frame collision
+    /// query read a cached array instead of allocating two new ones every
+    /// frame across the full 49-chunk window.
+    func test_residentObstructions_areUnchanged_whileTheCameraStaysWithinItsChunk() {
+        let worldLayer = SKNode()
+        let streamer = makeStreamer(worldLayer: worldLayer)
+
+        streamer.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        let first = streamer.residentObstructions
+
+        streamer.updateCamera(worldPosition: TilePoint(x: 0.2, y: 0.2))
+
+        XCTAssertEqual(
+            streamer.residentObstructions, first,
+            "A camera that has not left its chunk must not change the obstruction set."
+        )
+    }
 }

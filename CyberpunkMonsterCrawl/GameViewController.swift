@@ -69,6 +69,18 @@ final class GameViewController: UIViewController {
         let skView = AccessibleSKView(frame: view.bounds)
         skView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         skView.ignoresSiblingOrder = true
+        // `UIView` defaults this to `false`, which means UIKit delivers a
+        // second finger to nobody at all. This game is two-thumbed by design:
+        // `FloatingThumbstickNode` drives movement from the left region and
+        // reserves `reservedPulseButtonSlot` directly above it for
+        // `CYBERPUN-17-10`'s pulse button - a control specifically meant to
+        // be pressed *while* the other thumb is moving. Without this line
+        // `GameScene.touchesBegan(_:with:)`'s per-touch loop (and the
+        // `activeStickTouch` bookkeeping it feeds) could never see the
+        // concurrent touch they exist to tell apart, and gate 1's "the stick
+        // moves the player, every button responds" would fail the moment a
+        // HUD button lands.
+        skView.isMultipleTouchEnabled = true
         view.addSubview(skView)
         self.skView = skView
 

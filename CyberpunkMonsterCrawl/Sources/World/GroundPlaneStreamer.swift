@@ -149,6 +149,20 @@ final class GroundPlaneStreamer {
     /// fully landed, which in steady state is the normal condition.
     private var pendingMountQueue: [ChunkCoordinate] = []
 
+    /// The building footprints of every resident chunk, already restated as
+    /// `CollisionResolver.FootprintBounds` -- see `residentObstructions`,
+    /// which is the read side of this cache.
+    private var obstructionCache: [CollisionResolver.FootprintBounds] = []
+
+    /// The camera chunk `obstructionCache` was derived for, or `nil` while
+    /// the cache has never been built. Chunk residency is exactly the
+    /// `ChunkStreamingManager.residentRadius` window around this coordinate
+    /// (`ChunkStreamingManager.updateCamera`), so "the camera is still on the
+    /// same chunk" and "the resident set is unchanged" are the same
+    /// statement -- which is what makes this a sound cache key rather than a
+    /// heuristic.
+    private var obstructionCacheChunk: ChunkCoordinate?
+
     /// Chunks currently waiting for the incremental mount. Exposed so tests
     /// can assert the deferral itself (and its drain) rather than only its
     /// visible consequences.
@@ -283,7 +297,47 @@ final class GroundPlaneStreamer {
     /// deferred (see this type's doc comment).
     func updateCamera(worldPosition: TilePoint) {
         streaming.updateCamera(worldPosition: worldPosition)
+        refreshObstructionCacheIfNeeded(cameraWorldPosition: worldPosition)
         synchroniseWithResidentChunks(cameraWorldPosition: worldPosition)
+    }
+
+    /// Every resident chunk's building footprints, as the continuous
+    /// rectangles `CollisionResolver` resolves movement against.
+    ///
+    /// Derived **once per residency change**, not per frame. The obvious
+    /// spelling at the call site --
+    /// `residentChunks.values.flatMap(\.buildingPlacements)` handed to
+    /// `CollisionResolver.resolve(obstructedBy:)` -- allocates one array
+    /// across all `ChunkStreamingManager.residentWindowSize` chunks and then
+    /// a second one for the derived bounds, walking every record's
+    /// `footprintTiles` twice, on every single frame; and this whole
+    /// subsystem maintains `pool`/`buildingPool` and the incremental mount
+    /// queue precisely so a moving camera does not allocate per frame
+    /// (`CYBERPUN-17-4-t4` exists because one synchronous per-frame pass was
+    /// already caught stalling a real build).
+    ///
+    /// The data only changes when chunk *residency* does, which is rare: a
+    /// camera that has not left its chunk leaves `updateCamera` idempotent.
+    var residentObstructions: [CollisionResolver.FootprintBounds] {
+        obstructionCache
+    }
+
+    /// Rebuilds `obstructionCache` when the camera has moved to a different
+    /// chunk (and therefore to a different resident window), leaving it
+    /// untouched otherwise. Called from `updateCamera` -- the only path that
+    /// can change residency -- *after* `streaming.updateCamera` has brought
+    /// the resident set up to date, and deliberately outside
+    /// `synchroniseWithResidentChunks` so the cache stays correct even for a
+    /// streamer whose `worldLayer` has gone away (collision does not depend
+    /// on anything being mounted).
+    private func refreshObstructionCacheIfNeeded(cameraWorldPosition: TilePoint) {
+        let cameraChunk = ChunkStreamingManager.chunkCoordinate(containing: cameraWorldPosition)
+        guard cameraChunk != obstructionCacheChunk else { return }
+
+        obstructionCache = streaming.residentChunks.values
+            .flatMap(\.buildingPlacements)
+            .map(CollisionResolver.footprintBounds(for:))
+        obstructionCacheChunk = cameraChunk
     }
 
     /// Mounts up to `maxChunksPerTick` chunks still waiting in

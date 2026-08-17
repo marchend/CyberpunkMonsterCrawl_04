@@ -191,12 +191,40 @@ final class FloatingThumbstickNode: SKNode {
         addChild(base)
         addChild(knob)
 
-        // Identifier lives on the interactive root itself, not on a wrapper
-        // applied after these children are added -- the same convention
-        // `ButtonNode` uses, and the one this project's accessibility-frame
-        // pipeline (`AccessibleSKView.swift`) depends on for a camera-fixed
-        // UI node.
-        isAccessibilityElement = true
+        // Deliberately **not** an accessibility element, and that is
+        // load-bearing rather than an omission.
+        //
+        // `GameScene.accessibleUINodes()` walks `uiLayer` for every *visible*
+        // accessible node, and `AccessibleSKView` publishes each one as a
+        // real, interactive `SceneAccessibilityMirrorView` laid over the
+        // node's own frame. During `.gameplay` this node is visible by design
+        // (`isRunActive == true` => `isHidden = false`, `alpha = restAlpha`),
+        // so opting in would put a ~104x104pt mirror directly over the
+        // resting stick in the bottom-left. That mirror wins UIKit's hit test
+        // for that rect ("answers every hit test the same way -- the mirror
+        // covering the point, whatever the event"), so
+        // `GameScene.touchesBegan(_:with:)` would never run for a finger
+        // landing there; what the mirror does instead is
+        // `SceneAccessibilityContainerView.forwardTouch(atContainerPoint:phase:)`,
+        // which dispatches only the `.began` phase into
+        // `GameScene.dispatchTouch(atScenePoint:)` -- a path that never calls
+        // `beginTouch(at:)`. Touching down on the visible rest graphic (the
+        // very thing that exists to tell the player where to put their thumb)
+        // would then do nothing at all, while touching anywhere else in the
+        // left region worked.
+        //
+        // Opting out keeps the stick's rect free of mirrors, so every phase
+        // of a press-drag-release reaches
+        // `GameScene.touchesBegan/Moved/Ended/Cancelled` -- which is the only
+        // way this gesture can work, since a discrete accessibility element
+        // has no way to express a drag for a driver to "activate" in the
+        // first place. `AccessibleSKViewTests` pins this choice, because the
+        // failure is invisible from the scene-only tests: the container view
+        // only exists under `GameViewController`.
+        //
+        // The identifier/label stay for scene-graph inspection and debugging;
+        // they publish nothing while `isAccessibilityElement` is `false`.
+        isAccessibilityElement = false
         accessibilityIdentifier = "gameplay.thumbstick"
         accessibilityLabel = "Movement thumbstick"
 

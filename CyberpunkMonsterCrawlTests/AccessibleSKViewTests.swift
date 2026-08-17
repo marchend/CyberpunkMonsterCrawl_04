@@ -243,6 +243,65 @@ final class AccessibleSKViewTests: XCTestCase {
         )
     }
 
+    // MARK: - The gameplay thumbstick must stay out of the overlay
+
+    /// `CYBERPUN-17-7`: `FloatingThumbstickNode` is mounted in `uiLayer` and
+    /// is *visible* for the whole of a run, so had it stayed an accessibility
+    /// element this overlay would have laid a real, interactive
+    /// `SceneAccessibilityMirrorView` over its resting graphic - and that
+    /// mirror wins the hit test for that rect, forwarding only the `.began`
+    /// phase into `dispatchTouch(atScenePoint:)`, which never engages the
+    /// stick. Touching down on the visible stick would have done nothing
+    /// while touching elsewhere in the left region worked.
+    ///
+    /// The scene-only suites cannot see that failure (the container view
+    /// exists only under `GameViewController`), which is exactly why the
+    /// choice is pinned here.
+    func test_gameplayThumbstick_isNotPublishedAsAnAccessibilityElement() {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+
+        XCTAssertFalse(
+            scene.thumbstick.isHidden,
+            "the stick is visible for the whole of a run by design - that is what makes the overlay a problem"
+        )
+        XCTAssertFalse(
+            scene.accessibleUINodes().contains { $0 === scene.thumbstick },
+            "the thumbstick must not be published as an accessibility element: a mirror over its own rect "
+                + "would swallow the drag it exists to receive"
+        )
+
+        let identifiers = Set(publishedMirrors().compactMap(\.accessibilityIdentifier))
+        XCTAssertFalse(
+            identifiers.contains("gameplay.thumbstick"),
+            "no mirror view may stand in for the thumbstick"
+        )
+    }
+
+    /// The consequence that actually matters: nothing in the overlay covers
+    /// the stick's resting rect, so a finger landing there falls through to
+    /// the `SKView` and reaches `GameScene.touchesBegan/Moved/Ended` with
+    /// every phase intact rather than being reduced to a `.began`-only
+    /// forward.
+    func test_gameplayThumbstickRestPosition_isCoveredByNoMirror() {
+        let scene = makeMenuScene()
+        let view = makePresentedView(scene)
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+
+        let restInScene = scene.convert(scene.thumbstick.restPosition, from: scene.uiLayer)
+        let restInView = view.convert(restInScene, from: scene)
+        let restInContainer = containerView.convert(restInView, from: view)
+
+        for mirror in publishedMirrors() {
+            XCTAssertFalse(
+                mirror.frame.contains(restInContainer),
+                "mirror \(mirror.accessibilityIdentifier ?? "<unidentified>") covers the thumbstick's resting "
+                    + "position \(restInContainer) - a touch there would never reach the scene's own dispatch"
+            )
+        }
+    }
+
     // MARK: - The coordinate-agreement guard (the actual regression test)
 
     /// The centre of the frame an element-driven tap aims at must be a scene
