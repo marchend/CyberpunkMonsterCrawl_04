@@ -110,9 +110,9 @@ final class GameScene: SKScene {
     /// `advanceMovementAndCamera(currentTime:)` drives this node's position,
     /// depth and visual state every frame: `thumbstick` -> `movementController`
     /// -> `CollisionResolver` -> commit position -> `cameraController`. This
-    /// is the real replacement for the `SCAFFOLDING(CYBERPUN-17-7)` demo
-    /// driver an earlier PR of this story stood in with while movement,
-    /// collision and camera-follow did not exist yet.
+    /// is the real replacement for the earlier PR's now-deleted demo driver,
+    /// which this story stood in with while movement, collision and
+    /// camera-follow did not exist yet.
     private(set) var player: PlayerNode?
 
     /// The player's current position in tile space -- the single source of
@@ -286,12 +286,15 @@ final class GameScene: SKScene {
     /// spawn); it is not "a new starting junction per run", and this story
     /// should not be recorded as having delivered that half. What is missing
     /// is a per-run `worldSeed`, which belongs to whichever story owns run
-    /// setup: no such ticket exists yet, so -- following the same convention
-    /// as `PlayerMovementController`'s deferred-scope note rather than
-    /// inventing an ID here -- it is tracked on the `CYBERPUN-17-7` story
-    /// itself, requested as a follow-up on this PR's task,
-    /// `CYBERPUN-17-7-t3`. The moment `worldSeed` varies per run, this
-    /// method varies the junction with it and needs no change.
+    /// setup. No separate ticket for it exists yet, and rather than invent
+    /// an ID here (the convention `PlayerMovementController`'s
+    /// outstanding-scope note follows) it is tracked on the `CYBERPUN-17-7`
+    /// story itself: requested as a follow-up on `CYBERPUN-17-7-t3` and
+    /// re-stated on `CYBERPUN-17-7-t4`, so the request outlives whichever
+    /// task closes first. Until that follow-up is filed **and** delivered,
+    /// this half of the story's spawn goal is recorded as not delivered
+    /// rather than quietly deferred. The moment `worldSeed` varies per run,
+    /// this method varies the junction with it and needs no change.
     private func spawnTilePosition() -> TilePoint {
         let tile = RunSpawnSelector.selectSpawnTile(seed: worldSeed)
         return TilePoint(x: Double(tile.tileX), y: Double(tile.tileY))
@@ -418,11 +421,11 @@ final class GameScene: SKScene {
     /// `cameraController` (world-layer offset + chunk streaming) from that
     /// same resolved position.
     ///
-    /// This is the real replacement for the `SCAFFOLDING(CYBERPUN-17-7)`
-    /// demo driver an earlier PR of this story used while the thumbstick,
-    /// `PlayerMovementController` and `CollisionResolver` existed but were
-    /// not yet wired into a live scene. A no-op before the first
-    /// `.gameplay` entry (`player`/`playerWorldPosition` are both `nil`).
+    /// This is the real replacement for the earlier PR's now-deleted demo
+    /// driver, used while the thumbstick, `PlayerMovementController` and
+    /// `CollisionResolver` existed but were not yet wired into a live scene.
+    /// A no-op before the first `.gameplay` entry (`player`/
+    /// `playerWorldPosition` are both `nil`).
     private func advanceMovementAndCamera(currentTime: TimeInterval) {
         // The player's visual/animation deltaTime is derived independently
         // of `movementController`'s own internal clock (which additionally

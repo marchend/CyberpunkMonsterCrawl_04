@@ -4,7 +4,7 @@ import UIKit
 import XCTest
 @testable import CyberpunkMonsterCrawl
 
-/// `CYBERPUN-17-7` PR 1: the **seam** between the story's two halves.
+/// `CYBERPUN-17-7`: the **seam** between the story's two halves.
 ///
 /// `FloatingThumbstickNodeTests` covers the producer in isolation and
 /// `PlayerMovementControllerTests` covers the consumer in isolation, driven
@@ -19,9 +19,11 @@ import XCTest
 ///
 /// The wiring into `GameScene` (mounting the node in `uiLayer`, routing
 /// `touchesMoved`/`touchesEnded`, deleting `PlayerScaffoldingDriver` and the
-/// debug camera pan) is still a later PR of this story; this file is the
-/// coverage that stops the producer/consumer conventions from silently
-/// drifting apart in the meantime.
+/// debug camera pan) has since landed, and
+/// `GameScene.advanceMovementAndCamera(currentTime:)` now drives both halves
+/// in production. This file stays the coverage that stops the
+/// producer/consumer conventions from silently drifting apart, independently
+/// of whatever the scene does with them.
 final class ThumbstickMovementSeamTests: XCTestCase {
 
     private let sceneSize = CGSize(width: 390, height: 844)

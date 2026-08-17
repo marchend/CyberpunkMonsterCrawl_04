@@ -4,9 +4,9 @@ import UIKit
 
 /// Plain, SpriteKit-independent snapshot of `FloatingThumbstickNode`'s
 /// current deflection -- the one thing `PlayerMovementController` needs from
-/// it, so the controller can be exhaustively unit-tested (and, in a later PR
-/// of this story, driven from a live scene) without importing SpriteKit at
-/// all.
+/// it, so the controller can be exhaustively unit-tested, and driven from
+/// the live scene by `GameScene.advanceMovementAndCamera(currentTime:)`,
+/// without importing SpriteKit at all.
 struct StickState: Equatable {
     /// Resting/neutral state: no direction, zero magnitude, inside the dead
     /// zone. What the stick reports before any touch and immediately after
@@ -38,28 +38,32 @@ struct StickState: Equatable {
 /// for the whole of an active run, so the player always has a visual anchor
 /// for where their next touch should land.
 ///
-/// **Scope of this PR (`CYBERPUN-17-7` PR 1).** This is the input
-/// *producer* half of the story: a self-contained, exhaustively unit-tested
-/// node that turns raw touch points into a `StickState`. It is not yet
-/// mounted anywhere in `GameScene`/`GameplayScreenNode`, and `GameScene`'s
-/// touch handling is not yet extended to route `touchesMoved`/`touchesEnded`
-/// to it (today it only reacts to `touchesBegan` -- see
-/// `GameScene.touchesBegan(_:with:)`). That wiring, together with replacing
-/// `PlayerScaffoldingDriver`'s scripted `SCAFFOLDING(CYBERPUN-17-7)` demo
-/// vector with this node's real `StickState` fed through
-/// `PlayerMovementController`, building collision and camera-follow, lands
-/// in a later PR of this same story -- this PR's own scope is explicitly
-/// "one producer (stick state), one consumer (displacement/facing/isMoving);
-/// no collision, camera, or world logic". That deferred half is tracked on
-/// the `CYBERPUN-17-7` story itself, with a follow-up task under it
-/// requested on this PR's task, `CYBERPUN-17-7-t1`; see
-/// `PlayerMovementController`'s doc comment and the `CYBERPUN-17-7` entry in
-/// AGENT.md/CLAUDE.md for the implemented-versus-deferred list.
+/// **Where this fits (`CYBERPUN-17-7`).** This is the input *producer* half
+/// of the story: a self-contained, exhaustively unit-tested node that turns
+/// raw touch points into a `StickState`. It is live in a real build.
+/// `GameScene.commonInit()` mounts it directly in `uiLayer` (not through the
+/// screen registry -- it is not a `ScreenNode`), and
+/// `GameScene.updateWorldContent(for:)` toggles `isRunActive` so it is shown
+/// only during a run. `GameScene` overrides `touchesBegan`/`touchesMoved`/
+/// `touchesEnded`/`touchesCancelled` and routes the touch that engages this
+/// node here via `beginTouch(at:)`/`updateTouch(at:)`/`endTouch()`, tracking
+/// it as `GameScene.activeStickTouch` so a concurrent touch elsewhere cannot
+/// be mistaken for the stick's own drag.
 ///
-/// Until that wiring lands, `ThumbstickMovementSeamTests` pipes this node's
-/// own `stickState` from a real drag straight into
-/// `PlayerMovementController`, so the two halves' conventions are pinned
-/// against each other rather than only against their own isolated suites.
+/// The reading this node produces is consumed every frame by
+/// `GameScene.advanceMovementAndCamera(currentTime:)`, which pipes it
+/// through `PlayerMovementController` -> `CollisionResolver` -> the mounted
+/// `PlayerNode` -> `CameraController`. `PlayerScaffoldingDriver`'s scripted
+/// demo vector, which stood in before that pipeline existed, has been
+/// deleted. For what remains open on the story, see
+/// `PlayerMovementController`'s doc comment and the `CYBERPUN-17-7` entry in
+/// AGENT.md/CLAUDE.md, which is the authoritative
+/// implemented-versus-deferred list.
+///
+/// `ThumbstickMovementSeamTests` still pipes this node's own `stickState`
+/// from a real drag straight into `PlayerMovementController`, so the two
+/// halves' conventions stay pinned against each other and not only against
+/// their own isolated suites.
 ///
 /// **Touch-input agnostic.** This node holds no `UITouch` and does not
 /// override `touchesBegan`/`touchesMoved`/`touchesEnded` -- doing so would
@@ -68,8 +72,9 @@ struct StickState: Equatable {
 /// `TouchResponder`'s doc comment): a node that opts into direct UIKit
 /// delivery receives a touch *before* the scene's own
 /// `touchesBegan(_:with:)` runs, bypassing UI-first routing entirely.
-/// `beginTouch(at:)` / `updateTouch(at:)` / `endTouch()` are the seam a
-/// future scene-level touch tracker drives instead, which is what lets this
+/// `beginTouch(at:)` / `updateTouch(at:)` / `endTouch()` are the seam
+/// `GameScene`'s own scene-level touch tracker (`activeStickTouch`) drives
+/// instead, which is what lets this
 /// node support a full press-drag-release gesture that the single-callback
 /// `TouchResponder` protocol cannot express.
 ///
@@ -78,8 +83,9 @@ struct StickState: Equatable {
 /// at the centre of the visible area, `x` increasing right, `y` increasing
 /// up -- exactly `GameScene.uiLayer`'s own space (see `MenuScreenNode`'s doc
 /// comment for the same convention). `self.position` is never touched;
-/// `base`/`knob` are positioned directly in that space so a future caller
-/// mounting this node in `uiLayer` needs no extra offset math.
+/// `base`/`knob` are positioned directly in that space, which is why
+/// `GameScene` can mount this node straight into `uiLayer` with no extra
+/// offset math.
 final class FloatingThumbstickNode: SKNode {
 
     // MARK: - Tunables
@@ -154,8 +160,11 @@ final class FloatingThumbstickNode: SKNode {
     /// SpriteKit-independent type) is the consumer.
     private(set) var stickState: StickState = .resting
 
-    /// Whether a run is currently in progress. A later PR wires this to
-    /// `GameplayScreenNode`'s `willEnter()`/`willExit()`. While `false` the
+    /// Whether a run is currently in progress.
+    /// `GameScene.updateWorldContent(for:)` sets this `true` on entry to
+    /// `.gameplay` and `false` for `.menu`/`.death`/`.highScores`, so the
+    /// scene's own state transition owns it rather than any screen node.
+    /// While `false` the
     /// stick is fully hidden -- there is nothing to move in
     /// `.menu`/`.death`/`.highScores` -- any touch currently tracking is
     /// cancelled back to rest, so a run ending mid-drag can never strand the
