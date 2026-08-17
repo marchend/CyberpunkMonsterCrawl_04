@@ -29,11 +29,10 @@ final class MenuScreenNode: ScreenNode {
     /// A non-visual accessibility anchor identifying "the menu is mounted"
     /// independent of any one button.
     ///
-    /// Unlike `GameplayScreenNode`'s `gameplay.container` (which is
-    /// `SCAFFOLDING(CYBERPUN-17-7)`-tagged scaffolding for a screen with no
-    /// real HUD content of its own yet -- still live at head, and still
-    /// owned for removal by CYBERPUN-17-7: see that file's marker comment
-    /// for why the removal is outstanding and what has to move with it),
+    /// Unlike `GameplayScreenNode`'s former `gameplay.container` marker
+    /// (removed in CYBERPUN-17-7-t5 along with the two assertions that
+    /// depended on it, since the skeleton gameplay screen has no durable HUD
+    /// content to re-point them at until CYBERPUN-17-12 lands),
     /// `menu.container` is a **durable accessibility
     /// contract**: the menu is a shipping screen, and VoiceOver plus any
     /// future UI test needs a stable way to identify it that survives the
