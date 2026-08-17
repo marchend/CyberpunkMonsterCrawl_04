@@ -55,7 +55,16 @@ final class PlayerMountTests: XCTestCase {
 
     // MARK: - Placement and depth
 
-    func test_theMountedPlayer_isPlacedAtTheCamerasTile_withDepthBandingsZPosition() {
+    // `CYBERPUN-17-7` PR 3: the player's spawn placement is now
+    // `RunSpawnSelector`'s run-start tile, not merely wherever the camera
+    // (uninitialized, at the scene origin for a headless test) happened to
+    // sit. `scene.cameraWorldPosition` is no longer this value's source --
+    // it now reads back through `cameraController`'s own worldLayer-offset
+    // geometry, which only converges with the true focus once a real
+    // `SKView` centres `cameraNode` (see `centreCameraOnScene()`) -- so this
+    // test asserts against `RunSpawnSelector` directly, the actual source
+    // of truth `GameScene.startPlayer(at:)` is fed from.
+    func test_theMountedPlayer_isPlacedAtTheRunsSpawnTile_withDepthBandingsZPosition() {
         let scene = makeScene()
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
 
@@ -63,7 +72,8 @@ final class PlayerMountTests: XCTestCase {
             return XCTFail("Entering .gameplay must mount the player.")
         }
 
-        let tilePosition = scene.cameraWorldPosition
+        let spawnTile = RunSpawnSelector.selectSpawnTile(seed: scene.worldSeed)
+        let tilePosition = TilePoint(x: Double(spawnTile.tileX), y: Double(spawnTile.tileY))
         let expectedPosition = IsometricProjection.tileToScreen(tileX: tilePosition.x, tileY: tilePosition.y)
         XCTAssertEqual(player.position.x, expectedPosition.x, accuracy: 1e-6)
         XCTAssertEqual(player.position.y, expectedPosition.y, accuracy: 1e-6)

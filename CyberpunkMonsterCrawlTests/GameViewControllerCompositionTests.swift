@@ -85,6 +85,32 @@ final class GameViewControllerCompositionTests: XCTestCase {
         )
     }
 
+    /// `CYBERPUN-17-7`: the hosting view must accept more than one finger.
+    ///
+    /// `UIView.isMultipleTouchEnabled` defaults to `false`, and while it is,
+    /// UIKit delivers a second concurrent touch to nobody - so
+    /// `GameScene`'s `activeStickTouch` bookkeeping (which exists precisely
+    /// to tell a stick drag apart from a simultaneous button tap) guards a
+    /// case that can never arrive, and gate 1's "the stick moves the player,
+    /// every button responds" would break the moment
+    /// `CYBERPUN-17-10`'s pulse button lands in the slot the stick already
+    /// reserves above itself. Asserted on the view actually installed by
+    /// `viewDidLoad()`, not on a freshly built one.
+    func test_compositionRoot_hostingView_acceptsConcurrentTouches() throws {
+        let controller = GameViewController()
+        controller.loadViewIfNeeded()
+
+        let hostedView = try XCTUnwrap(
+            controller.view.subviews.first { $0 is SKView } as? SKView,
+            "the composition root must install an SKView to host the scene"
+        )
+        XCTAssertTrue(
+            hostedView.isMultipleTouchEnabled,
+            "the hosting view must accept concurrent touches, or a HUD button pressed while the thumbstick "
+                + "is being dragged is delivered to nobody at all"
+        )
+    }
+
     func test_compositionRoot_menuHighScoresButton_isWiredToTheStateMachine() throws {
         let scene = makeScene()
         let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)

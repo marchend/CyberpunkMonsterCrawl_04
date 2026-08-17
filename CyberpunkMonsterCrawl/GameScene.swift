@@ -81,6 +81,11 @@ final class GameScene: SKScene {
     /// story owns run setup can set this per run before `.gameplay` is
     /// entered, and the whole world follows from it — `WorldSeed`'s contract
     /// is that the same seed reproduces the identical city forever.
+    ///
+    /// **Nothing in the app writes this today** (only tests do), which is why
+    /// the run's spawn junction is currently the same on every run rather
+    /// than a new one each time — see `spawnTilePosition()` for the full
+    /// note and where that gap is tracked.
     var worldSeed = WorldSeed(rawValue: 0x0C17_5EED)
 
     /// The mounted ground plane, streamed into `worldLayer` while a run is in
@@ -96,116 +101,70 @@ final class GameScene: SKScene {
     /// run is in progress (`nil` before the first `.gameplay` entry).
     ///
     /// `GroundTileRenderer`'s own type doc states this repo's rule --
-    /// *"A factory with no production caller is exactly the shape of feature
+    /// "A factory with no production caller is exactly the shape of feature
     /// that never gets switched on, so the mount is wired here rather than
-    /// deferred"* -- and `PlayerNode` is held to it: entering `.gameplay`
-    /// puts a real player in the graph, at the camera's tile, with its depth
-    /// resolved through `DepthBanding`, so the anchor/shadow/depth
-    /// integration is observable on a device instead of in unit tests only.
+    /// deferred" -- and `PlayerNode` is held to it: entering `.gameplay`
+    /// puts a real player in the graph, at the run's spawn tile (see
+    /// `RunSpawnSelector`), with its depth resolved through `DepthBanding`.
     ///
-    /// What is *not* here yet is real movement: `advancePlayer(currentTime:)`
-    /// drives `PlayerNode.update(deltaTime:movementVector:)` every frame with
-    /// a `.zero` vector, so a shipped build shows the player standing idle on
-    /// frame 0 facing south. A DEBUG build can opt into
-    /// `debugPlayerDemoEnabled` to have `playerScaffoldingDriver` supply a
-    /// scripted demo vector instead (see that property's own doc comment) --
-    /// that is a developer aid, never shipped behaviour, and it never touches
-    /// this node's `position` either. `CYBERPUN-17-7` ("wire the floating
-    /// thumbstick, player movement, building collision and camera") owns
-    /// replacing that vector source with the resolved stick vector and moving
-    /// `position`/the camera with it -- the story's "walking any direction
-    /// shows the matching facing" gate needs the thumbstick that ticket
-    /// brings.
+    /// `advanceMovementAndCamera(currentTime:)` drives this node's position,
+    /// depth and visual state every frame: `thumbstick` -> `movementController`
+    /// -> `CollisionResolver` -> commit position -> `cameraController`. This
+    /// is the real replacement for the `SCAFFOLDING(CYBERPUN-17-7)` demo
+    /// driver an earlier PR of this story stood in with while movement,
+    /// collision and camera-follow did not exist yet.
     private(set) var player: PlayerNode?
 
+    /// The player's current position in tile space -- the single source of
+    /// truth `advanceMovementAndCamera(currentTime:)` resolves every frame.
+    /// `player.position` (screen space, pixel-snapped) and the camera focus
+    /// fed to `cameraController` are both derived from this, never the other
+    /// way around. `nil` before the first `.gameplay` entry.
+    private(set) var playerWorldPosition: TilePoint?
+
     /// The `currentTime` of the previous `update(_:)`, used to derive the
-    /// per-frame delta handed to `player`. `nil` until the first frame runs,
-    /// where the delta is `0` rather than an invented value.
+    /// per-frame delta handed to `player`'s visual/animation state. `nil`
+    /// until the first frame runs, where the delta is `0` rather than an
+    /// invented value.
     private var lastFrameTime: TimeInterval?
 
-    // MARK: - SCAFFOLDING(CYBERPUN-17-7): player movement demo driver
-    //
-    // There is no floating thumbstick yet -- that lands with CYBERPUN-17-7
-    // ("Wire the floating thumbstick, player movement, building collision
-    // and camera") -- so a running build shows the mounted player standing
-    // frozen on frame 0 facing south for an entire `.gameplay` episode,
-    // which is hard to tell apart from a player that was never wired up at
-    // all. `PlayerScaffoldingDriver` supplies a scripted vector cycling
-    // through all 8 facings (plus a trailing idle beat) so the
-    // anchor/shadow/depth/animation integration can be *visibly*
-    // demonstrated ahead of real input.
-    //
-    // The whole block is `#if DEBUG` and additionally off by default behind
-    // `debugPlayerDemoEnabled`, exactly like the debug camera pan below: a
-    // shipped Release build physically cannot auto-walk the player and
-    // carries none of this state, because an input-less scripted lap in a
-    // shipped build is a worse "looks broken" than the frozen frame it
-    // diagnoses. Nothing in the test suite asserts this driver's behaviour
-    // either (`PlayerNodeTests`/`PlayerAnimatorTests`/`Direction8Tests` own
-    // facing, idle-at-frame-0 and walk-cycle timing against the permanent
-    // types), so `CYBERPUN-17-7` can delete it without deleting a green
-    // test.
-    //
-    // `CYBERPUN-17-7` should delete this property, the flag, `startPlayer()`'s
-    // one construction line for it and the `#if DEBUG` vector block in
-    // `advancePlayer(currentTime:)` -- and nothing else. The production
-    // `player?.update(deltaTime:movementVector:)` call there is deliberately
-    // *outside* that block, so removing the scaffolding leaves the per-frame
-    // call site standing.
+    /// The on-screen floating movement thumbstick (`CYBERPUN-17-7` PR 1).
+    /// Mounted directly in `uiLayer` in `commonInit()` -- independent of the
+    /// state-driven screen registry, since it is not itself a `ScreenNode`
+    /// -- and shown only while a run is active (`isRunActive`, toggled by
+    /// `updateWorldContent(for:)`). `touchesBegan`/`touchesMoved`/
+    /// `touchesEnded`/`touchesCancelled` route the touch that engages it via
+    /// `beginTouch(at:)`/`updateTouch(at:)`/`endTouch()` -- see
+    /// `activeStickTouch`.
+    let thumbstick = FloatingThumbstickNode()
 
-    #if DEBUG
-    /// Turns the scaffolding player demo cycle on or off. Off by default, so
-    /// normal gameplay (and every test in the suite) sees the same `.zero`
-    /// vector production does; only a manual on-device check that explicitly
-    /// opts in sees the player walk on its own.
-    var debugPlayerDemoEnabled = false
+    /// Turns `thumbstick`'s per-frame `StickState` into a tile-space
+    /// proposed displacement, facing vector and `isMoving` flag
+    /// (`CYBERPUN-17-7` PR 1). Fed the live stick reading every frame by
+    /// `advanceMovementAndCamera(currentTime:)`.
+    let movementController = PlayerMovementController()
 
-    /// The scripted demo vector source, built alongside the player it is
-    /// meant to demonstrate. Only ever read when `debugPlayerDemoEnabled` is
-    /// set.
-    private var playerScaffoldingDriver: PlayerScaffoldingDriver?
-    #endif
+    /// Keeps `playerWorldPosition` centred on screen (by repositioning
+    /// `worldLayer`, never `cameraNode` -- see that type's own doc comment
+    /// for why) and drives `groundPlane`'s chunk streaming with the same
+    /// focus point every frame (`CYBERPUN-17-7` PR 2). Built in
+    /// `commonInit()`, once `worldLayer` exists, so it is
+    /// implicitly-unwrapped rather than given a stored-property initializer.
+    private var cameraController: CameraController!
 
-    // MARK: - SCAFFOLDING(CYBERPUN-17-7): debug camera pan
-    //
-    // `GameScene` has no real camera-follow behaviour yet — that lands with
-    // `CYBERPUN-17-7` ("Wire the floating thumbstick, player movement,
-    // building collision and camera"), which should delete this block. Until
-    // then, `GroundPlaneStreamer`/`ChunkStreamingManager` have no in-app way
-    // to be exercised across *many* chunk boundaries during a manual run or
-    // an on-device check, so this is a minimal, clearly-marked stand-in: a
-    // straight-line pan, off by default, that moves the camera far enough to
-    // cross several chunks so multi-chunk streaming is visible end-to-end.
-    // It is deliberately not physically based, not player-controlled and not
-    // camera-follow — just enough motion to drive the streaming system.
-    //
-    // The whole block is `#if DEBUG`, so a shipped Release build physically
-    // cannot pan on its own and carries none of this state. Nothing in the
-    // test suite asserts the pan's behaviour either (see
-    // `ChunkStreamingGroundTests`, which drives `GroundPlaneStreamer`
-    // directly instead), so `CYBERPUN-17-7` can delete these lines without
-    // deleting a green test.
-
-    #if DEBUG
-    /// Tiles per second the scaffolding debug pan moves the camera once
-    /// `debugPanEnabled` is set. `Chunk.size` (8 tiles) at this rate crosses
-    /// a chunk boundary every 2 seconds — slow enough to inspect visually,
-    /// fast enough to sweep several boundaries in a short manual run.
-    static let debugPanTilesPerSecond: Double = 4
-
-    /// Turns the scaffolding debug pan on or off. Off by default, so normal
-    /// gameplay (and every test in the suite) is unaffected; only a manual
-    /// on-device check that explicitly opts in sees the camera move on its
-    /// own.
-    var debugPanEnabled = false
-
-    /// Where in tile space, and at what `currentTime`, the debug pan most
-    /// recently (re)started — `nil` whenever it hasn't run yet this
-    /// `.gameplay` episode. Reset in `startGroundPlane()` so a fresh run
-    /// (including RUN AGAIN) starts its pan from the new camera position
-    /// rather than replaying stale timing from a previous run.
-    private var debugPanOrigin: (worldPosition: TilePoint, time: TimeInterval)?
-    #endif
+    /// The touch currently engaging `thumbstick`, if any -- tracked so
+    /// `touchesMoved`/`touchesEnded`/`touchesCancelled` can tell the stick's
+    /// own drag apart from any other concurrent touch (a button tap)
+    /// without `FloatingThumbstickNode` itself needing to know about
+    /// `UITouch` at all (see that type's own "touch-input agnostic" doc
+    /// note). Held weakly: UIKit, not this scene, owns a touch's lifetime.
+    ///
+    /// A *concurrent* touch really can arrive: `GameViewController` sets
+    /// `isMultipleTouchEnabled` on the hosting view, and
+    /// `touchesBegan(_:with:)` routes every touch of an event set rather than
+    /// only `touches.first`. Until both of those were true this property was
+    /// bookkeeping for a case UIKit could never deliver.
+    private weak var activeStickTouch: UITouch?
 
     // MARK: - Init
 
@@ -221,7 +180,7 @@ final class GameScene: SKScene {
 
     /// Builds the persistent layer hierarchy and wires the state machine.
     /// Runs from both designated initializers so `GameScene` is fully
-    /// structured before `didMove(to:)` — tests construct a `GameScene`
+    /// structured before `didMove(to:)` -- tests construct a `GameScene`
     /// directly (no `SKView`) and rely on this having already happened.
     private func commonInit() {
         // The dark "Pixel Grit" base every screen sits on. The menu, death
@@ -242,6 +201,31 @@ final class GameScene: SKScene {
         effectsLayer.zPosition = LayerConstants.effectsLayerZ
         uiLayer.zPosition = LayerConstants.uiLayerZ
 
+        // Mounted directly, independent of the state-driven screen
+        // registry -- the thumbstick is not a `ScreenNode`, it just stays
+        // hidden (`isRunActive == false`) outside `.gameplay`. Laid out
+        // immediately with this scene's own `size` and zero insets so a
+        // headless (view-less) scene -- which never calls `didMove(to:)` --
+        // still satisfies `FloatingThumbstickNode`'s "layout must have run
+        // before a touch is asked about" precondition; `didMove(to:)` /
+        // `didChangeSize(_:)` refresh it with the real safe-area insets once
+        // a view attaches.
+        uiLayer.addChild(thumbstick)
+        thumbstick.layout(for: size, safeAreaInsets: .zero)
+
+        // Repositions `worldLayer` (never `cameraNode`) to keep
+        // `playerWorldPosition` centred on screen, and forwards the same
+        // focus point to `groundPlane`'s chunk streaming every frame -- see
+        // `CameraController`'s own doc comment for why `worldLayer`, not the
+        // camera, is the node that moves.
+        cameraController = CameraController(
+            container: worldLayer,
+            deviceScale: { [weak self] in self?.deviceScale ?? 1 },
+            streamingUpdate: { [weak self] worldPosition in
+                self?.groundPlane?.updateCamera(worldPosition: worldPosition)
+            }
+        )
+
         stateMachine.onChange = { [weak self] state in
             guard let self else { return }
             self.transitionScreens(to: state)
@@ -251,70 +235,98 @@ final class GameScene: SKScene {
 
     // MARK: - World content
 
-    /// Brings world content in step with `state`: entering `.gameplay` starts
-    /// (or restarts) the streamed ground plane in `worldLayer`, and mounts
-    /// (or repositions) the player on top of it.
+    /// Brings world content in step with `state`: entering `.gameplay` picks
+    /// the run's spawn tile (`RunSpawnSelector`), starts (or restarts) the
+    /// streamed ground plane centred there, mounts (or repositions) the
+    /// player on it, shows the thumbstick and drives the camera/streaming
+    /// to that same focus point immediately -- so the very first frame of a
+    /// run already shows the player centred on-screen rather than only
+    /// catching up once `update(_:)` next runs.
     ///
     /// The other three states leave the mounted ground alone rather than
-    /// tearing it down — their screens each carry an opaque full-bleed
+    /// tearing it down -- their screens each carry an opaque full-bleed
     /// backdrop precisely because they are meant to hide the world (see
     /// `GameplayScreenNode`, the one screen that deliberately does not), so
     /// nothing shows through, and RUN AGAIN then re-enters `.gameplay` with a
-    /// world already in place.
+    /// world already in place. They do hide the thumbstick, though -- there
+    /// is nothing to move outside a run, and `FloatingThumbstickNode
+    /// .isRunActive`'s own `didSet` cancels any in-flight drag when it goes
+    /// false, so a run ending mid-drag can never strand the stick off-centre.
     private func updateWorldContent(for state: GameState) {
         switch state {
         case .gameplay:
+            let spawn = spawnTilePosition()
+            playerWorldPosition = spawn
             startGroundPlane()
             // After the ground, so the player is mounted onto a world that
             // already exists; ordering in `worldLayer` is decided by
             // `DepthModel`/`DepthBanding` zPositions, not by child order.
-            startPlayer()
+            startPlayer(at: spawn)
+            thumbstick.isRunActive = true
+            cameraController.update(focus: spawn, viewportSize: size)
+            #if DEBUG
+            assertSceneInvariants()
+            #endif
         case .menu, .death, .highScores:
-            break
+            thumbstick.isRunActive = false
         }
     }
 
-    /// Mounts the ground plane for `worldSeed`, centred on the camera's own
-    /// world position: reusing the existing `GroundPlaneStreamer` when the
-    /// seed is unchanged, and replacing it outright when the seed (and so
-    /// the city) has changed.
+    /// The run's start tile for `worldSeed`, chosen once per `.gameplay`
+    /// entry via `RunSpawnSelector` -- a street-intersection tile,
+    /// guaranteed street under every seed (see that type's own doc
+    /// comment).
+    ///
+    /// **As composed today this is the same junction on every run.**
+    /// `RunSpawnSelector.selectSpawnTile(seed:)` is a pure function of
+    /// `worldSeed`, and nothing in the app ever *writes* `worldSeed` -- it is
+    /// a fixed default (see that property's own doc comment), so every RUN
+    /// AGAIN and every app launch selects the identical tile. That is the
+    /// selector working exactly as specified (same seed => same city, same
+    /// spawn); it is not "a new starting junction per run", and this story
+    /// should not be recorded as having delivered that half. What is missing
+    /// is a per-run `worldSeed`, which belongs to whichever story owns run
+    /// setup: no such ticket exists yet, so -- following the same convention
+    /// as `PlayerMovementController`'s deferred-scope note rather than
+    /// inventing an ID here -- it is tracked on the `CYBERPUN-17-7` story
+    /// itself, requested as a follow-up on this PR's task,
+    /// `CYBERPUN-17-7-t3`. The moment `worldSeed` varies per run, this
+    /// method varies the junction with it and needs no change.
+    private func spawnTilePosition() -> TilePoint {
+        let tile = RunSpawnSelector.selectSpawnTile(seed: worldSeed)
+        return TilePoint(x: Double(tile.tileX), y: Double(tile.tileY))
+    }
+
+    /// Ensures the ground plane matches `worldSeed`: keeping the existing
+    /// `GroundPlaneStreamer` when the seed is unchanged, and replacing it
+    /// outright when the seed (and so the city) has changed. Does not itself
+    /// mount any tiles -- `updateWorldContent(for:)`'s subsequent
+    /// `cameraController.update(focus:viewportSize:)` call is what drives
+    /// `updateCamera(worldPosition:)` and actually streams the quickstart
+    /// ring in, for both a kept and a freshly built streamer alike.
     ///
     /// Exposed (rather than private) so tests can drive the mount directly on
     /// a scene built without an `SKView`, the same way the screen registry is
     /// exercised.
     func startGroundPlane() {
-        if let existing = groundPlane, existing.seed == worldSeed {
+        guard groundPlane == nil || groundPlane?.seed != worldSeed else {
             // Same seed means the same city, tile for tile (`WorldSeed`'s
             // whole contract), so the mounted ground is already correct for
-            // this run: keep the streamer — and with it its recycle pool and
-            // its generated chunks — and just bring residency back in step
-            // with wherever the camera now sits. Tearing it down and
-            // building a fresh `GroundPlaneStreamer` would discard the pool
-            // with the old instance and re-allocate a whole resident
-            // window's worth of `SKSpriteNode`s on every RUN AGAIN.
-            existing.updateCamera(worldPosition: cameraWorldPosition)
-        } else {
-            // A different seed is a different city, so the old streamer's
-            // generated chunks can't be reused.
-            groundPlane?.unmountAll()
-            let plane = GroundPlaneStreamer(seed: worldSeed, worldLayer: worldLayer)
-            plane.updateCamera(worldPosition: cameraWorldPosition)
-            groundPlane = plane
+            // this run: keep the streamer -- and with it its recycle pool
+            // and its generated chunks -- rather than discarding the pool
+            // and re-allocating a whole resident window's worth of
+            // `SKSpriteNode`s on every RUN AGAIN.
+            return
         }
-        #if DEBUG
-        // SCAFFOLDING(CYBERPUN-17-7): a fresh run means a fresh pan — clear
-        // any stale origin so RUN AGAIN starts the debug pan (if enabled)
-        // from wherever the new run's camera actually sits.
-        debugPanOrigin = nil
-
-        // Ground nodes are the first world-space content in the graph, so
-        // audit the moment they land rather than at the next touch.
-        assertSceneInvariants()
-        #endif
+        // A different seed is a different city, so the old streamer's
+        // generated chunks can't be reused.
+        groundPlane?.unmountAll()
+        groundPlane = GroundPlaneStreamer(seed: worldSeed, worldLayer: worldLayer)
     }
 
-    /// Mounts the player into `worldLayer` at the camera's own tile, or
-    /// repositions the already-mounted one there when a run restarts.
+    /// Mounts the player into `worldLayer` at `tilePosition` (the run's spawn
+    /// tile on first mount, per `updateWorldContent(for:)`), or repositions
+    /// the already-mounted one there when a run restarts.
     ///
     /// The node is parented **directly** under `worldLayer` (the same
     /// convention the ground nodes follow) because that is the one mount
@@ -332,22 +344,13 @@ final class GameScene: SKScene {
     /// Exposed (rather than private) for the same reason as
     /// `startGroundPlane()`: tests drive the mount directly on a scene built
     /// without an `SKView`.
-    func startPlayer() {
-        let tilePosition = cameraWorldPosition
-
+    func startPlayer(at tilePosition: TilePoint) {
         let mounted: PlayerNode
         if let existing = player {
             mounted = existing
         } else {
             mounted = PlayerNode()
             player = mounted
-            #if DEBUG
-            // SCAFFOLDING(CYBERPUN-17-7): see the property's own doc
-            // comment. Built once, alongside the player it demonstrates, and
-            // reused across a RUN AGAIN the same way `mounted` itself is.
-            // DEBUG-only, and inert until `debugPlayerDemoEnabled` is set.
-            playerScaffoldingDriver = PlayerScaffoldingDriver()
-            #endif
         }
 
         if mounted.parent !== worldLayer {
@@ -355,10 +358,7 @@ final class GameScene: SKScene {
             worldLayer.addChild(mounted)
         }
 
-        // Snapped via `PixelCrispness` (not assigned raw) because this
-        // position is derived *through the camera's tile* -- on entry to
-        // `.gameplay`, which is the only moment this method runs (mount, and
-        // every RUN AGAIN reposition) -- and
+        // Snapped via `PixelCrispness` (not assigned raw) because
         // `IsometricProjection.tileToScreen`'s floating-point arithmetic can
         // drift a fraction of a device pixel off a whole point even when the
         // input tile position looks clean. The world's whole rendering rule
@@ -366,16 +366,6 @@ final class GameScene: SKScene {
         // `deviceScale` falls back to `1` for a headless (view-less) scene,
         // which whole-point-snaps instead -- still correct, just coarser
         // than a real device's `@2x`/`@3x` grid.
-        //
-        // Known limit (CYBERPUN-17-7): this snaps the *actor's* mount
-        // position only. `cameraNode.position` is not snapped anywhere --
-        // the scaffolding debug pan sets it fractionally today, and
-        // camera-follow will set it every frame -- so once the camera moves
-        // off a whole device pixel the player renders off the grid again
-        // regardless of this snap. The durable fix is to snap the camera
-        // (every world-space child inherits it), which belongs with the
-        // ticket that makes the camera move; this snap stays correct and
-        // sufficient for the static mount it guards.
         let rawPosition = IsometricProjection.tileToScreen(tileX: tilePosition.x, tileY: tilePosition.y)
         mounted.position = PixelCrispness.snappedPosition(for: rawPosition, scale: deviceScale)
         mounted.updateDepth(atTilePosition: tilePosition)
@@ -420,106 +410,79 @@ final class GameScene: SKScene {
         view?.contentScaleFactor ?? 1
     }
 
-    /// Advances the mounted player's visual state once per frame.
+    /// Advances the run's movement pipeline for one frame, in a fixed order:
+    /// read `thumbstick` -> resolve `movementController`'s proposed
+    /// displacement -> resolve it against building collision
+    /// (`CollisionResolver`) -> commit the result to `playerWorldPosition`
+    /// and the mounted player's position/depth/visual state -> drive
+    /// `cameraController` (world-layer offset + chunk streaming) from that
+    /// same resolved position.
     ///
-    /// The movement vector is `.zero` until `CYBERPUN-17-7` wires the
-    /// floating thumbstick: `PlayerNode.update(deltaTime:movementVector:)`
-    /// freezes an idle player to walk-cycle frame 0 and keeps its last
-    /// facing, so a stationary player is exactly what a shipped build
-    /// produces today. Driving it from here anyway is deliberate -- it means
-    /// the facing / animation state machine runs in a real build rather than
-    /// only under test, and `CYBERPUN-17-7`'s change is to *supply a vector*
-    /// (the resolved stick reading), not to discover that nothing was
-    /// calling this at all.
-    ///
-    /// SCAFFOLDING(CYBERPUN-17-7): a DEBUG build that has opted into
-    /// `debugPlayerDemoEnabled` substitutes a scripted demo vector for that
-    /// `.zero`. The substitution is the only scaffolded part -- the
-    /// `player?.update(...)` call below sits outside the `#if DEBUG` block
-    /// on purpose, so deleting the scaffolding cannot delete the production
-    /// call site with it.
-    private func advancePlayer(currentTime: TimeInterval) {
+    /// This is the real replacement for the `SCAFFOLDING(CYBERPUN-17-7)`
+    /// demo driver an earlier PR of this story used while the thumbstick,
+    /// `PlayerMovementController` and `CollisionResolver` existed but were
+    /// not yet wired into a live scene. A no-op before the first
+    /// `.gameplay` entry (`player`/`playerWorldPosition` are both `nil`).
+    private func advanceMovementAndCamera(currentTime: TimeInterval) {
+        // The player's visual/animation deltaTime is derived independently
+        // of `movementController`'s own internal clock (which additionally
+        // clamps to `PlayerMovementController.maxFrameDelta`), exactly as
+        // before this pipeline existed: an idle player still freezes at
+        // walk-cycle frame 0 whatever the movement math below computes.
         // `max(0, ...)` because `currentTime` is the render clock: a scene
         // presented, backgrounded and re-presented can hand back a smaller
         // value, and a negative delta would run the walk cycle backwards.
         let deltaTime = lastFrameTime.map { max(0, currentTime - $0) } ?? 0
         lastFrameTime = currentTime
 
-        var movementVector = CGVector.zero
-        #if DEBUG
-        // SCAFFOLDING(CYBERPUN-17-7): delete this block (and nothing else in
-        // this method) once the thumbstick supplies the vector for real.
-        if debugPlayerDemoEnabled {
-            movementVector = playerScaffoldingDriver?.currentVector(advancedBy: deltaTime) ?? .zero
-        }
-        #endif
+        guard let player, let currentPosition = playerWorldPosition else { return }
 
-        player?.update(deltaTime: deltaTime, movementVector: movementVector)
+        movementController.update(stickState: thumbstick.stickState, currentTime: currentTime)
+
+        // `GroundPlaneStreamer.residentObstructions` is derived once per
+        // residency change rather than rebuilt here every frame: the obvious
+        // spelling (`residentChunks.values.flatMap(\.buildingPlacements)`
+        // handed to `resolve(obstructedBy:)`) allocates two arrays across the
+        // full 49-chunk resident window per frame, in a subsystem that pools
+        // aggressively to avoid exactly that.
+        let resolvedPosition = CollisionResolver.resolve(
+            currentPosition: currentPosition,
+            proposedDelta: movementController.frameDisplacement,
+            obstructions: groundPlane?.residentObstructions ?? []
+        )
+        playerWorldPosition = resolvedPosition
+
+        let rawPosition = IsometricProjection.tileToScreen(resolvedPosition)
+        player.position = PixelCrispness.snappedPosition(for: rawPosition, scale: deviceScale)
+        player.updateDepth(atTilePosition: resolvedPosition)
+
+        // `PlayerNode` reads "moving" from a non-zero vector, so the facing
+        // vector (which persists at its last value below the stick's dead
+        // zone) is only ever handed over while `isMoving` is actually true.
+        let visualVector = movementController.isMoving ? movementController.facingVector : .zero
+        player.update(deltaTime: deltaTime, movementVector: visualVector)
+
+        cameraController.update(focus: resolvedPosition, viewportSize: size)
     }
 
     /// Drains `groundPlane`'s incremental-mount queue a few chunks at a time
-    /// (`GroundPlaneStreamer.advanceIncrementalMount()`), advances the
-    /// mounted player's visual state (`advancePlayer(currentTime:)`), and —
-    /// DEBUG builds only — advances the scaffolding debug pan.
+    /// (`GroundPlaneStreamer.advanceIncrementalMount()`) and advances the
+    /// run's movement/camera pipeline (`advanceMovementAndCamera(
+    /// currentTime:)`).
     ///
     /// `CYBERPUN-17-4-t4`: the incremental-mount drain runs in Release too,
     /// deliberately. It exists to fix a real stall (entering `.gameplay` used
     /// to mount the entire resident chunk window synchronously, inside the
     /// PLAY tap's own call stack, which a runtime probe caught mid-stall), so
-    /// it is production behaviour, not a debug aid — unlike the pan below,
-    /// gating it behind `#if DEBUG` would ship the bug it fixes. It is also
-    /// what keeps the deferred remainder moving once `CYBERPUN-17-7` drives
-    /// `updateCamera` from camera-follow every frame: `updateCamera` only ever
-    /// mounts the quickstart ring, so this drain is the only thing that brings
-    /// the rest of the window in.
+    /// it is production behaviour. It is also what keeps the deferred
+    /// remainder moving now that `cameraController` drives `updateCamera`
+    /// every frame: `updateCamera` only ever mounts the quickstart ring, so
+    /// this drain is the only thing that brings the rest of the window in.
     override func update(_ currentTime: TimeInterval) {
         super.update(currentTime)
         groundPlane?.advanceIncrementalMount()
-        advancePlayer(currentTime: currentTime)
-        #if DEBUG
-        advanceDebugPanIfNeeded(currentTime: currentTime)
-        #endif
+        advanceMovementAndCamera(currentTime: currentTime)
     }
-
-    #if DEBUG
-    // SCAFFOLDING(CYBERPUN-17-7): see the block comment above `debugPanEnabled`.
-    // `CYBERPUN-17-7` should delete `advanceDebugPanIfNeeded(currentTime:)`
-    // once real player/camera movement exists to exercise streaming instead.
-    // It is DEBUG-only, so a Release build has no per-frame work from it at
-    // all (the incremental-mount drain above runs unconditionally though —
-    // see its own doc comment for why that one is not scaffolding).
-
-    /// Moves the camera in a straight line (+x in tile space) at
-    /// `debugPanTilesPerSecond`, driving `groundPlane`'s streaming as it
-    /// goes, while `debugPanEnabled` is set and a run is in progress.
-    /// No-ops otherwise, so it is safe to call unconditionally from
-    /// `update(_:)`.
-    private func advanceDebugPanIfNeeded(currentTime: TimeInterval) {
-        guard debugPanEnabled, stateMachine.currentState == .gameplay, let plane = groundPlane else { return }
-
-        let origin: (worldPosition: TilePoint, time: TimeInterval)
-        if let existing = debugPanOrigin {
-            origin = existing
-        } else {
-            origin = (worldPosition: cameraWorldPosition, time: currentTime)
-            debugPanOrigin = origin
-        }
-
-        let elapsed = currentTime - origin.time
-        let travelled = elapsed * Self.debugPanTilesPerSecond
-        let newWorldPosition = TilePoint(x: origin.worldPosition.x + travelled, y: origin.worldPosition.y)
-
-        plane.updateCamera(worldPosition: newWorldPosition)
-
-        // Move the actual SpriteKit camera to match, converting the new
-        // tile-space position through the same projection ground nodes use,
-        // from worldLayer's coordinate space (where `tileToScreen` output
-        // lives) into the scene's own — the space `cameraNode.position` is
-        // expressed in.
-        let screenPoint = IsometricProjection.tileToScreen(tileX: newWorldPosition.x, tileY: newWorldPosition.y)
-        cameraNode.position = worldLayer.convert(screenPoint, to: self)
-    }
-    #endif
 
     /// Where the camera sits in **tile space**, derived through the same
     /// projection the ground nodes are placed with, so the resident chunk
@@ -603,6 +566,7 @@ final class GameScene: SKScene {
         // coordinate space instead of showing its bottom-left quadrant.
         centreCameraOnScene()
         activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+        thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
         #if DEBUG
         assertSceneInvariants()
         #endif
@@ -612,6 +576,7 @@ final class GameScene: SKScene {
         super.didChangeSize(oldSize)
         centreCameraOnScene()
         activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+        thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
     }
 
     /// Only applied once the scene is presented (and on every size change,
@@ -734,10 +699,68 @@ final class GameScene: SKScene {
 
     // MARK: - Touch routing
 
+    /// UI responders (buttons) get first refusal, exactly like every other
+    /// touch this scene dispatches: `dispatchTouch(atScenePoint:)` only
+    /// returns `nil` when nothing in `uiLayer`/`worldLayer` claimed the
+    /// touch, and only then is `thumbstick.beginTouch(at:)` offered it --
+    /// which itself refuses outside the left region / the reserved
+    /// pulse-button slot / while no run is active (`canBeginTouch(at:)`).
+    ///
+    /// **Every touch in the set is routed, not just `touches.first`.** This
+    /// game is two-thumbed by design (`FloatingThumbstickNode` reserves
+    /// `reservedPulseButtonSlot` directly above the stick for
+    /// `CYBERPUN-17-10`), so a button press and a stick drag can legitimately
+    /// arrive in the same event set once
+    /// `GameViewController` has switched the hosting view's
+    /// `isMultipleTouchEnabled` on -- and dropping every touch but the first
+    /// would silently lose one of them. Iterating here is also what makes the
+    /// `activeStickTouch` bookkeeping load-bearing rather than theoretical.
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        guard let touch = touches.first else { return }
-        dispatchTouch(atScenePoint: touch.location(in: self))
+
+        for touch in touches {
+            let scenePoint = touch.location(in: self)
+
+            if dispatchTouch(atScenePoint: scenePoint) != nil {
+                continue
+            }
+
+            // Only one touch may drive the stick at a time: a second finger
+            // landing in the left region mid-drag must not steal the stick
+            // out from under the first, which `FloatingThumbstickNode` would
+            // otherwise happily re-centre on the newcomer.
+            guard activeStickTouch == nil else { continue }
+
+            if thumbstick.beginTouch(at: uiLayer.convert(scenePoint, from: self)) {
+                activeStickTouch = touch
+            }
+        }
+    }
+
+    /// Forwards the drag to `thumbstick` when the moved touch is the one
+    /// tracking it (`activeStickTouch`); a no-op for any other touch (a
+    /// button press moving slightly under a finger has nothing to do with
+    /// the stick).
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesMoved(touches, with: event)
+        guard let touch = touches.first(where: { $0 === activeStickTouch }) else { return }
+        thumbstick.updateTouch(at: uiLayer.convert(touch.location(in: self), from: self))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        endStickTrackingIfNeeded(touches)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        endStickTrackingIfNeeded(touches)
+    }
+
+    private func endStickTrackingIfNeeded(_ touches: Set<UITouch>) {
+        guard touches.contains(where: { $0 === activeStickTouch }) else { return }
+        thumbstick.endTouch()
+        activeStickTouch = nil
     }
 
     /// Routes `scenePoint` UI-first and *delivers* the touch to the nearest
