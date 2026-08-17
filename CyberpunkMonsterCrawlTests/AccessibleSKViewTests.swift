@@ -355,7 +355,7 @@ final class AccessibleSKViewTests: XCTestCase {
         let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
 
         let hit = try XCTUnwrap(
-            view.accessibilityHitTest(centre, with: nil),
+            view.accessibilityHitTest(centre, event: nil),
             "the view must answer the hit test itself; SKView's inherited answer knows nothing "
                 + "about the elements we publish"
         )
@@ -387,7 +387,7 @@ final class AccessibleSKViewTests: XCTestCase {
         let hit = try XCTUnwrap(
             view.accessibilityHitTest(
                 CGPoint(x: marker.accessibilityFrame.midX, y: marker.accessibilityFrame.midY),
-                with: nil
+                event: nil
             )
         )
 
@@ -407,7 +407,7 @@ final class AccessibleSKViewTests: XCTestCase {
             y: highScores.accessibilityFrame.midY
         )
 
-        XCTAssertTrue(view.accessibilityHitTest(centre, with: nil) as AnyObject === highScores)
+        XCTAssertTrue(view.accessibilityHitTest(centre, event: nil) as AnyObject === highScores)
     }
 
     /// A point no published element covers must not be attributed to one of
@@ -426,7 +426,7 @@ final class AccessibleSKViewTests: XCTestCase {
             )
         }
 
-        let hit = view.accessibilityHitTest(corner, with: nil)
+        let hit = view.accessibilityHitTest(corner, event: nil)
 
         XCTAssertFalse(
             elements.contains { $0 === (hit as AnyObject) },
@@ -442,15 +442,15 @@ final class AccessibleSKViewTests: XCTestCase {
 
         let play = try publishedElement("menu.playButton", in: view)
         let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
-        XCTAssertTrue(view.accessibilityHitTest(centre, with: nil) as AnyObject === play)
+        XCTAssertTrue(view.accessibilityHitTest(centre, event: nil) as AnyObject === play)
 
         XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
 
         let back = try publishedElement("highScores.backToMenuButton", in: view)
         let backCentre = CGPoint(x: back.accessibilityFrame.midX, y: back.accessibilityFrame.midY)
 
-        XCTAssertTrue(view.accessibilityHitTest(backCentre, with: nil) as AnyObject === back)
-        XCTAssertFalse(view.accessibilityHitTest(backCentre, with: nil) as AnyObject === play)
+        XCTAssertTrue(view.accessibilityHitTest(backCentre, event: nil) as AnyObject === back)
+        XCTAssertFalse(view.accessibilityHitTest(backCentre, event: nil) as AnyObject === play)
     }
 
     /// With the camera off-centre the published frame is unmoved (the pixels
@@ -466,7 +466,7 @@ final class AccessibleSKViewTests: XCTestCase {
         let play = try publishedElement("menu.playButton", in: view)
         let centre = CGPoint(x: play.accessibilityFrame.midX, y: play.accessibilityFrame.midY)
 
-        XCTAssertTrue(view.accessibilityHitTest(centre, with: nil) as AnyObject === play)
+        XCTAssertTrue(view.accessibilityHitTest(centre, event: nil) as AnyObject === play)
     }
 
     // MARK: - Off-centre camera (the configuration the bug actually needed)

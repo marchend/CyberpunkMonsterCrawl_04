@@ -103,7 +103,7 @@ import UIKit
 /// Publishing elements only closes the *query* half of the container
 /// contract - "what elements do you have, and where are they?". There is a
 /// second, independent half: "which element is at this point?", asked through
-/// `accessibilityHitTest(_:with:)`. XCUITest's `isHittable` is defined in
+/// `accessibilityHitTest(_:event:)`. XCUITest's `isHittable` is defined in
 /// terms of that question: it resolves an element's activation point from the
 /// frame we publish, asks the app which accessibility element sits there, and
 /// requires the *same* element back. Left unoverridden, that question is
@@ -114,7 +114,7 @@ import UIKit
 /// That is a uniquely nasty failure mode, because the element is *found*
 /// (`app.descendants(matching: .any)["PLAY"]` resolves) and a synthesized tap
 /// at those coordinates even works; only the hittability predicate fails.
-/// `accessibilityHitTest(_:with:)` below therefore answers from the same
+/// `accessibilityHitTest(_:event:)` below therefore answers from the same
 /// published rects, so the two halves cannot disagree.
 final class AccessibleSKView: SKView {
 
@@ -131,7 +131,7 @@ final class AccessibleSKView: SKView {
     /// published with, in scene-graph order.
     ///
     /// This is the other half of the container contract (see
-    /// `accessibilityHitTest(_:with:)`): publishing a frame answers "where is
+    /// `accessibilityHitTest(_:event:)`): publishing a frame answers "where is
     /// this element?", hit testing answers "which element is at this point?",
     /// and an out-of-process driver needs *both* answers to agree before it
     /// will call an element hittable.
@@ -147,7 +147,7 @@ final class AccessibleSKView: SKView {
     }
 
     /// The elements from the most recent publish, with the rects they were
-    /// published with - the lookup table `accessibilityHitTest(_:with:)`
+    /// published with - the lookup table `accessibilityHitTest(_:event:)`
     /// answers from.
     private var publishedElements: [PublishedElement] = []
 
@@ -332,16 +332,16 @@ final class AccessibleSKView: SKView {
     ///
     /// Falls back to `super` when nothing of ours is under the point, so a
     /// state this class does not understand keeps SpriteKit's own behaviour.
-    override func accessibilityHitTest(_ point: CGPoint, with event: UIEvent?) -> Any? {
+    override func accessibilityHitTest(_ point: CGPoint, event: UIEvent?) -> Any? {
         // Republish first: the elements (and their rects) must reflect the
         // live scene graph, exactly as they do for a query.
         guard publishedAccessibilityElements() != nil else {
-            return super.accessibilityHitTest(point, with: event)
+            return inheritedAccessibilityHitTest(point, event: event)
         }
 
         if let hit = publishedElement(atViewPoint: point) { return hit }
 
-        // `accessibilityHitTest(_:with:)` takes its point in the receiver's
+        // `accessibilityHitTest(_:event:)` takes its point in the receiver's
         // own coordinate space, like `hitTest(_:with:)`. Should a caller hand
         // over a window-space point instead, converting it costs nothing and
         // is a no-op for this app's full-bleed window.
@@ -352,7 +352,24 @@ final class AccessibleSKView: SKView {
             }
         }
 
-        return super.accessibilityHitTest(point, with: event)
+        return inheritedAccessibilityHitTest(point, event: event)
+    }
+
+    /// `SKView`'s own answer to the hit test, for the cases where nothing of
+    /// ours is under the point.
+    ///
+    /// The selector's only Swift spelling is `accessibilityHitTest(_:event:)`
+    /// (`withEvent:` was obsoleted in Swift 3, `with:` never existed), and it
+    /// carries an iOS 18 availability annotation - so while the *override*
+    /// needs no gate, a `super` call does. Below iOS 18 there is no callable
+    /// inherited implementation to defer to, and `nil` is the correct answer
+    /// anyway: it means "no accessibility element of mine is at this point",
+    /// which is exactly the state this path is reached in.
+    private func inheritedAccessibilityHitTest(_ point: CGPoint, event: UIEvent?) -> Any? {
+        if #available(iOS 18.0, *) {
+            return super.accessibilityHitTest(point, event: event)
+        }
+        return nil
     }
 
     /// The topmost published element whose view-space rect contains `point`,
@@ -393,7 +410,7 @@ final class AccessibleSKView: SKView {
     /// into `accessibilityFrame`.
     ///
     /// Returns the rect in **view space** whichever branch was taken - the
-    /// number `accessibilityHitTest(_:with:)` matches a point against, so the
+    /// number `accessibilityHitTest(_:event:)` matches a point against, so the
     /// frame published and the frame hit-tested are one value, not two.
     @discardableResult
     private func applyFrame(
