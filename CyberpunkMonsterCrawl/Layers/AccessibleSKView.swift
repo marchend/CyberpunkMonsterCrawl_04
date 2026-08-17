@@ -129,6 +129,31 @@ import UIKit
 ///   covers still resolves to `nil` and falls through to the `SKView`
 ///   untouched, which is every pixel of the game world.
 ///
+/// ## The fix, part 4: never rebuild the tree *during* the lookup
+///
+/// Answering the point lookup is not enough on its own: the answer has to be
+/// stable. The first interactive version of the overlay called
+/// `refreshAccessibilityMirrors()` from both
+/// `SceneAccessibilityContainerView.hitTest(_:with:)` and its
+/// `accessibilityElements` getter, so that the mirrors were always in step
+/// with the live scene graph. That refresh adds, removes and reorders
+/// subviews and rewrites frames - i.e. it mutates the hierarchy while the
+/// accessibility server is walking it. `isHittable` is a *comparison* between
+/// the two halves of the contract (the element resolved from the published
+/// frame, and the element answered at that frame's point), so a rebuild in
+/// between let the halves be answered from two different trees: PLAY stayed
+/// findable, a synthesized tap at its point still worked (which is why
+/// `AppLaunchAndRotationUITests` passed), and `isHittable` was `false`.
+///
+/// So the lookup is pure. Mirrors are reconciled only at explicit lifecycle
+/// points - `presentScene(_:)`, `layoutSubviews()` on either view,
+/// `SceneAccessibilityContainerView.didMoveToWindow()`,
+/// `GameViewController.viewDidLayoutSubviews()`, and
+/// `refreshSceneAccessibility()` called from
+/// `GameScene.transitionScreens(to:)` so a screen swap still retires stale
+/// mirrors - every one of which happens *between* accessibility snapshots
+/// rather than inside one.
+///
 /// SpriteKit's competing (camera-unaware) tree is silenced with
 /// `accessibilityElementsHidden` on this view (see
 /// `attachAccessibilityContainer(_:)`), which is also why the container has
@@ -203,6 +228,24 @@ final class AccessibleSKView: SKView {
     override func layoutSubviews() {
         super.layoutSubviews()
         containerView?.refreshAccessibilityMirrors()
+    }
+
+    /// Rebuilds the mirrors now, and tells accessibility clients that the
+    /// tree they may already have read is out of date.
+    ///
+    /// The seam for the scene to announce a change accessibility cannot infer
+    /// from a layout pass - today that is `GameScene.transitionScreens(to:)`,
+    /// where a whole screen's nodes are swapped without the view resizing.
+    /// It exists because the mirrors are no longer rebuilt lazily from an
+    /// accessibility query: doing that mutated the hierarchy a driver was
+    /// mid-way through resolving an element in, which is what made a
+    /// correctly-framed PLAY button report `isHittable == false` (see
+    /// `SceneAccessibilityContainerView.hitTest(_:with:)`). Refreshing has to
+    /// happen at explicit points *between* snapshots, and this is one of them.
+    func refreshSceneAccessibility() {
+        guard let containerView else { return }
+        containerView.refreshAccessibilityMirrors()
+        UIAccessibility.post(notification: .layoutChanged, argument: nil)
     }
 
     // MARK: - Descriptors
@@ -369,7 +412,7 @@ final class SceneAccessibilityMirrorView: UIView {
     /// `sceneView`'s coordinate space.
     ///
     /// Every write is guarded by an equality check: a refresh runs on every
-    /// accessibility query, and re-setting an unchanged `frame` would churn
+    /// layout pass, and re-setting an unchanged `frame` would churn
     /// layout (and, worse, invite UIKit to notify accessibility of a change
     /// that never happened) on every one of them.
     func apply(
@@ -520,6 +563,13 @@ final class SceneAccessibilityContainerView: UIView {
 
     // MARK: - Refresh triggers
 
+    // The *only* places the mirrors are reconciled from inside this class.
+    // Both are layout/lifecycle callbacks, i.e. they run between accessibility
+    // snapshots; the point lookup and the element query deliberately do not
+    // refresh (see `hitTest(_:with:)`). A change no layout pass implies - a
+    // screen swap - is announced explicitly by
+    // `AccessibleSKView.refreshSceneAccessibility()`.
+
     override func layoutSubviews() {
         super.layoutSubviews()
         refreshAccessibilityMirrors()
@@ -556,11 +606,41 @@ final class SceneAccessibilityContainerView: UIView {
     /// itself: a container claiming every point is as wrong as one claiming
     /// none, and letting the empty point fall through to the `SKView` keeps
     /// both the answer and the game world's own touch handling honest.
+    /// **The point lookup never rebuilds the tree it is resolving in**, and
+    /// that is the fix for the last way this overlay managed to leave PLAY
+    /// findable and un-hittable. An earlier version called
+    /// `refreshAccessibilityMirrors()` here (and from the
+    /// `accessibilityElements` getter), which adds, removes and reorders
+    /// subviews and rewrites their frames. `isHittable` compares the element
+    /// the *query* half resolved with the element the *point lookup* half
+    /// answers; refreshing in the middle of that meant the two halves could
+    /// be answered from two different hierarchies - a mirror the driver had
+    /// just resolved could be re-inserted at another z-index (or replaced)
+    /// between the frame it read and the point it asked about, so the object
+    /// coming back was not the object it had asked about and hittability was
+    /// `false` even though a synthesized tap at the very same point worked.
+    ///
+    /// So the lookup is now pure: it resolves `point` against the mirrors
+    /// exactly as they stand. Refreshes happen only at explicit lifecycle
+    /// points - `layoutSubviews()`, `didMoveToWindow()`,
+    /// `AccessibleSKView.presentScene(_:)` / `layoutSubviews()`,
+    /// `GameViewController.viewDidLayoutSubviews()` and
+    /// `GameScene.transitionScreens(to:)` - all of which happen *between*
+    /// accessibility snapshots rather than inside one.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // The lookup runs off a snapshot of the tree, so bring the mirrors in
-        // step with the live scene graph before resolving against them.
-        refreshAccessibilityMirrors()
-        return super.hitTest(point, with: event) as? SceneAccessibilityMirrorView
+        guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
+
+        // Topmost sibling wins, which is UIKit's own rule and the one the
+        // marker-below-buttons z-order is built on. Walked explicitly rather
+        // than through `super` so the answer depends on nothing but the
+        // mirrors themselves.
+        for case let mirror as SceneAccessibilityMirrorView in subviews.reversed() {
+            guard mirror.isUserInteractionEnabled, !mirror.isHidden, mirror.alpha > 0.01 else { continue }
+            if mirror.point(inside: mirror.convert(point, from: self), with: event) {
+                return mirror
+            }
+        }
+        return nil
     }
 
     // MARK: - Touch forwarding
@@ -633,30 +713,25 @@ final class SceneAccessibilityContainerView: UIView {
         }
     }
 
-    /// The refresh hook that matters for an out-of-process driver.
-    ///
-    /// UIKit reads this property whenever it works out what a view's
-    /// accessible children are, i.e. once per accessibility snapshot - so
-    /// answering it is the moment to bring the mirrors in step with the live
-    /// scene graph. A screen swap (`GameScene.transitionScreens(to:)`) then
-    /// cannot leave a stale element behind: the very next query rebuilds the
-    /// mirrors, which is what makes XCUITest's `exists == false` on the old
-    /// PLAY element come true after the tap.
-    ///
-    /// `nil` (`super`'s value) is returned deliberately: the accessible
-    /// children *are* the subviews, and letting UIKit walk them natively is
-    /// what keeps the point lookup - and with it overlap resolution by
-    /// z-order - the ordinary, well-defined `UIView` behaviour instead of
-    /// something this class has to re-implement.
-    override var accessibilityElements: [Any]? {
-        get {
-            refreshAccessibilityMirrors()
-            return super.accessibilityElements
-        }
-        set { super.accessibilityElements = newValue }
-    }
-
     // MARK: - Mirroring
+
+    // `accessibilityElements` is deliberately **not** overridden.
+    //
+    // An earlier version overrode its getter to call
+    // `refreshAccessibilityMirrors()`, on the reasoning that UIKit reads it
+    // once per accessibility snapshot and that is the cheapest place to keep
+    // the mirrors current. It is also the worst: the getter is read *during*
+    // the very snapshot whose elements are being resolved, so rebuilding
+    // there mutated the hierarchy an out-of-process driver was mid-way
+    // through reading - and `isHittable`, which compares the element resolved
+    // from a frame with the element answered at that frame's point, went
+    // `false` for a PLAY button whose pixels were in exactly the right place.
+    //
+    // The accessible children *are* the subviews, so leaving this property
+    // alone lets UIKit walk them natively (query half) and resolve a point to
+    // one of them by z-order (hit-test half) with no help from us. Refreshes
+    // are driven from lifecycle points between snapshots instead - see
+    // `hitTest(_:with:)` for the list.
 
     /// Reconciles the mirror subviews with the presented scene's accessible
     /// nodes: reusing a mirror per node identity, updating its properties and
@@ -664,9 +739,14 @@ final class SceneAccessibilityContainerView: UIView {
     /// below real elements in the z-order.
     ///
     /// Idempotent, and deliberately mutation-free when nothing has changed:
-    /// it runs on every accessibility query, and a refresh that reshuffled
-    /// subviews each time would keep invalidating the snapshot it is being
-    /// asked to serve.
+    /// it runs on every layout pass, and a refresh that reshuffled subviews
+    /// each time would keep invalidating the snapshot an accessibility client
+    /// is reading.
+    ///
+    /// Called only from lifecycle points that sit *between* accessibility
+    /// snapshots (see `hitTest(_:with:)`), never from the point lookup or an
+    /// element query - rebuilding the hierarchy while it is being resolved is
+    /// precisely what made a correctly-framed PLAY button un-hittable.
     func refreshAccessibilityMirrors() {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -709,7 +789,7 @@ final class SceneAccessibilityContainerView: UIView {
 
         // Only touch the z-order when it is actually wrong: reordering
         // subviews is a hierarchy mutation, and this method runs on every
-        // accessibility query.
+        // layout pass.
         if mirrorSubviewOrder() != live.map(ObjectIdentifier.init) {
             for (index, mirror) in live.enumerated() {
                 insertSubview(mirror, at: index)
