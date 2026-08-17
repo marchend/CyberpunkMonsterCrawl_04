@@ -56,20 +56,44 @@ final class TileWalkabilityTests: XCTestCase {
         )
     }
 
-    /// Exhaustive: exactly one of `TileKind`'s cases is solid. `TileKind`
-    /// does not conform to `CaseIterable`, so this list is kept in sync by
-    /// hand \u2014 if a future case is added and this list is not updated, the
-    /// count assertion below still catches the drift because the walkable
-    /// count would then disagree with `allCases.count - 1`.
+    /// Genuinely exhaustive: this sweeps `TileKind.allCases` (the compiler-
+    /// synthesized `CaseIterable` list), not a hand-written literal, so a
+    /// sixth case added without classifying its walkability fails here
+    /// instead of silently going untested -- the same guarantee
+    /// `AtlasSheet.allCases` gives the catalog gates. The count assertion
+    /// is spelled out too, so the failure message says *how many* cases
+    /// drifted rather than only which list disagreed.
     func test_exactlyOneTileKind_isSolid() {
-        let allCases: [TileKind] = [.asphalt, .junctionStopLine, .kerbSidewalk, .lot, .buildingFootprint]
-        let solidCases = allCases.filter { !$0.isWalkable }
+        let solidCases = TileKind.allCases.filter { !$0.isWalkable }
+        let walkableCases = TileKind.allCases.filter(\.isWalkable)
 
         XCTAssertEqual(
             solidCases, [.buildingFootprint],
             "exactly one TileKind (.buildingFootprint) should be solid; everything else - street and " +
                 "sidewalk surfaces plus the empty lot - must be walkable"
         )
+        XCTAssertEqual(
+            walkableCases.count, TileKind.allCases.count - 1,
+            "every TileKind except .buildingFootprint must be walkable; a newly added case has to be "
+                + "classified (and asserted individually above) rather than inheriting a default"
+        )
+    }
+
+    /// Guards the per-case assertions above against the same drift: each
+    /// case named individually in this file is one of `allCases`, and there
+    /// are no *un*-named cases left over.
+    func test_everyTileKindCase_isCoveredByAPerCaseAssertionInThisFile() {
+        let casesAssertedIndividually: [TileKind] = [
+            .asphalt, .junctionStopLine, .kerbSidewalk, .lot, .buildingFootprint,
+        ]
+
+        for kind in TileKind.allCases {
+            XCTAssertTrue(
+                casesAssertedIndividually.contains(kind),
+                "\(kind) has no per-case walkability assertion in TileWalkabilityTests - add one"
+            )
+        }
+        XCTAssertEqual(casesAssertedIndividually.count, TileKind.allCases.count)
     }
 
     // MARK: - Confirmed against real generated tiles, not only the enum

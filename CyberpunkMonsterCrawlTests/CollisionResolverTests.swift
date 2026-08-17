@@ -43,7 +43,10 @@ final class CollisionResolverTests: XCTestCase {
     /// same rounded `tileToScreen(lotTile)` position \u2014 so a test fixture
     /// can never quietly drift from what production actually renders for
     /// this record.
-    @discardableResult
+    /// Mounted only by the fixture-parity test below, which is the one
+    /// assertion that needs a node at all: `CollisionResolver` never reads
+    /// the scene graph, so mounting one inside the resolver tests would be
+    /// noise that implies otherwise.
     private func mountSyntheticBuildingNode(for record: BuildingPlacementRecord, in worldLayer: SKNode) -> SKSpriteNode {
         let node = SKSpriteNode()
         node.name = TileFieldRenderer.buildingNodeName
@@ -89,9 +92,7 @@ final class CollisionResolverTests: XCTestCase {
     /// asserts the resolved position never lands strictly inside the
     /// footprint at any step of any direction.
     func test_eightDirectionApproach_neverEntersTheFootprint() {
-        let worldLayer = SKNode()
         let record = makeRecord(buildingIndex: 8, span: 2) // a 2x2 footprint (building_08)
-        mountSyntheticBuildingNode(for: record, in: worldLayer)
         let bounds = CollisionResolver.footprintBounds(for: record)
 
         for direction in eightDirections {
@@ -126,9 +127,7 @@ final class CollisionResolverTests: XCTestCase {
     /// whichever wall is now tangent to the motion (the standard per-axis
     /// slide behaviour), rather than parking exactly on the vertex forever.
     func test_diagonalApproach_getsCloseToTheFootprintsNearVertex() {
-        let worldLayer = SKNode()
         let record = makeRecord(buildingIndex: 8, span: 2)
-        mountSyntheticBuildingNode(for: record, in: worldLayer)
         let bounds = CollisionResolver.footprintBounds(for: record)
 
         let diagonalDirections = eightDirections.filter { $0.dx != 0 && $0.dy != 0 }
@@ -195,9 +194,6 @@ final class CollisionResolverTests: XCTestCase {
         XCTAssertEqual(BuildingSprite(rawValue: tallRecord.building.index)?.heightClass, .tall)
         XCTAssertEqual(BuildingSprite(rawValue: shortRecord.building.index)?.heightClass, .lowest)
 
-        let worldLayer = SKNode()
-        mountSyntheticBuildingNode(for: tallRecord, in: worldLayer)
-
         for direction in eightDirections {
             let dx = Double(direction.dx)
             let dy = Double(direction.dy)
@@ -224,6 +220,150 @@ final class CollisionResolverTests: XCTestCase {
             XCTAssertEqual(tallPosition.x, shortPosition.x, accuracy: 1e-9, "direction \(direction)")
             XCTAssertEqual(tallPosition.y, shortPosition.y, accuracy: 1e-9, "direction \(direction)")
         }
+    }
+
+    // MARK: - An oversized delta cannot tunnel through a footprint
+
+    /// The endpoint-only trace from review: a 1x1 footprint at (20, 20)
+    /// spans `[19.5, 20.5]`, so a mover at `x = 18` given `dx = 3.5` lands
+    /// at `21.5` -- outside the rectangle -- and a resolver that tested
+    /// only the destination would let it pass straight through the
+    /// building. `resolve` substeps the delta instead, so the swept segment
+    /// is covered and the mover stops on the near edge.
+    func test_anOversizedDelta_cannotTunnelThroughANarrowFootprint() {
+        let record = makeRecord(buildingIndex: 3, span: 1) // a 1x1 footprint at (20, 20)
+        let bounds = CollisionResolver.footprintBounds(for: record)
+        let start = TilePoint(x: 18, y: Double(footprintOrigin.tileY))
+
+        let resolved = CollisionResolver.resolve(
+            currentPosition: start,
+            proposedDelta: CGVector(dx: 3.5, dy: 0),
+            obstructedBy: [record]
+        )
+
+        XCTAssertFalse(
+            bounds.contains(x: resolved.x, y: resolved.y),
+            "resolved \(resolved) entered the footprint"
+        )
+        XCTAssertEqual(
+            resolved.x, bounds.minX, accuracy: 1e-9,
+            "an oversized delta must stop on the near edge rather than crossing the footprint"
+        )
+        XCTAssertLessThan(resolved.x, bounds.maxX, "the mover must never end up on the far side")
+    }
+
+    /// Same guarantee from each cardinal direction, with a delta 10 tiles
+    /// long -- roughly 60x what `PlayerMovementController.maxFrameDelta`
+    /// permits -- against the narrowest footprint that exists (1x1).
+    func test_anOversizedDelta_fromEveryCardinalDirection_stopsOnTheNearEdge() {
+        let record = makeRecord(buildingIndex: 3, span: 1)
+        let bounds = CollisionResolver.footprintBounds(for: record)
+        let centreX = Double(footprintOrigin.tileX)
+        let centreY = Double(footprintOrigin.tileY)
+
+        let approaches: [(delta: CGVector, start: TilePoint, expected: TilePoint)] = [
+            (CGVector(dx: 10, dy: 0), TilePoint(x: bounds.minX - 5, y: centreY), TilePoint(x: bounds.minX, y: centreY)),
+            (CGVector(dx: -10, dy: 0), TilePoint(x: bounds.maxX + 5, y: centreY), TilePoint(x: bounds.maxX, y: centreY)),
+            (CGVector(dx: 0, dy: 10), TilePoint(x: centreX, y: bounds.minY - 5), TilePoint(x: centreX, y: bounds.minY)),
+            (CGVector(dx: 0, dy: -10), TilePoint(x: centreX, y: bounds.maxY + 5), TilePoint(x: centreX, y: bounds.maxY)),
+        ]
+
+        for approach in approaches {
+            let resolved = CollisionResolver.resolve(
+                currentPosition: approach.start,
+                proposedDelta: approach.delta,
+                obstructedBy: [record]
+            )
+
+            XCTAssertFalse(
+                bounds.contains(x: resolved.x, y: resolved.y),
+                "delta \(approach.delta): resolved \(resolved) entered the footprint"
+            )
+            XCTAssertEqual(resolved.x, approach.expected.x, accuracy: 1e-9, "delta \(approach.delta)")
+            XCTAssertEqual(resolved.y, approach.expected.y, accuracy: 1e-9, "delta \(approach.delta)")
+        }
+    }
+
+    // MARK: - The production per-frame budget needs exactly one substep
+
+    /// The other half of the tunnelling contract: substepping makes an
+    /// oversized delta safe, and this pins that the *production* delta is
+    /// never oversized in the first place, so the normal path stays a
+    /// single resolution step and the substep loop is purely a safety net
+    /// for future callers. Measured through a real
+    /// `PlayerMovementController` driven with a multi-second stall (so
+    /// `maxFrameDelta`'s clamp is what bounds the delta, exactly as in
+    /// production) rather than a hand-computed constant, swept across every
+    /// heading -- so raising `maxPointsPerSecond` or `maxFrameDelta` past
+    /// the narrowest footprint fails here instead of shipping.
+    func test_oneStalledFrameOfRealPlayerMovement_needsExactlyOneSubstep() {
+        let bounds = CollisionResolver.footprintBounds(for: makeRecord(buildingIndex: 3, span: 1))
+        XCTAssertEqual(bounds.narrowestExtent, 1, accuracy: 1e-9, "precondition: a 1x1 footprint is one tile wide")
+
+        for degrees in stride(from: 0.0, to: 360.0, by: 5.0) {
+            let radians = degrees * Double.pi / 180
+            let controller = PlayerMovementController()
+            let stick = StickState(
+                direction: CGVector(dx: CGFloat(cos(radians)), dy: CGFloat(sin(radians))),
+                magnitude: 1,
+                isBeyondDeadZone: true
+            )
+            controller.update(stickState: stick, currentTime: 0)
+            controller.update(stickState: stick, currentTime: 5) // a multi-second stall, clamped to maxFrameDelta
+
+            XCTAssertEqual(
+                CollisionResolver.substepCount(for: controller.frameDisplacement, obstructions: [bounds]), 1,
+                "heading \(degrees)deg: one production frame must fit a single resolution step, got delta "
+                    + "\(controller.frameDisplacement)"
+            )
+        }
+    }
+
+    // MARK: - An illegal starting position ejects forwards, never backwards
+
+    /// A building can stream in on top of a mover, and a run-start tile can
+    /// be chosen before placements are known, so `currentPosition` is not
+    /// guaranteed legal. Clamping from inside would fire against the near
+    /// edge in the direction of travel and teleport the mover backwards
+    /// (from `x = 20.5` inside a 2x2 footprint, a small `+x` push would
+    /// resolve to `19.5` -- a full tile the wrong way).
+    func test_aStartingPositionInsideAFootprint_isNeverResolvedBackwards() {
+        let record = makeRecord(buildingIndex: 8, span: 2) // 2x2, bounds [19.5, 21.5]
+        let bounds = CollisionResolver.footprintBounds(for: record)
+        let insideStart = TilePoint(x: 20.5, y: 20.5)
+        XCTAssertTrue(bounds.contains(x: insideStart.x, y: insideStart.y), "precondition: the start is inside")
+
+        let resolved = CollisionResolver.resolve(
+            currentPosition: insideStart,
+            proposedDelta: CGVector(dx: 0.2, dy: 0),
+            obstructedBy: [record]
+        )
+
+        XCTAssertGreaterThan(resolved.x, insideStart.x, "resolving from inside must never move the mover backwards")
+        XCTAssertEqual(resolved.x, 20.7, accuracy: 1e-9, "the mover keeps its own motion while inside")
+        XCTAssertEqual(resolved.y, insideStart.y, accuracy: 1e-9)
+    }
+
+    /// And the eject is a real exit, not just a non-teleport: a sustained
+    /// push from inside walks the mover all the way out of the footprint.
+    func test_aMoverStartingInsideAFootprint_canWalkAllTheWayOut() {
+        let record = makeRecord(buildingIndex: 8, span: 2)
+        let bounds = CollisionResolver.footprintBounds(for: record)
+        var position = TilePoint(x: 20.5, y: 20.5)
+
+        for _ in 0..<20 {
+            position = CollisionResolver.resolve(
+                currentPosition: position,
+                proposedDelta: CGVector(dx: 0.2, dy: 0),
+                obstructedBy: [record]
+            )
+        }
+
+        XCTAssertFalse(
+            bounds.contains(x: position.x, y: position.y),
+            "a mover pushed steadily from inside must end up outside the footprint, got \(position)"
+        )
+        XCTAssertGreaterThan(position.x, bounds.maxX - 1e-9, "the exit must be on the side it was pushed toward")
     }
 
     // MARK: - No obstruction: the full delta always applies

@@ -1,7 +1,12 @@
 /// The per-tile classification the city-lattice generator assigns to every
 /// tile. Rendering (ground plane, buildings) and collision both key off
 /// this rather than re-deriving lattice geometry themselves.
-enum TileKind: Equatable {
+/// `CaseIterable` is part of the contract, not an incidental conformance:
+/// `TileWalkabilityTests` sweeps `allCases` so that adding a case (a
+/// `.water`, a barrier) without classifying its walkability fails a test
+/// instead of shipping untested -- the same way `AtlasSheet.allCases` backs
+/// the catalog gates.
+enum TileKind: Equatable, CaseIterable {
     /// The street corridor's driving lane \u2014 the centre of a 3-tile-wide
     /// street band. Fully walkable; part of the navmesh.
     case asphalt

@@ -708,7 +708,7 @@ docs/bootstrap.md                          original spec (source of truth)
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid. `BuildingObstruction` (discrete) and the continuous,
   sliding `CollisionResolver` (`Sources/Gameplay/`, `CYBERPUN-17-7` PR 2)
-  exist; wiring either into a live movement loop is still deferred
+  exist, unwired; deferred to `CYBERPUN-17-7`'s wiring PR (`CYBERPUN-17-7-t1`)
 - City lattice: 6-tile period per axis, 3×3 building block ringed by a
   3-tile street corridor that doubles as the navmesh, `TileKind` +
   walkability, ~1-in-4 empty lots, every intersection tile street under
@@ -785,9 +785,9 @@ docs/bootstrap.md                          original spec (source of truth)
   of done is deleting the marker **and** re-pointing both assertions at real
   HUD content, not the node alone. Its `layout(for: safeAreaInsets:)` is now
   deliberately a no-op
-- Tile-grid collision system: `BuildingObstruction` (discrete) and the
-  continuous `CollisionResolver`/`CameraController` (`CYBERPUN-17-7` PR 2)
-  exist; none is wired into a live movement loop yet
+- Tile-grid collision: `BuildingObstruction` (discrete) and the continuous
+  `CollisionResolver`/`CameraController` (`CYBERPUN-17-7` PR 2) exist,
+  unwired; deferred to `CYBERPUN-17-7`'s wiring PR (`CYBERPUN-17-7-t1`)
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
 - Audio, app icon art, launch screen polish, App Store metadata/submission

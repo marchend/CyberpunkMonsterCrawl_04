@@ -13,7 +13,26 @@ final class CameraControllerTests: XCTestCase {
     private let portraitViewport = CGSize(width: 393, height: 852)
     private let landscapeViewport = CGSize(width: 852, height: 393)
 
-    // MARK: - The focus point always converts to screen centre
+    /// SpriteKit stores a node's `position` as a 32-bit float, so anything
+    /// read back off `SKNode` carries that storage rounding: at the ~4,000
+    /// point magnitudes this file's focus sweeps reach, consecutive
+    /// representable floats are ~5e-4 apart. Added to the snap tolerances
+    /// below so they measure the resolver's geometry rather than SpriteKit's
+    /// storage -- the same distinction `FloatingThumbstickNodeTests` draws
+    /// when it declines to assert exact values off a live node.
+    private let spriteKitStorageEpsilon: CGFloat = 1e-3
+
+    /// The honest centring contract now that the container offset is
+    /// snapped to the device pixel grid (`PixelCrispness.snappedPosition(
+    /// for:scale:)`): the focus lands *within half a device pixel* of the
+    /// viewport centre, not exactly on it. A bare `1e-3` would have been a
+    /// claim the snapped implementation cannot make -- and would have
+    /// failed the moment snapping landed, which is the point.
+    private func centringTolerance(deviceScale: CGFloat) -> CGFloat {
+        0.5 / deviceScale + spriteKitStorageEpsilon
+    }
+
+    // MARK: - The focus point always converts to (within half a pixel of) screen centre
 
     func test_update_keepsAMovingFocusPoint_convertingToScreenCentre_inPortrait() {
         assertFocusConvertsToScreenCentre(viewportSize: portraitViewport)
@@ -23,8 +42,20 @@ final class CameraControllerTests: XCTestCase {
         assertFocusConvertsToScreenCentre(viewportSize: landscapeViewport)
     }
 
+    /// Real devices composite at `@2x`/`@3x`, where half a device pixel is
+    /// a quarter or a sixth of a point -- so the centring is *tighter* on a
+    /// real device than in the headless default, and the sweep proves it at
+    /// each scale rather than only at the `1` fallback.
+    func test_update_centresTheFocus_atEveryDeviceScale() {
+        for deviceScale in [CGFloat(1), 2, 3] {
+            assertFocusConvertsToScreenCentre(viewportSize: portraitViewport, deviceScale: deviceScale)
+            assertFocusConvertsToScreenCentre(viewportSize: landscapeViewport, deviceScale: deviceScale)
+        }
+    }
+
     private func assertFocusConvertsToScreenCentre(
         viewportSize: CGSize,
+        deviceScale: CGFloat = 1,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -32,8 +63,13 @@ final class CameraControllerTests: XCTestCase {
         let container = SKNode()
         parent.addChild(container)
 
-        let controller = CameraController(container: container, streamingUpdate: { _ in })
+        let controller = CameraController(
+            container: container,
+            deviceScale: { deviceScale },
+            streamingUpdate: { _ in }
+        )
         let expectedCentre = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        let tolerance = centringTolerance(deviceScale: deviceScale)
 
         let focusSweep = stride(from: -40.0, through: 40.0, by: 7.3).map { TilePoint(x: $0, y: -$0 * 0.5) }
         for focus in focusSweep {
@@ -49,14 +85,68 @@ final class CameraControllerTests: XCTestCase {
             let convertedCentre = container.convert(focusScreenPoint, to: parent)
 
             XCTAssertEqual(
-                convertedCentre.x, expectedCentre.x, accuracy: 1e-3,
-                "focus \(focus)", file: file, line: line
+                convertedCentre.x, expectedCentre.x, accuracy: tolerance,
+                "focus \(focus) at @\(deviceScale)x", file: file, line: line
             )
             XCTAssertEqual(
-                convertedCentre.y, expectedCentre.y, accuracy: 1e-3,
-                "focus \(focus)", file: file, line: line
+                convertedCentre.y, expectedCentre.y, accuracy: tolerance,
+                "focus \(focus) at @\(deviceScale)x", file: file, line: line
             )
         }
+    }
+
+    // MARK: - The container offset itself lands on the device pixel grid
+
+    /// The reason the centring tolerance exists at all: this is the one line
+    /// in the codebase that moves a world container every frame, so a
+    /// fractional offset here re-blurs every world-space child
+    /// (`docs/bootstrap.md` section 1's "hard, un-resampled pixel edges";
+    /// AGENT.md assigns the camera snap to `CYBERPUN-17-7`). Asserted on the
+    /// container's own position, at each device scale, for a focus sweep
+    /// whose raw projected offsets are emphatically not whole pixels.
+    func test_update_snapsTheContainerOffset_ontoTheDevicePixelGrid() {
+        for deviceScale in [CGFloat(1), 2, 3] {
+            let container = SKNode()
+            let controller = CameraController(
+                container: container,
+                deviceScale: { deviceScale },
+                streamingUpdate: { _ in }
+            )
+
+            for focus in stride(from: -13.0, through: 13.0, by: 1.7).map({ TilePoint(x: $0, y: $0 * 0.37) }) {
+                controller.update(focus: focus, viewportSize: portraitViewport)
+
+                // Compared with `spriteKitStorageEpsilon` slack, not
+                // exactly: the value read back has been through SKNode's
+                // 32-bit float storage. Still far tighter than the
+                // fractional offsets an unsnapped assignment produces
+                // (those miss the grid by up to half a device pixel).
+                let devicePixelsX = container.position.x * deviceScale
+                let devicePixelsY = container.position.y * deviceScale
+                XCTAssertEqual(
+                    devicePixelsX, devicePixelsX.rounded(), accuracy: spriteKitStorageEpsilon,
+                    "focus \(focus) at @\(deviceScale)x: container.position.x is off the device pixel grid"
+                )
+                XCTAssertEqual(
+                    devicePixelsY, devicePixelsY.rounded(), accuracy: spriteKitStorageEpsilon,
+                    "focus \(focus) at @\(deviceScale)x: container.position.y is off the device pixel grid"
+                )
+            }
+        }
+    }
+
+    /// The default `deviceScale` a headless (view-less) scene or a test
+    /// gets is `1`, which snaps to a whole *point* -- coarser than a real
+    /// device's grid, still on it. Pinned so the fallback cannot silently
+    /// become "unsnapped".
+    func test_update_withTheHeadlessDefaultScale_snapsToAWholePoint() {
+        let container = SKNode()
+        let controller = CameraController(container: container, streamingUpdate: { _ in })
+
+        controller.update(focus: TilePoint(x: 3.31, y: -7.77), viewportSize: portraitViewport)
+
+        XCTAssertEqual(container.position.x, container.position.x.rounded(), accuracy: 1e-9)
+        XCTAssertEqual(container.position.y, container.position.y.rounded(), accuracy: 1e-9)
     }
 
     // MARK: - The streaming trigger is driven with the live focus point
@@ -118,15 +208,17 @@ final class CameraControllerTests: XCTestCase {
         let focus = TilePoint(x: 5, y: -3)
         let focusScreenPoint = IsometricProjection.tileToScreen(focus)
 
+        let tolerance = centringTolerance(deviceScale: 1)
+
         controller.update(focus: focus, viewportSize: portraitViewport)
         let portraitCentre = container.convert(focusScreenPoint, to: parent)
-        XCTAssertEqual(portraitCentre.x, portraitViewport.width / 2, accuracy: 1e-3)
-        XCTAssertEqual(portraitCentre.y, portraitViewport.height / 2, accuracy: 1e-3)
+        XCTAssertEqual(portraitCentre.x, portraitViewport.width / 2, accuracy: tolerance)
+        XCTAssertEqual(portraitCentre.y, portraitViewport.height / 2, accuracy: tolerance)
 
         controller.update(focus: focus, viewportSize: landscapeViewport)
         let landscapeCentre = container.convert(focusScreenPoint, to: parent)
-        XCTAssertEqual(landscapeCentre.x, landscapeViewport.width / 2, accuracy: 1e-3)
-        XCTAssertEqual(landscapeCentre.y, landscapeViewport.height / 2, accuracy: 1e-3)
+        XCTAssertEqual(landscapeCentre.x, landscapeViewport.width / 2, accuracy: tolerance)
+        XCTAssertEqual(landscapeCentre.y, landscapeViewport.height / 2, accuracy: tolerance)
     }
 
     // MARK: - A deallocated container is handled gracefully

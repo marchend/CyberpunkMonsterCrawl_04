@@ -23,8 +23,16 @@ import SpriteKit
 /// works identically whether a future wiring PR hands it `worldLayer`
 /// (offsetting world content so the focus lands at screen centre while
 /// `cameraNode` stays fixed \u2014 `GameScene.centreCameraOnScene()`'s existing
-/// behaviour) or some other camera-following container; deciding which is,
-/// again, scene wiring.
+/// behaviour) or some other container the world's content is parented
+/// under; which world container it is remains scene wiring.
+///
+/// It is deliberately **not** container-agnostic in the wider sense,
+/// because this doc exists to guide the wiring PR's choice: the formula
+/// below offsets a *world* container. Moving a camera to look at a focus
+/// point needs `position = projected(focus)`, not its negation, so handing
+/// this controller `cameraNode` would scroll the view backwards at double
+/// speed. Only a node the world's content is parented under is a legal
+/// `container`.
 ///
 /// **The formula.** `container.position = viewportCentre -
 /// projected(focus)` \u2014 the container is offset by the *negative* of the
@@ -39,6 +47,26 @@ import SpriteKit
 /// (`container.convert(_:to:)`) rather than trusting the arithmetic in
 /// prose, for a focus point that moves and for both portrait and landscape
 /// viewport sizes, so nothing about the centring depends on orientation.
+/// The pixel snap described next perturbs that identity by at most half a
+/// device pixel, which is the tolerance those tests assert.
+///
+/// **The offset is snapped to the device pixel grid.** This is the one line
+/// in the codebase that moves a world container every frame, so an
+/// unsnapped fractional offset here re-blurs *every* world-space child
+/// whatever their own positions are -- exactly the defect AGENT.md assigns
+/// to this ticket ("`cameraNode.position` is not snapped anywhere, so once
+/// the camera moves off a whole device pixel every world-space child
+/// inherits the sub-pixel offset again -- snapping the camera belongs with
+/// `CYBERPUN-17-7`") and the same "Known limit (CYBERPUN-17-7)" that
+/// `GameScene.startPlayer()` records against its own mount snap. So the
+/// computed offset goes through `PixelCrispness.snappedPosition(for:
+/// scale:)`, with `deviceScale` read live on every call the way
+/// `GameScene.deviceScale` reads `view?.contentScaleFactor`, falling back
+/// to `1` (a whole-*point* snap) for a headless, view-less scene. The
+/// honest centring contract is therefore "the focus lands within half a
+/// device pixel of the viewport centre", not "exactly on it", and
+/// `CameraControllerTests` asserts that tolerance at simulated `@1x`,
+/// `@2x` and `@3x` rather than a bare `1e-3`.
 ///
 /// **No world-edge clipping is needed because there is no world edge** \u2014
 /// the city is procedurally endless (`docs/bootstrap.md`) \u2014 so "clips world
@@ -64,21 +92,41 @@ final class CameraController {
     /// wires an existing entry point rather than adding a parallel one.
     private let streamingUpdate: (TilePoint) -> Void
 
+    /// The device pixel grid the computed offset is snapped to, evaluated
+    /// on every `update` rather than captured once: a scene's `view` (and
+    /// so its `contentScaleFactor`) may not exist yet when a controller is
+    /// constructed, and a stale scale would snap to the wrong grid for the
+    /// whole run. Mirrors `GameScene.deviceScale`'s own live read.
+    private let deviceScale: () -> CGFloat
+
     /// - Parameters:
-    ///   - container: the node to reposition. Never an `SKCameraNode`
-    ///     constructed by this type \u2014 see this type's own doc comment.
+    ///   - container: the world-content node to reposition. Never an
+    ///     `SKCameraNode` -- neither one constructed by this type nor the
+    ///     scene's existing `cameraNode`, whose position would need the
+    ///     un-negated projection; see this type's own doc comment.
+    ///   - deviceScale: the device pixel grid the offset is snapped to,
+    ///     read live per call like `GameScene.deviceScale`
+    ///     (`view?.contentScaleFactor ?? 1`). Defaults to `1`, the
+    ///     whole-point fallback for a headless, view-less scene.
     ///   - streamingUpdate: forwards the live focus point to whichever
     ///     existing chunk-streaming trigger a caller wires up
     ///     (`GroundPlaneStreamer.updateCamera` /
     ///     `ChunkStreamingManager.updateCamera`, or a test double).
-    init(container: SKNode, streamingUpdate: @escaping (TilePoint) -> Void) {
+    init(
+        container: SKNode,
+        deviceScale: @escaping () -> CGFloat = { 1 },
+        streamingUpdate: @escaping (TilePoint) -> Void
+    ) {
         self.container = container
+        self.deviceScale = deviceScale
         self.streamingUpdate = streamingUpdate
     }
 
     /// Advances the camera lock for one frame: repositions `container` so
-    /// `focus` projects to the centre of a `viewportSize`-sized viewport,
-    /// then forwards `focus` to the streaming trigger.
+    /// `focus` projects to within half a device pixel of the centre of a
+    /// `viewportSize`-sized viewport (the offset is snapped to the device
+    /// pixel grid -- see this type's doc comment), then forwards `focus` to
+    /// the streaming trigger.
     ///
     /// `viewportSize` is taken fresh on every call (rather than cached at
     /// init) so a rotation \u2014 portrait to landscape or back \u2014 is reflected
@@ -90,10 +138,16 @@ final class CameraController {
 
         let focusScreenPoint = IsometricProjection.tileToScreen(focus)
         let viewportCentre = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
-
-        container.position = CGPoint(
+        let rawOffset = CGPoint(
             x: viewportCentre.x - focusScreenPoint.x,
             y: viewportCentre.y - focusScreenPoint.y
         )
+
+        // Snapped, not assigned raw: see this type's "The offset is snapped
+        // to the device pixel grid" note. Half a device pixel of centring
+        // error is the price of every world-space child staying on the
+        // pixel grid, which is the trade `docs/bootstrap.md` section 1
+        // ("hard, un-resampled pixel edges") makes for us.
+        container.position = PixelCrispness.snappedPosition(for: rawOffset, scale: deviceScale())
     }
 }
