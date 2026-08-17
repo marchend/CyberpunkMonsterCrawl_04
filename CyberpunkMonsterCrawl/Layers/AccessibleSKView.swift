@@ -97,17 +97,37 @@ import UIKit
 /// found.
 ///
 /// The overlay is therefore *interactive* (`isUserInteractionEnabled = true`
-/// on the container and on every mirror) so UIKit walks into it, and
-/// `SceneAccessibilityContainerView.hitTest(_:with:)` keeps the touch
-/// contract intact by discriminating on the event:
+/// on the container and on every mirror) so UIKit walks into it.
 ///
-/// * a **real touch** (`event != nil` - the only form UIKit delivers a touch
-///   with) resolves to `nil`, so the finger, and the synthesized tap XCUITest
-///   sends once the element *is* hittable, falls straight through to the
-///   `SKView` and into `GameScene.touchesBegan(_:with:)` exactly as before.
-///   The scene stays the sole touch dispatcher;
-/// * a **point lookup** (`event == nil` - how accessibility asks) resolves to
-///   the mirror covering the point, which is the answer `isHittable` needs.
+/// The first version of that overlay then tried to have it both ways, by
+/// **discriminating on the event** in
+/// `SceneAccessibilityContainerView.hitTest(_:with:)`: answer the mirror for
+/// an event-less hit test (accessibility is asking) and `nil` for one
+/// carrying a `UIEvent` (a finger is arriving), so the touch fell through
+/// to the `SKView` by transparency. It is a tidy story and it is wrong:
+/// hittability cannot be made to depend on telling an accessibility hit test
+/// apart from a touch hit test. `isHittable` is *defined* as the point-lookup
+/// half of the accessibility contract, and in a live simulator that lookup
+/// does not reliably arrive down the `event == nil` branch an off-window unit
+/// test can pin - so the point over PLAY kept resolving to the (now
+/// AX-silenced) `SKView`, leaving PLAY findable, tappable *and*
+/// `isHittable == false`, which is exactly how
+/// `CyberpunkMonsterCrawlUITests` failed.
+///
+/// So the overlay answers **every** hit test the same way - the mirror
+/// covering the point, whatever the event - and gives the touch back
+/// *explicitly* instead of by transparency:
+///
+/// * a **point lookup** (accessibility, `isHittable`) resolves to the mirror,
+///   which is the answer hittability requires and now cannot disagree with
+///   the frame the same view published;
+/// * a **real touch** does resolve to the mirror too, so UIKit delivers it
+///   there - and `SceneAccessibilityMirrorView` forwards it, converted into
+///   scene space, straight into `GameScene.dispatchTouch(atScenePoint:)`.
+///   The scene stays the sole touch dispatcher, and a finger on PLAY starts a
+///   run exactly as it did before this class existed. A point no mirror
+///   covers still resolves to `nil` and falls through to the `SKView`
+///   untouched, which is every pixel of the game world.
 ///
 /// SpriteKit's competing (camera-unaware) tree is silenced with
 /// `accessibilityElementsHidden` on this view (see
@@ -298,10 +318,13 @@ final class AccessibleSKView: SKView {
 
 /// The invisible `UIView` that stands in for one accessible `SKNode`.
 ///
-/// It draws nothing, never receives a touch (its container answers `nil` for
-/// every event-carrying hit test), and exists purely so the accessibility
-/// server has a **real view** to resolve a point to (see `AccessibleSKView`,
-/// parts 2 and 3). Everything a driver matches on -
+/// It draws nothing, and exists so the accessibility server has a **real
+/// view** to resolve a point to (see `AccessibleSKView`, parts 2 and 3). It
+/// does take part in hit-testing - hittability cannot depend on telling an
+/// accessibility lookup apart from a touch - so a real touch that lands on it
+/// is *forwarded*, converted into scene space, into
+/// `GameScene.dispatchTouch(atScenePoint:)`: the scene remains the sole
+/// dispatcher. Everything a driver matches on -
 /// identifier, label, traits - is copied off the node it mirrors; the frame
 /// is the node's camera-aware rect, so UIKit derives a correct
 /// `accessibilityFrame` in any orientation without being told one.
@@ -334,9 +357,9 @@ final class SceneAccessibilityMirrorView: UIView {
         // Take part in hit-testing - `UIView.hitTest(_:with:)` answers `nil`
         // for a non-interactive view and never descends into it, which hides
         // the mirror from the accessibility point lookup `isHittable` is
-        // built on. No real touch reaches it even so: the container returns
-        // `nil` for every event-carrying hit test, so a finger still falls
-        // through to the SKView underneath (see `AccessibleSKView`, part 3).
+        // built on. A real touch does then land here, and is forwarded into
+        // `GameScene.dispatchTouch(atScenePoint:)` below, so the scene stays
+        // the sole dispatcher (see `AccessibleSKView`, part 3).
         isUserInteractionEnabled = true
         // A leaf, not a container: this is the element a driver resolves.
         isAccessibilityElement = true
@@ -370,6 +393,54 @@ final class SceneAccessibilityMirrorView: UIView {
         if frame != target {
             frame = target
         }
+    }
+
+    // MARK: - Touch forwarding
+
+    /// A mirror is the view UIKit resolves a touch to (it has to be: the same
+    /// resolution is what `isHittable` asks about), so it hands the touch back
+    /// to the scene explicitly rather than pretending not to be there.
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard forwardToScene(touches, phase: .began) else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard forwardToScene(touches, phase: .moved) else {
+            super.touchesMoved(touches, with: event)
+            return
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard forwardToScene(touches, phase: .ended) else {
+            super.touchesEnded(touches, with: event)
+            return
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard forwardToScene(touches, phase: .cancelled) else {
+            super.touchesCancelled(touches, with: event)
+            return
+        }
+    }
+
+    /// `false` when there is nothing to forward to (no container, no touch),
+    /// in which case the caller lets the responder chain have the message.
+    private func forwardToScene(
+        _ touches: Set<UITouch>,
+        phase: SceneAccessibilityContainerView.TouchForwardingPhase
+    ) -> Bool {
+        guard
+            let container = superview as? SceneAccessibilityContainerView,
+            let touch = touches.first
+        else {
+            return false
+        }
+        return container.forwardTouch(atContainerPoint: touch.location(in: container), phase: phase)
     }
 }
 
@@ -424,10 +495,10 @@ final class SceneAccessibilityContainerView: UIView {
 
         // Interactive on purpose, so UIKit's hit-test walk descends into the
         // mirrors and the accessibility point lookup can resolve one. The
-        // touch itself is given back to the render view by the override of
-        // `hitTest(_:with:)` below, which answers `nil` for every hit test
-        // carrying a real event - so `GameScene.touchesBegan(_:with:)` still
-        // routes every finger exactly as it did before this class existed.
+        // touch itself is given back to the scene explicitly, by forwarding
+        // it into `GameScene.dispatchTouch(atScenePoint:)` (see
+        // `forwardTouch(atContainerPoint:phase:)`) - so the scene still routes
+        // every finger exactly as it did before this class existed.
         isUserInteractionEnabled = true
 
         // A container, never a leaf: a view that reports itself as an
@@ -461,31 +532,105 @@ final class SceneAccessibilityContainerView: UIView {
 
     // MARK: - Hit testing
 
-    /// Answers *only* the accessibility point lookup, never a real touch.
+    /// Answers **every** hit test with the mirror covering `point` - the same
+    /// answer whether accessibility is asking or a finger is arriving.
     ///
-    /// The two callers of `hitTest(_:with:)` are told apart by `event`, and
-    /// they need opposite answers (see `AccessibleSKView`, part 3):
+    /// Deliberately *not* discriminating on `event` any more, and that is the
+    /// fix (see `AccessibleSKView`, part 3): an earlier version returned `nil`
+    /// for every event-carrying hit test so a touch fell through to the
+    /// `SKView` by transparency, which made hittability depend on telling an
+    /// accessibility hit test apart from a touch hit test. It is not
+    /// dependable - XCUITest's `isHittable` *is* the point-lookup half of the
+    /// accessibility contract, and in a live simulator that lookup does not
+    /// reliably arrive down the `event == nil` branch - so PLAY stayed
+    /// findable and un-hittable. Answering uniformly makes the point lookup
+    /// agree with the frame this same view published, which is all
+    /// `isHittable` requires.
     ///
-    /// * UIKit delivering a touch always passes the `UIEvent` it is
-    ///   delivering. Returning `nil` there makes this whole overlay
-    ///   transparent to fingers - and to the synthesized tap XCUITest sends -
-    ///   so the touch lands on the `SKView` underneath and
-    ///   `GameScene.touchesBegan(_:with:)` stays the sole dispatcher, exactly
-    ///   as it was before the overlay existed.
-    /// * The accessibility point lookup behind `accessibilityHitTest(_:)` -
-    ///   and behind XCUITest's `isHittable` - passes no event. There the walk
-    ///   must descend into the mirrors, so `super`'s ordinary
-    ///   topmost-sibling answer is returned.
+    /// The touch is not stolen by that: a mirror forwards it into
+    /// `GameScene.dispatchTouch(atScenePoint:)` (see
+    /// `forwardTouch(atContainerPoint:phase:)`), so the scene stays the sole
+    /// dispatcher.
     ///
     /// A point no mirror covers resolves to `nil` rather than to the container
     /// itself: a container claiming every point is as wrong as one claiming
-    /// none, and letting the empty point fall through keeps the answer honest.
+    /// none, and letting the empty point fall through to the `SKView` keeps
+    /// both the answer and the game world's own touch handling honest.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard event == nil else { return nil }
         // The lookup runs off a snapshot of the tree, so bring the mirrors in
         // step with the live scene graph before resolving against them.
         refreshAccessibilityMirrors()
-        return super.hitTest(point, with: nil) as? SceneAccessibilityMirrorView
+        return super.hitTest(point, with: event) as? SceneAccessibilityMirrorView
+    }
+
+    // MARK: - Touch forwarding
+
+    /// Which message of a touch sequence is being handed back to the scene.
+    enum TouchForwardingPhase {
+        case began
+        case moved
+        case ended
+        case cancelled
+    }
+
+    /// Hands a real touch that landed on a mirror back to the scene, in the
+    /// scene's own coordinate space.
+    ///
+    /// `point` is in this container's coordinates; it is converted container
+    /// -> render view -> scene, which is the same path (and the exact inverse
+    /// of the geometry `AccessibleSKView` publishes) that a driver's
+    /// element-driven tap walks. `GameScene` dispatches on the *began*
+    /// message only, so that is the one delivered to
+    /// `dispatchTouch(atScenePoint:)`; the later messages of the sequence are
+    /// absorbed here rather than escaping up the responder chain, and this is
+    /// the single seam to extend when the scene grows drag handling.
+    ///
+    /// Returns `false` when there is no presented `GameScene` to forward to,
+    /// so the caller can fall back to the responder chain.
+    @discardableResult
+    func forwardTouch(atContainerPoint point: CGPoint, phase: TouchForwardingPhase) -> Bool {
+        guard let sceneView, let scene = sceneView.scene as? GameScene else { return false }
+
+        switch phase {
+        case .began:
+            let pointInSceneView = sceneView.convert(point, from: self)
+            scene.dispatchTouch(atScenePoint: sceneView.convert(pointInSceneView, to: scene))
+        case .moved, .ended, .cancelled:
+            break
+        }
+        return true
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first,
+              forwardTouch(atContainerPoint: touch.location(in: self), phase: .began) else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first,
+              forwardTouch(atContainerPoint: touch.location(in: self), phase: .moved) else {
+            super.touchesMoved(touches, with: event)
+            return
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first,
+              forwardTouch(atContainerPoint: touch.location(in: self), phase: .ended) else {
+            super.touchesEnded(touches, with: event)
+            return
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first,
+              forwardTouch(atContainerPoint: touch.location(in: self), phase: .cancelled) else {
+            super.touchesCancelled(touches, with: event)
+            return
+        }
     }
 
     /// The refresh hook that matters for an out-of-process driver.

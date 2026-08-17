@@ -415,12 +415,17 @@ final class AccessibleSKViewTests: XCTestCase {
                 + "accessibility point lookup is built on"
         )
 
-        // ...while still never taking a touch away from the SKView
-        // underneath: a hit test carrying a real event resolves to nothing.
+        // ...and it must answer a hit test carrying a real event exactly as it
+        // answers an event-less one. Hittability cannot be made to depend on
+        // telling the two apart: XCUITest's `isHittable` *is* the point-lookup
+        // half of the accessibility contract, and an overlay that returned
+        // `nil` whenever an event was attached left PLAY findable and
+        // un-hittable in the simulator while this suite stayed green.
         let centre = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
-        XCTAssertNil(
-            container.hitTest(centre, with: UIEvent()),
-            "a real touch must fall straight through to the SKView - the scene is the sole dispatcher"
+        XCTAssertTrue(
+            container.hitTest(centre, with: UIEvent()) === container.hitTest(centre, with: nil),
+            "a touch hit test and an accessibility point lookup must resolve the same view - "
+                + "discriminating on the event is what made PLAY findable but un-hittable"
         )
     }
 
@@ -449,13 +454,16 @@ final class AccessibleSKViewTests: XCTestCase {
                     + "lookup is built on, which is what made PLAY findable but un-hittable"
             )
 
-            // Interactive, yet still never the target of a real touch: the
-            // container hands every event-carrying hit test back to the
-            // SKView, so the finger the scene is waiting for still arrives.
+            // Interactive, and resolved for a *real* touch too - the mirror
+            // hands that touch back to the scene itself
+            // (`forwardTouch(atContainerPoint:phase:)`) rather than relying on
+            // being invisible to it, so the point lookup `isHittable` performs
+            // cannot disagree with the frame this same view published.
             let centre = publishedCentre(of: element)
-            XCTAssertNil(
-                containerView.hitTest(centre, with: UIEvent()),
-                "a real touch at \(element.accessibilityIdentifier ?? "?") must fall through to the SKView"
+            XCTAssertTrue(
+                containerView.hitTest(centre, with: UIEvent()) === element,
+                "an event-carrying hit test at \(element.accessibilityIdentifier ?? "?") must resolve "
+                    + "to that very mirror, exactly as an event-less lookup does"
             )
         }
     }
@@ -556,6 +564,74 @@ final class AccessibleSKViewTests: XCTestCase {
             "hit-testing the published frame's centre must return that very element - identity is what "
                 + "isHittable compares, so an equal-but-different object is still a failure"
         )
+    }
+
+    /// The replacement for the old "an event-carrying hit test resolves to
+    /// nothing" guarantee, which was the bug rather than the contract: PLAY
+    /// was findable, tappable *and* `isHittable == false`, because an overlay
+    /// that answers `nil` whenever a `UIEvent` is attached only stays
+    /// point-resolvable for as long as the accessibility lookup really does
+    /// arrive without one - and in a live simulator it does not.
+    ///
+    /// So the two halves of the contract are pinned together here: a hit test
+    /// carrying a real event resolves to the *same* mirror an event-less
+    /// lookup does (what hittability needs), **and** the touch that mirror now
+    /// owns still reaches `GameScene`'s dispatcher and starts a run (what a
+    /// finger needs). Either one alone is a regression.
+    func test_eventCarryingHitTest_resolvesThePlayMirror_andForwardsTheTouchToTheScene() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton")
+        let centre = publishedCentre(of: play)
+
+        let touched = try XCTUnwrap(
+            containerView.hitTest(centre, with: UIEvent()),
+            "a real touch over PLAY must resolve to something in the overlay, or the point lookup "
+                + "isHittable performs resolves the AX-silenced SKView instead"
+        )
+        XCTAssertTrue(
+            touched === play,
+            "the touch and the accessibility lookup must resolve the same mirror - identity is what "
+                + "isHittable compares"
+        )
+
+        // ...and owning the touch must not swallow it: the mirror forwards it,
+        // converted into scene space, into the scene's own dispatcher.
+        XCTAssertTrue(
+            containerView.forwardTouch(atContainerPoint: centre, phase: .began),
+            "the container must forward a touch it owns while a GameScene is presented"
+        )
+        XCTAssertEqual(
+            scene.stateMachine.currentState,
+            .gameplay,
+            "a touch the overlay resolved must still reach PLAY's responder and start a run - the "
+                + "scene stays the sole dispatcher"
+        )
+    }
+
+    /// Forwarding is the mirror's own contract too (that is the object UIKit
+    /// delivers the touch to), and the later messages of a sequence must be
+    /// absorbed rather than re-dispatched - a `moved` that reached
+    /// `dispatchTouch(atScenePoint:)` would fire PLAY again mid-drag.
+    func test_forwardedTouch_dispatchesOnBeganOnly() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let centre = publishedCentre(of: try publishedElement("menu.playButton"))
+
+        for phase in [SceneAccessibilityContainerView.TouchForwardingPhase.moved, .ended, .cancelled] {
+            XCTAssertTrue(containerView.forwardTouch(atContainerPoint: centre, phase: phase))
+            XCTAssertEqual(
+                scene.stateMachine.currentState,
+                .menu,
+                "only the began message may reach the scene's dispatcher, or one drag over PLAY "
+                    + "starts a run repeatedly"
+            )
+        }
+
+        XCTAssertTrue(containerView.forwardTouch(atContainerPoint: centre, phase: .began))
+        XCTAssertEqual(scene.stateMachine.currentState, .gameplay)
     }
 
     /// `menu.container` is a size-less marker published at a synthesised 1pt

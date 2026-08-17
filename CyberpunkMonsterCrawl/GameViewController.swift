@@ -49,9 +49,10 @@ final class GameViewController: UIViewController {
     /// hidden with it. It draws nothing, and although it *is* interactive (a
     /// non-interactive view is invisible to the hit-test walk the
     /// accessibility point lookup is built on) it hands every real touch back
-    /// by answering `nil` from `hitTest(_:with:)` whenever an event is
-    /// attached - so the only thing this line changes for a real finger is
-    /// nothing at all. What it changes for XCUITest / VoiceOver is that
+    /// to the scene by forwarding it, converted into scene space, into
+    /// `GameScene.dispatchTouch(atScenePoint:)` - so the only thing this line
+    /// changes for a real finger is nothing at all. What it changes for
+    /// XCUITest / VoiceOver is that
     /// `menu.playButton` becomes *hittable* instead of merely findable - real
     /// views are natively resolvable from a point, which hand-vended
     /// `UIAccessibilityElement`s were not (see `AccessibleSKView`, parts 2
