@@ -1,56 +1,48 @@
 import Foundation
 
-/// The player's med-kit consumption effect (`CYBERPUN-17-11` PR 2): rolls
-/// `PickupKind.medKit`'s dice (1d10, from PR 1) and applies the result as
-/// healing, capped at `maxHP` via `hp`'s own clamping `didSet`
-/// (`PlayerNode.swift`'s "Combat state" section -- the same `0...maxHP`
-/// invariant `takeDamage(_:)` relies on for damage).
+/// The player's med-kit consumption effect (`CYBERPUN-17-11` PR 2):
+/// applies a collected med kit's rolled amount as healing, capped at
+/// `maxHP` via `hp`'s own clamping `didSet` (`PlayerNode.swift`'s "Combat
+/// state" section -- the same `0...maxHP` invariant `takeDamage(_:)`
+/// relies on for damage).
+///
+/// **One roll per med kit, and `PickupManager` owns it** (PR #37 review).
+/// `PickupManager.attemptCollectMedKit(at:radius:)` (PR 1) is what
+/// consumes the pickup record *and* rolls `PickupKind.medKit`'s 1d10, so
+/// that returned value is the authoritative one and this method simply
+/// applies it. An earlier revision of this file rolled a second,
+/// independent 1d10 here, which left the wiring PR two numbers -- the one
+/// the manager reported and the one the player actually got -- with no way
+/// to make both true.
 ///
 /// **Scope of this PR.** This is the consumer-side effect in isolation --
-/// nothing here mounts a pickup, detects player/med-kit contact, or removes
-/// the collected `Pickup` from `PickupManager.activePickups`. `PickupManager
-/// .attemptCollectMedKit` (PR 1) already reports a rolled value and
-/// consumes the pickup record; this method deliberately rolls its *own*
-/// independent 1d10 rather than taking that value as a parameter, so it can
-/// be proven correct (roll, then cap) entirely on its own, the same
-/// "in isolation from GameScene" bar this story's PR2 acceptance criteria
-/// set. A later scene-wiring PR is what actually calls this on contact.
+/// nothing here mounts a pickup, detects player/med-kit contact, or
+/// removes the collected `Pickup` from `PickupManager.activePickups`. A
+/// later scene-wiring PR is what calls
+/// `attemptCollectMedKit(at:radius:)` on contact and feeds its result
+/// here.
 ///
-/// **Deliberately no shared code with the raccoon's own garbage-can consume
-/// effect** (`RaccoonSeekBehavior.swift`) beyond the `PickupKind` tuning
-/// table both read -- per this story's PR2 scope note ("each in its own
-/// file with no shared code").
+/// **Deliberately no shared code with the raccoon's own garbage-can
+/// consume effect** (`RaccoonSeekBehavior.swift`) beyond the `PickupKind`
+/// tuning table and `DiceSpec.roll(using:)` both read -- per this story's
+/// PR2 scope note ("each in its own file with no shared code"), which is
+/// about the two *effects*, not about copying one dice roller three times.
 extension PlayerNode {
 
-    /// Rolls `PickupKind.medKit.tuning.dice` (1d10) via `rng` and applies
-    /// the result as healing, returning the amount **actually applied** --
-    /// strictly less than the raw roll whenever it would have pushed `hp`
-    /// past `maxHP`, since `hp`'s `didSet` clamps the write.
+    /// Applies `amount` HP of healing -- typically a med kit's rolled 1d10
+    /// from `PickupManager.attemptCollectMedKit(at:radius:)` -- and returns
+    /// the amount **actually applied**: strictly less than `amount`
+    /// whenever it would have pushed `hp` past `maxHP`, since `hp`'s
+    /// `didSet` clamps the write. That returned value, not the raw roll, is
+    /// what a HUD or a run-summary counter should report.
     ///
-    /// `rng` is generic and taken by `inout`, the same shape
-    /// `RabiesStatusEffect.rollInfects(tier:rng:)` and
-    /// `RaccoonSpawnDirector.selectTier(rng:)` already use, so a test can
-    /// pin the exact roll with a scripted generator without any live
-    /// pickup, scene, or collision. The roll itself uses the same raw
-    /// `next() % sides` mapping `RabiesStatusEffect.rollInfects` documents
-    /// choosing over `Int.random(in:using:)`: an exact, hand-computable
-    /// result from a known raw generator value, rather than the stdlib's
-    /// unexposed rejection-sampling internals.
+    /// A non-positive `amount` is a no-op returning `0`: healing is not a
+    /// back door into the damage path, which is `takeDamage(_:)`'s job.
     @discardableResult
-    func collectMedKit<R: RandomNumberGenerator>(rng: inout R) -> Int {
-        let roll = Self.rollDice(PickupKind.medKit.tuning.dice, rng: &rng)
+    func heal(_ amount: Int) -> Int {
+        guard amount > 0 else { return 0 }
         let before = hp
-        hp += roll
+        hp += amount
         return hp - before
-    }
-
-    /// Sums `dice.count` dice of `dice.sides` faces each, via the raw
-    /// `next() % sides + 1` mapping described above.
-    private static func rollDice<R: RandomNumberGenerator>(_ dice: DiceSpec, rng: inout R) -> Int {
-        var total = 0
-        for _ in 0..<dice.count {
-            total += Int(rng.next() % UInt64(dice.sides)) + 1
-        }
-        return total
     }
 }

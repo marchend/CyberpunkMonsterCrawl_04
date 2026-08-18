@@ -1,10 +1,10 @@
 import Foundation
 
 /// A simple `NdM` dice specification: `count` dice of `sides` faces each,
-/// summed. Carries no dependency on any particular random source --
-/// `PickupManager` rolls it against its own injected generator, the same
-/// separation `RaccoonSpawnDirector`'s pure `selectTier`/`selectSpawnTile`
-/// helpers keep from that type's RNG.
+/// summed. Carries no dependency on any particular random source -- every
+/// caller rolls it against its own injected generator, the same separation
+/// `RaccoonSpawnDirector`'s pure `selectTier`/`selectSpawnTile` helpers
+/// keep from that type's RNG.
 struct DiceSpec: Equatable {
     /// Number of dice rolled.
     let count: Int
@@ -14,6 +14,32 @@ struct DiceSpec: Equatable {
     /// The inclusive range every roll of this spec can produce:
     /// `count...(count * sides)`.
     var range: ClosedRange<Int> { count...(count * sides) }
+
+    /// Rolls this spec against `rng`: the sum of `count` dice of `sides`
+    /// faces each, always inside `range`.
+    ///
+    /// **The one roller for a `DiceSpec` in this codebase** (PR #37
+    /// review). Three separate copies existed before: `PickupManager.roll`
+    /// via `Int.random(in:using:)`, plus a private `rollDice` in each of
+    /// the two consume-effect files -- one spec, three mappings, so the
+    /// same dice could produce different distributions depending on which
+    /// call site rolled them. `DiceSpec` already owns the roll's contract
+    /// (`range`), so it owns the roll.
+    ///
+    /// The raw `next() % sides + 1` mapping is the one
+    /// `RabiesStatusEffect.rollInfects(tier:rng:)` documents choosing over
+    /// `Int.random(in:using:)`: an exact, hand-computable result from a
+    /// known raw generator value, rather than the stdlib's unexposed
+    /// rejection-sampling internals, so a test can pin a scripted roll
+    /// precisely. The mapping's tiny modulo bias is irrelevant at 6/10
+    /// buckets against a 64-bit input.
+    func roll<R: RandomNumberGenerator>(using rng: inout R) -> Int {
+        var total = 0
+        for _ in 0..<count {
+            total += Int(rng.next() % UInt64(sides)) + 1
+        }
+        return total
+    }
 }
 
 /// The two ground-pickup kinds a run spawns: a med kit (heals the player)

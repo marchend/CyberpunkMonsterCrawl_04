@@ -174,6 +174,11 @@ final class PickupManager {
     /// Consumes the nearest active, unconsumed med kit within `radius` tiles
     /// of `position`, if any, returning its rolled heal amount
     /// (`PickupKind.medKit`'s dice, 1d10). `nil` if none is in range.
+    ///
+    /// **This is the med kit's authoritative roll** (PR #37 review): this
+    /// call owns the pickup record, so it owns the number, and
+    /// `PlayerNode.heal(_:)` applies exactly what is returned here rather
+    /// than rolling a second, independent 1d10 of its own.
     @discardableResult
     func attemptCollectMedKit(at position: TilePoint, radius: Double) -> Int? {
         attemptCollect(kind: .medKit, at: position, radius: radius)
@@ -200,7 +205,7 @@ final class PickupManager {
     private func attemptCollect(kind: PickupKind, at position: TilePoint, radius: Double) -> Int? {
         guard let index = nearestActiveIndex(kind: kind, of: position, within: radius) else { return nil }
         activePickups[index].isConsumed = true
-        return roll(kind.tuning.dice)
+        return kind.tuning.dice.roll(using: &rng)
     }
 
     private func nearestActiveIndex(kind: PickupKind, of position: TilePoint, within radius: Double) -> Int? {
@@ -218,14 +223,6 @@ final class PickupManager {
             bestIndex = index
         }
         return bestIndex
-    }
-
-    private func roll(_ dice: DiceSpec) -> Int {
-        var total = 0
-        for _ in 0..<dice.count {
-            total += Int.random(in: 1...dice.sides, using: &rng)
-        }
-        return total
     }
 
     // MARK: - Placement validation

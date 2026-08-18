@@ -9,6 +9,18 @@ import XCTest
 /// GameScene/PickupManager per this PR's acceptance criteria.
 final class RaccoonPickupDiversionTests: XCTestCase {
 
+    /// A scripted `RandomNumberGenerator` that replays one fixed raw
+    /// `UInt64` value forever, so a consume roll is an exact, known number
+    /// (`rawValue % 6 + 1` for the garbage can's 1d6) rather than a range.
+    /// `0` therefore rolls a `1` -- the smallest heal there is, which is
+    /// what makes "the HP did not move" a real assertion rather than one
+    /// that a big roll could mask by hitting `maxHP`.
+    private struct ScriptedRandomNumberGenerator: RandomNumberGenerator {
+        private let value: UInt64
+        init(_ value: UInt64) { self.value = value }
+        func next() -> UInt64 { value }
+    }
+
     // MARK: - A wounded raccoon within range diverts, consumes, and resumes seeking the player
 
     func test_woundedRaccoonWithinRange_divertsToTheGarbageCan_consumesIt_andResumesSeekingThePlayerAfterward() {
@@ -169,5 +181,201 @@ final class RaccoonPickupDiversionTests: XCTestCase {
         )
 
         XCTAssertEqual(target, playerPosition)
+    }
+
+    // MARK: - Consuming is one-shot, even if the caller never stops passing the can (PR #37 review)
+
+    /// The failure mode this pins: `updateWithDiversion` is
+    /// `@discardableResult`, so a wiring PR that ticks a swarm and ignores
+    /// the return value would keep handing over the same
+    /// `garbageCanPosition` forever. Before the raccoon started recording
+    /// the can it consumed, that re-rolled and re-applied 1d6 *every
+    /// frame* -- roughly 60 HP/s against a `baseMaxHP` of 20 -- with
+    /// nothing red in the suite, because the test above `break`s out of its
+    /// loop the frame `consumedGarbageCan` first comes back `true`.
+    func test_consumedGarbageCan_neverRefires_whenTheCallerKeepsPassingTheSamePosition() {
+        let raccoon = RaccoonNode(tier: .base, hp: RaccoonNode.baseMaxHP - 5)
+        let playerPosition = TilePoint(x: 500, y: 0)
+        let garbageCanPosition = TilePoint(x: 2, y: 0)
+        var position = TilePoint(x: 0, y: 0)
+        var rng = ScriptedRandomNumberGenerator(0) // every 1d6 rolls exactly 1
+
+        var consumed = false
+        for _ in 0..<400 {
+            let result = RaccoonSeekBehavior.updateWithDiversion(
+                raccoon: raccoon,
+                currentPosition: position,
+                playerPosition: playerPosition,
+                garbageCanPosition: garbageCanPosition,
+                obstructions: [],
+                deltaTime: 1.0 / 10.0,
+                rng: &rng
+            )
+            position = result.position
+            if result.consumedGarbageCan {
+                consumed = true
+                break
+            }
+        }
+
+        XCTAssertTrue(consumed, "sanity: the raccoon must reach and consume the garbage can first")
+        let hpAfterConsuming = raccoon.hp
+        XCTAssertEqual(hpAfterConsuming, RaccoonNode.baseMaxHP - 4, "sanity: exactly one scripted 1d6 (=1) was applied")
+        XCTAssertTrue(
+            raccoon.isWounded,
+            "anti-vacuity: the raccoon must still be wounded, so it is the consumed-can record -- not isWounded -- that stops the re-fire below"
+        )
+
+        let positionAtConsumption = position
+        for tick in 0..<10 {
+            let result = RaccoonSeekBehavior.updateWithDiversion(
+                raccoon: raccoon,
+                currentPosition: position,
+                playerPosition: playerPosition,
+                garbageCanPosition: garbageCanPosition, // the caller never stopped passing it
+                obstructions: [],
+                deltaTime: 1.0 / 10.0,
+                rng: &rng
+            )
+            position = result.position
+            XCTAssertFalse(result.consumedGarbageCan, "tick \(tick): the same garbage can must never be consumed twice")
+            XCTAssertEqual(raccoon.hp, hpAfterConsuming, "tick \(tick): a consumed garbage can must never heal again")
+        }
+
+        XCTAssertGreaterThan(
+            position.x, positionAtConsumption.x,
+            "having consumed the can, the raccoon must resume seeking the player rather than sitting on it"
+        )
+
+        // The record is scoped to that one can: the first frame the caller
+        // passes anything else (here `nil`), it is cleared.
+        _ = RaccoonSeekBehavior.updateWithDiversion(
+            raccoon: raccoon,
+            currentPosition: position,
+            playerPosition: playerPosition,
+            garbageCanPosition: nil,
+            obstructions: [],
+            deltaTime: 1.0 / 10.0,
+            rng: &rng
+        )
+        XCTAssertNil(raccoon.consumedGarbageCanPosition)
+    }
+
+    // MARK: - A dead raccoon is never healed or steered (PR #37 review)
+
+    func test_deadRaccoon_isNeverHealedOrSteeredByAGarbageCan() {
+        let raccoon = RaccoonNode(tier: .base, hp: 0)
+        XCTAssertTrue(raccoon.isDead)
+        XCTAssertTrue(
+            raccoon.isWounded,
+            "sanity: isWounded is true at hp == 0 -- exactly why the diversion path needs its own isDead guard"
+        )
+
+        let startPosition = TilePoint(x: 0, y: 0)
+        var position = startPosition
+        var rng = ScriptedRandomNumberGenerator(0)
+
+        for tick in 0..<20 {
+            let result = RaccoonSeekBehavior.updateWithDiversion(
+                raccoon: raccoon,
+                currentPosition: position,
+                playerPosition: TilePoint(x: 10, y: 0),
+                garbageCanPosition: TilePoint(x: 0.2, y: 0), // already inside the arrival radius
+                obstructions: [],
+                deltaTime: 1.0 / 10.0,
+                rng: &rng
+            )
+            position = result.position
+            XCTAssertFalse(result.consumedGarbageCan, "tick \(tick): a dead raccoon must never consume a garbage can")
+            XCTAssertEqual(raccoon.hp, 0, "tick \(tick): a garbage can must never resurrect an already-counted raccoon")
+        }
+
+        XCTAssertTrue(raccoon.isDead, "isDead must not flip back to false on a node whose kill has already been recorded")
+        XCTAssertEqual(position, startPosition, "a dead raccoon must not steer either")
+    }
+
+    // MARK: - Diverting is its own decision, not "the target isn't the player" (PR #37 review)
+
+    func test_garbageCanOnThePlayersExactTile_isStillConsumed() {
+        let raccoon = RaccoonNode(tier: .base, hp: RaccoonNode.baseMaxHP - 5)
+        // The pathological case for a `target != playerPosition` proxy: a
+        // garbage can that happens to sit on the player's exact tile.
+        let sharedPosition = TilePoint(x: 2, y: 0)
+        var position = TilePoint(x: 0, y: 0)
+        var rng = ScriptedRandomNumberGenerator(0) // every 1d6 rolls exactly 1
+
+        var consumed = false
+        for _ in 0..<400 {
+            let result = RaccoonSeekBehavior.updateWithDiversion(
+                raccoon: raccoon,
+                currentPosition: position,
+                playerPosition: sharedPosition,
+                garbageCanPosition: sharedPosition,
+                obstructions: [],
+                deltaTime: 1.0 / 10.0,
+                rng: &rng
+            )
+            position = result.position
+            if result.consumedGarbageCan {
+                consumed = true
+                break
+            }
+        }
+
+        XCTAssertTrue(
+            consumed,
+            "whether a raccoon is diverting must come from the wounded/range decision itself, not from comparing the resolved target against the player's position"
+        )
+        XCTAssertEqual(raccoon.hp, RaccoonNode.baseMaxHP - 4)
+    }
+
+    // MARK: - divertTarget(...): the diversion decision, in isolation
+
+    func test_divertTarget_isNil_onceThatCanHasBeenConsumed_butNotForADifferentCan() {
+        let raccoon = RaccoonNode(tier: .base, hp: RaccoonNode.baseMaxHP - 1)
+        let currentPosition = TilePoint(x: 0, y: 0)
+        let garbageCanPosition = TilePoint(x: 1, y: 0)
+
+        XCTAssertEqual(
+            RaccoonSeekBehavior.divertTarget(
+                raccoon: raccoon,
+                currentPosition: currentPosition,
+                garbageCanPosition: garbageCanPosition
+            ),
+            garbageCanPosition
+        )
+
+        raccoon.consumedGarbageCanPosition = garbageCanPosition
+        XCTAssertNil(
+            RaccoonSeekBehavior.divertTarget(
+                raccoon: raccoon,
+                currentPosition: currentPosition,
+                garbageCanPosition: garbageCanPosition
+            ),
+            "a can this raccoon has already consumed must never be a diversion target again"
+        )
+
+        let otherGarbageCanPosition = TilePoint(x: -1, y: 0)
+        XCTAssertEqual(
+            RaccoonSeekBehavior.divertTarget(
+                raccoon: raccoon,
+                currentPosition: currentPosition,
+                garbageCanPosition: otherGarbageCanPosition
+            ),
+            otherGarbageCanPosition,
+            "a different garbage can is still a legal diversion target"
+        )
+    }
+
+    func test_divertTarget_isNil_forADeadRaccoon() {
+        let raccoon = RaccoonNode(tier: .base, hp: 0)
+
+        XCTAssertNil(
+            RaccoonSeekBehavior.divertTarget(
+                raccoon: raccoon,
+                currentPosition: TilePoint(x: 0, y: 0),
+                garbageCanPosition: TilePoint(x: 0.2, y: 0)
+            )
+        )
     }
 }
