@@ -83,6 +83,14 @@ enum RaccoonSeekBehavior {
         if let direction = facing(fromCurrentPosition: currentPosition, toPlayerPosition: playerPosition) {
             raccoon.setDirection(direction)
         }
+        // Unconditional, but no longer destructive: `playWalk()` holds off
+        // while an attack cycle started by `BiteComponent` is still playing
+        // (`RaccoonAnimationController.isAttackCycleInProgress`). Before
+        // that hold existed this line ran one frame after every bite and
+        // cleared `.attack` before `raccoon.update(deltaTime:)` below --
+        // the only place `body.texture` is assigned -- had ever drawn a
+        // single attack cell, so `sprite_raccoon_attack` never reached the
+        // screen in a real build (PR #35 review).
         raccoon.playWalk()
         raccoon.update(deltaTime: deltaTime)
 

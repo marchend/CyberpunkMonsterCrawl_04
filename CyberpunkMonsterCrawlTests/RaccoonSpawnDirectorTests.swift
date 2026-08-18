@@ -188,6 +188,72 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         XCTAssertTrue(worldLayer.children.first is RaccoonNode)
     }
 
+    // MARK: - The bite's attack animation actually reaches the sprite
+
+    /// The production-path pin PR #35's review asked for: on the real
+    /// per-frame loop, a raccoon that has closed to the standoff ring and
+    /// bitten must end up **drawing** a `sprite_raccoon_attack` cell.
+    ///
+    /// Asserted on `RaccoonNode.body.texture`, deliberately *not* on
+    /// `animationController.state`. This director runs
+    /// `RaccoonSeekBehavior.update` (which plays walk, then refreshes the
+    /// texture from the state) *before* `BiteComponent.update` (which plays
+    /// attack), so a test reading the state straight after this method
+    /// returned saw `.attack` and passed -- while the next frame's
+    /// `playWalk()` cleared it again before any attack cell had ever been
+    /// assigned, and the attack sheet never reached the screen in a shipped
+    /// build. Only the texture can tell those two apart.
+    func test_update_whenARaccoonReachesThePlayer_theBodyDrawsAnAttackCell() {
+        let worldLayer = SKNode()
+        let player = PlayerNode()
+        let startingHP = player.hp
+        let director = RaccoonSpawnDirector(
+            worldLayer: worldLayer,
+            rng: SplitMix64RandomNumberGenerator(seed: 11)
+        )
+        let playerPosition = TilePoint(x: 0, y: 0)
+
+        // Real 60fps frames. 90 simulated seconds is comfortably past the
+        // worst case for the first spawn (3s) to walk the guaranteed
+        // off-screen gap in at `RaccoonSeekBehavior.pointsPerSecond`; the
+        // loop stops the moment an attack cell is observed.
+        let frameDelta: TimeInterval = 1.0 / 60.0
+        let frameBudget = Int(90.0 / frameDelta)
+        var drewAnAttackCell = false
+        var frame = 0
+
+        while frame < frameBudget && !drewAnAttackCell {
+            director.update(
+                deltaTime: frameDelta,
+                playerPosition: playerPosition,
+                player: player,
+                obstructions: []
+            )
+
+            for raccoon in worldLayer.children.compactMap({ $0 as? RaccoonNode }) {
+                let row = raccoon.animationController.currentRowMapping.row
+                let attackCells = (0..<RaccoonAnimationController.frameCount).map {
+                    RaccoonNode.texture(state: .attack, row: row, column: $0)
+                }
+                if attackCells.contains(where: { $0 === raccoon.body.texture }) {
+                    drewAnAttackCell = true
+                    break
+                }
+            }
+            frame += 1
+        }
+
+        XCTAssertLessThan(
+            player.hp, startingHP,
+            "this test is only meaningful once a raccoon has actually reached the player and bitten"
+        )
+        XCTAssertTrue(
+            drewAnAttackCell,
+            "no raccoon ever drew a sprite_raccoon_attack cell on the production loop - the bite's "
+                + "attack animation would be unobservable in a shipped build"
+        )
+    }
+
     // MARK: - reset()
 
     func test_reset_removesAllRaccoons_andRestartsTheSpawnTimer() {

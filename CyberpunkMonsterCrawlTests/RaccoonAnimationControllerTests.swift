@@ -178,17 +178,63 @@ final class RaccoonAnimationControllerTests: XCTestCase {
         XCTAssertEqual(controller.currentFrameColumn, 0)
     }
 
-    func test_playWalk_afterAttack_switchesBack_andResetsTheCycle() {
+    /// The hold that makes the attack sheet observable at all: while an
+    /// attack cycle is mid-flight `playWalk()` must not reclaim the sprite.
+    ///
+    /// `RaccoonSeekBehavior.update` calls `playWalk()` every single frame,
+    /// *before* `RaccoonNode.update(deltaTime:)` refreshes `body.texture`,
+    /// while `BiteComponent` calls `playAttack()` *after* it -- so without
+    /// this hold `.attack` was always cleared on the following frame before
+    /// one attack cell had ever been assigned, and `sprite_raccoon_attack`
+    /// never drew in a real build (PR #35 review).
+    func test_playWalk_duringAnAttackCycle_isHeldOff_soTheAttackFramesCanDraw() {
         let controller = RaccoonAnimationController()
         controller.playAttack()
-        controller.advance(deltaTime: 1.0 / RaccoonAnimationController.attackFramesPerSecond)
-        XCTAssertGreaterThan(controller.currentFrameColumn, 0)
+
+        // One frame of a 60fps run, far inside the 4-frame attack cycle.
+        controller.advance(deltaTime: 1.0 / 60.0)
+        XCTAssertTrue(controller.isAttackCycleInProgress)
+
+        controller.playWalk()
+
+        XCTAssertEqual(
+            controller.state, .attack,
+            "walk must not reclaim the sprite mid-attack - that is what kept the attack sheet off screen"
+        )
+        XCTAssertEqual(controller.elapsedInCurrentState, 1.0 / 60.0, accuracy: 1e-9)
+    }
+
+    func test_playWalk_afterTheAttackCycleCompletes_switchesBack_andResetsTheCycle() {
+        let controller = RaccoonAnimationController()
+        controller.playAttack()
+
+        // Every frame of the attack cycle has now had its turn.
+        controller.advance(deltaTime: RaccoonAnimationController.attackCycleDuration)
+        XCTAssertFalse(controller.isAttackCycleInProgress)
 
         controller.playWalk()
 
         XCTAssertEqual(controller.state, .walk)
         XCTAssertEqual(controller.elapsedInCurrentState, 0, accuracy: 1e-9)
         XCTAssertEqual(controller.currentFrameColumn, 0)
+    }
+
+    /// The hold is exactly one cycle long, not open-ended: a raccoon whose
+    /// bite cooldown (1s) is far longer than its attack cycle (0.333s) must
+    /// spend the rest of that second back on the walk sheet, not frozen
+    /// mid-lunge.
+    func test_attackCycleDuration_isTheFullFrameCount_atTheAttackCadence() {
+        XCTAssertEqual(
+            RaccoonAnimationController.attackCycleDuration,
+            Double(RaccoonAnimationController.frameCount)
+                / RaccoonAnimationController.attackFramesPerSecond,
+            accuracy: 1e-9
+        )
+        XCTAssertLessThan(
+            RaccoonAnimationController.attackCycleDuration,
+            BiteComponent.biteIntervalSeconds,
+            "an attack cycle must fit inside one bite interval, or the walk animation never returns"
+        )
     }
 
     func test_playWalk_whileAlreadyWalking_isANoOp_andDoesNotResetTheCycle() {
