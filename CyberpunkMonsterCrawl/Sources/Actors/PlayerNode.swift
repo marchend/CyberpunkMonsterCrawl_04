@@ -76,6 +76,47 @@ final class PlayerNode: SKNode {
     /// mid-cycle from an unrelated previous walk.
     private var elapsedInCurrentMotionState: TimeInterval = 0
 
+    // MARK: - Combat state (`CYBERPUN-17-8` PR 3)
+    //
+    // Ordinary stored properties, declared here on the class that owns
+    // them, so the player's HP invariant is visible to anyone reading this
+    // file and the per-frame `tickRabies` path is a direct field access.
+    // The behaviour over this state -- `takeDamage(_:)`, `infect(stats:)`,
+    // `tickRabies(deltaTime:)` and `resetCombatState()` -- lives in
+    // `PlayerNode+Rabies.swift`.
+
+    /// The player's baseline max HP. `PlayerNode` carried no HP concept
+    /// before this PR (movement/rendering only); introduced here because
+    /// the rabies DoT tick and the bite's direct damage are the first
+    /// things that need one. An initial tuning constant, expected to move
+    /// in a later playtesting pass, like `RaccoonNode.baseMaxHP`.
+    static let baseMaxHP: Int = 100
+
+    /// The player's maximum HP -- a full `baseMaxHP` at spawn, the same
+    /// "spawns at full HP" convention `RaccoonNode.init(hp:)` documents.
+    var maxHP: Int = PlayerNode.baseMaxHP
+
+    /// The player's current HP, clamped to `0...maxHP` by this property's
+    /// own `didSet`. Re-assigning inside `didSet` does not re-enter it, so
+    /// the clamp runs exactly once per write.
+    var hp: Int = PlayerNode.baseMaxHP {
+        didSet {
+            let clamped = min(max(0, hp), maxHP)
+            if hp != clamped {
+                hp = clamped
+            }
+        }
+    }
+
+    /// Whether the player currently carries the rabies infection.
+    var isInfected = false
+
+    /// Seconds' worth of rabies damage accumulated but not yet applied as a
+    /// whole HP -- see `tickRabies(deltaTime:)`. Internal rather than
+    /// `private` only because that method lives in the extension file
+    /// beside the rest of the rabies behaviour.
+    var rabiesDamageAccumulator: TimeInterval = 0
+
     override init() {
         let initialMapping = PlayerSpriteSheet.rowMapping(for: .south)
         body = SKSpriteNode(texture: Self.texture(row: initialMapping.row, column: PlayerAnimator.frameContactFirst))
@@ -149,6 +190,10 @@ final class PlayerNode: SKNode {
     /// 4. Assigns the resulting texture and sets `body.xScale`'s *sign*
     ///    from the mirror flag, preserving its magnitude.
     func update(deltaTime: TimeInterval, movementVector: CGVector) {
+        // CYBERPUN-17-8 PR 3: the rabies DoT tick (`PlayerNode+Rabies.swift`).
+        // A no-op while not infected.
+        tickRabies(deltaTime: deltaTime)
+
         let newlyMoving = movementVector.dx != 0 || movementVector.dy != 0
 
         if newlyMoving, let resolvedDirection = Direction8.from(spriteKitVector: movementVector) {

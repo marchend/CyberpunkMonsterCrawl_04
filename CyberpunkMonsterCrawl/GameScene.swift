@@ -157,13 +157,21 @@ final class GameScene: SKScene {
     /// `worldLayer` exists, so it is implicitly-unwrapped like
     /// `cameraController`. `updateWorldContent(for:)` resets it on every
     /// fresh entry to `.gameplay`, and `advanceMovementAndCamera(currentTime:)`
-    /// drives its single `update(deltaTime:playerPosition:obstructions:)`
+    /// drives its single `update(deltaTime:playerPosition:player:obstructions:)`
     /// call site on every frame **of a run** -- that call is gated on
     /// `stateMachine.currentState == .gameplay`, so the swarm neither
     /// spawns nor steers while the death/high-scores/menu screens are up
     /// (see the gate's own comment for why the `player`/`playerWorldPosition`
     /// guard above it is not enough on its own).
     private var raccoonSpawnDirector: RaccoonSpawnDirector!
+
+    /// The current run's counters (`CYBERPUN-17-8` PR 3): kills recorded by
+    /// every raccoon `raccoonSpawnDirector` spawns, infections recorded by
+    /// every bite that rolls a success. One instance for the scene's whole
+    /// lifetime -- `updateWorldContent(for:)` calls `reset()` on it at each
+    /// `.gameplay` entry rather than swapping the object, so the
+    /// death-screen summary (`CYBERPUN-17-13`) can hold this reference.
+    let runStats = RunSummaryStats()
 
     /// The touch currently engaging `thumbstick`, if any -- tracked so
     /// `touchesMoved`/`touchesEnded`/`touchesCancelled` can tell the stick's
@@ -241,7 +249,8 @@ final class GameScene: SKScene {
 
         raccoonSpawnDirector = RaccoonSpawnDirector(
             worldLayer: worldLayer,
-            deviceScale: { [weak self] in self?.deviceScale ?? 1 }
+            deviceScale: { [weak self] in self?.deviceScale ?? 1 },
+            stats: runStats
         )
 
         stateMachine.onChange = { [weak self] state in
@@ -286,6 +295,11 @@ final class GameScene: SKScene {
             // `startPlayer(at:)` exist rather than assuming nothing needs
             // resetting.
             raccoonSpawnDirector.reset()
+            // ... and fresh counters for a fresh run, for the same reason:
+            // RUN AGAIN must not report the previous run's kills and
+            // infections. (`startPlayer(at:)` above resets the player's own
+            // HP/infection state.)
+            runStats.reset()
             thumbstick.isRunActive = true
             cameraController.update(focus: spawn, viewportSize: size)
             #if DEBUG
@@ -396,6 +410,14 @@ final class GameScene: SKScene {
         let rawPosition = IsometricProjection.tileToScreen(tileX: tilePosition.x, tileY: tilePosition.y)
         mounted.position = PixelCrispness.snappedPosition(for: rawPosition, scale: deviceScale)
         mounted.updateDepth(atTilePosition: tilePosition)
+
+        // Because the node is *reused* across a restart, its combat state
+        // has to be reset explicitly -- otherwise run 2 starts on the HP
+        // run 1 ended with and, since `infect(stats:)` is one-way,
+        // permanently infected and ticking 1 HP/s from its first frame.
+        // Same reason `updateWorldContent(for:)` calls
+        // `raccoonSpawnDirector.reset()`.
+        mounted.resetCombatState()
 
         #if DEBUG
         // The player is the first non-ground world content in the graph, and
@@ -514,6 +536,12 @@ final class GameScene: SKScene {
             raccoonSpawnDirector.update(
                 deltaTime: deltaTime,
                 playerPosition: resolvedPosition,
+                // The mounted player, so a raccoon that has closed to the
+                // standoff ring actually bites him (attack animation +
+                // damage + rabies roll, `BiteComponent`) instead of
+                // ringing him harmlessly. Passing the node here is what
+                // gives this story its primary action on a device.
+                player: player,
                 obstructions: groundPlane?.residentObstructions ?? []
             )
         }
