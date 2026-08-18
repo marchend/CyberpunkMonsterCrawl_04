@@ -160,13 +160,113 @@ final class RaccoonNodeTests: XCTestCase {
         XCTAssertGreaterThan(elite.shadow.width, base.shadow.width)
     }
 
-    func test_body_isPixelCrisp() {
-        let raccoon = RaccoonNode(tier: .base)
+    /// A shadow's width is a property of the actor casting it, which is why
+    /// `ActorShadowNode.init(width:)` deleted its default and why
+    /// `PlayerNode` passes its measured `PlayerSpriteSheet.hitboxSize.width`.
+    /// The raccoon passes its own measured ground footprint
+    /// (`RaccoonAnimationController.groundFootprintWidth`, pinned against
+    /// the shipped art by `RaccoonSpriteSheetPixelTests`) -- *not* the full
+    /// cell width, which drew an ellipse as wide as the whole sprite.
+    /// `test_eliteShadow_isWiderThanBaseShadow` above passes either way, so
+    /// it cannot see that difference on its own.
+    func test_shadowWidth_isTheMeasuredGroundFootprint_notTheFullCellWidth() {
+        let base = RaccoonNode(tier: .base)
+        let elite = RaccoonNode(tier: .elite)
 
-        XCTAssertEqual(raccoon.body.texture?.filteringMode, .nearest)
-        XCTAssertEqual(raccoon.body.texture?.usesMipmaps, false)
-        XCTAssertTrue(PixelCrispness.isIntegerScale(raccoon.body.xScale))
-        XCTAssertTrue(PixelCrispness.isIntegerScale(raccoon.body.yScale))
+        XCTAssertEqual(base.shadow.width, RaccoonAnimationController.groundFootprintWidth, accuracy: 1e-9)
+        XCTAssertEqual(
+            elite.shadow.width,
+            RaccoonAnimationController.groundFootprintWidth * RaccoonTier.elite.scale,
+            accuracy: 1e-9
+        )
+
+        XCTAssertLessThan(
+            base.shadow.width, base.body.size.width,
+            "A shadow spanning the raccoon's entire drawn width reads as a puddle, not a ground contact."
+        )
+        XCTAssertLessThan(
+            elite.shadow.width, elite.body.size.width,
+            "The elite's shadow scales with its body and must stay inside its drawn width too."
+        )
+    }
+
+    /// Pixel-crispness of the body, restated so it measures what it claims.
+    ///
+    /// This replaces a `PixelCrispness.isIntegerScale(body.xScale)`
+    /// assertion that was trivially true for base *and* elite: all tier
+    /// magnification lives in `SKSpriteNode.size` (see
+    /// `RaccoonNode.scaledSize(forTier:deviceScale:)`), so `xScale` is
+    /// always exactly +/-1 and the assertion read as coverage of the elite
+    /// draw scale it did not provide. The invariant actually worth pinning
+    /// is that no magnification ever reaches `xScale`/`yScale` -- which is
+    /// what stops `PixelCrispness.apply(to:)` rounding 1.6 up to 2 -- with
+    /// the effective magnification pinned separately below.
+    func test_body_isPixelCrisp_andCarriesNoMagnificationInItsScale() {
+        for tier in RaccoonTier.allCases {
+            let raccoon = RaccoonNode(tier: tier, deviceScale: 1)
+
+            XCTAssertEqual(raccoon.body.texture?.filteringMode, .nearest)
+            XCTAssertEqual(raccoon.body.texture?.usesMipmaps, false)
+
+            // Magnitude 1 (no scaling here); the sign is SpriteKit's mirror
+            // idiom, which `PixelCrispness.wholeScale` deliberately keeps.
+            XCTAssertEqual(
+                abs(raccoon.body.xScale), 1, accuracy: 1e-6,
+                "\(tier): xScale must carry the mirror sign only, never any magnification."
+            )
+            XCTAssertEqual(
+                abs(raccoon.body.yScale), 1, accuracy: 1e-6,
+                "\(tier): yScale must never carry magnification."
+            )
+        }
+    }
+
+    func test_baseBody_effectiveMagnification_isAnExactIntegerOneX() {
+        let base = RaccoonNode(tier: .base, deviceScale: 1)
+        let magnification = base.body.size.width / RaccoonAnimationController.cellSize.width
+
+        XCTAssertEqual(magnification, 1, accuracy: 1e-6)
+        XCTAssertTrue(
+            PixelCrispness.isIntegerScale(magnification),
+            "A base raccoon draws its source cell 1:1 and stays inside PixelCrispness's integer-scale rule."
+        )
+    }
+
+    /// AC4's 1.6x, stated as the *effective* magnification (source cell to
+    /// drawn size) rather than as an `xScale` that never carries it.
+    ///
+    /// The elite is deliberately **outside** `PixelCrispness`'s
+    /// integer-scale rule: 77/48 horizontally and 45/28 vertically are
+    /// non-integer magnifications, so the compositor resamples an elite's
+    /// source pixels unevenly, and device-pixel snapping
+    /// (`test_eliteTier_bodySize_landsOnWholeDevicePixels...`) is the only
+    /// crispness guarantee it gets. That trade is the story's, and it is
+    /// pinned here so nobody reads the crispness test above as a promise
+    /// this magnification is integral. The tolerances are one whole device
+    /// pixel of snap at `deviceScale` 1, per axis -- derived from the snap,
+    /// not picked.
+    func test_eliteBody_effectiveMagnification_isTheStorys1_6x_andDeliberatelyNotAnIntegerScale() {
+        let elite = RaccoonNode(tier: .elite, deviceScale: 1)
+        let cellSize = RaccoonAnimationController.cellSize
+
+        let horizontal = elite.body.size.width / cellSize.width
+        let vertical = elite.body.size.height / cellSize.height
+
+        XCTAssertEqual(
+            horizontal, RaccoonTier.elite.scale, accuracy: 1 / cellSize.width + 1e-6,
+            "The elite's drawn width (\(elite.body.size.width)) is not 1.6x the \(cellSize.width)pt cell."
+        )
+        XCTAssertEqual(
+            vertical, RaccoonTier.elite.scale, accuracy: 1 / cellSize.height + 1e-6,
+            "The elite's drawn height (\(elite.body.size.height)) is not 1.6x the \(cellSize.height)pt cell."
+        )
+
+        XCTAssertFalse(
+            PixelCrispness.isIntegerScale(horizontal),
+            "The elite's \(horizontal)x magnification is non-integer by design (docs on "
+                + "RaccoonNode.scaledSize). If it has become integral, the opt-out documented there is "
+                + "stale and should be removed rather than this assertion."
+        )
     }
 
     // MARK: - Facing / texture wiring at construction

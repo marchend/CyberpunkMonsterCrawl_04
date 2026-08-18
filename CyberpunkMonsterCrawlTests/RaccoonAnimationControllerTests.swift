@@ -3,7 +3,7 @@ import XCTest
 @testable import CyberpunkMonsterCrawl
 
 /// CYBERPUN-17-8-t1: the raccoon's `Direction8 -> (row, mirrored)` table (5
-/// authored rows mirrored to 8), its `(23, 20)` anchor, and its walk (10fps)
+/// authored rows mirrored to 8), its `(23, 24)` anchor, and its walk (10fps)
 /// / attack (12fps) frame-timing cadence.
 final class RaccoonAnimationControllerTests: XCTestCase {
 
@@ -57,10 +57,16 @@ final class RaccoonAnimationControllerTests: XCTestCase {
         }
     }
 
-    // MARK: - Anchor: resolves to cell pixel (23, 20)
+    // MARK: - Anchor: resolves to cell pixel (23, 24)
 
-    func test_anchorPixel_is23_20() {
-        XCTAssertEqual(RaccoonAnimationController.anchorPixel, CGPoint(x: 23, y: 20))
+    /// `(23, 24)`, not the story table's `(23, 20)`: the alpha scan in
+    /// `RaccoonSpriteSheetPixelTests` measured the south facing's feet on
+    /// row 23 of the cell (silhouette rows 8..<24), so row 20 sat inside the
+    /// raccoon's legs and floated its shadow and depth sample 4px high. This
+    /// assertion is the arithmetic half of that pairing -- it pins the value
+    /// against typos; the pixel scan is what pins it against the art.
+    func test_anchorPixel_is23_24_theMeasuredGroundLine() {
+        XCTAssertEqual(RaccoonAnimationController.anchorPixel, CGPoint(x: 23, y: 24))
     }
 
     func test_anchorPointNormalized_convertsThePixelAnchorIntoSpriteKitSpace() {
@@ -68,7 +74,7 @@ final class RaccoonAnimationControllerTests: XCTestCase {
         let cellSize = RaccoonAnimationController.cellSize
 
         XCTAssertEqual(anchor.x, 23.0 / cellSize.width, accuracy: accuracy)
-        XCTAssertEqual(anchor.y, 1 - 20.0 / cellSize.height, accuracy: accuracy)
+        XCTAssertEqual(anchor.y, 1 - 24.0 / cellSize.height, accuracy: accuracy)
     }
 
     // MARK: - Walk cadence: 10 fps (0.1s per frame)

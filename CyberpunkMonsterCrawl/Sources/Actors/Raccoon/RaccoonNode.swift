@@ -8,10 +8,22 @@ import SpriteKit
 /// only \u2014 node assembly, tier-scaled visuals, hp/`isWounded`, and depth
 /// sorting. There is no seek behaviour, no building-footprint collision, no
 /// bite/rabies logic and no spawning here; those are later parts of the
-/// `CYBERPUN-17-8` story. Nothing in this PR mounts a `RaccoonNode` into
-/// `GameScene` either \u2014 that lands with the swarm-spawning PR, the same way
-/// `PlayerNode` (`CYBERPUN-17-6-t2`) was assembled one PR before
-/// `GameScene.startPlayer()` actually mounted it.
+/// `CYBERPUN-17-8` story.
+///
+/// **No production caller yet, and that is a debt rather than a
+/// precedent.** Nothing in the app mounts a `RaccoonNode`: it is reachable
+/// only from `RaccoonNodeTests`, so the anchor, the elite draw size, the
+/// shadow width and the depth offset are exercised by the suite and never
+/// by a frame on a device. This slice explicitly does **not** follow
+/// `PlayerNode` (`CYBERPUN-17-6-t2`) here -- that PR shipped its own
+/// production caller (`GameScene.startPlayer(at:)`) in the same PR,
+/// precisely to satisfy the rule `GroundTileRenderer`'s type doc writes
+/// down for this repo: *"a factory with no production caller is exactly the
+/// shape of feature that never gets switched on"*. The swarm-spawning PR of
+/// this story is what switches the raccoon on. Until it lands, the pixel
+/// measurements in `RaccoonSpriteSheetPixelTests` (row/mirror table,
+/// anchor, ground footprint) are this slice's only line of defence, which
+/// is why they measure the shipped art instead of restating the ticket.
 final class RaccoonNode: SKNode {
 
     /// The baseline (tier `.base`) raccoon max HP. Elites scale this via
@@ -130,6 +142,24 @@ final class RaccoonNode: SKNode {
     /// `(width, height)` as an `(x, y)` pair) rather than a second, parallel
     /// rounding formula, so this and every other pixel-crisp consumer in the
     /// codebase agree on one snap rule.
+    ///
+    /// **This deliberately opts the elite out of `PixelCrispness`'s
+    /// integer-scale rule, leaving device-pixel snapping as the only
+    /// guarantee.** Routing 1.6x through `size` dodges `wholeScale`'s
+    /// rounding (1.6 -> 2), but it does not dodge the resampling that rule
+    /// exists to prevent, it only moves the magnification somewhere
+    /// `PixelCrispness` does not look: a 48x28 source cell drawn at 77x45 is
+    /// a non-integer magnification (1.604x horizontally, 1.607x vertically),
+    /// so an elite's source pixels are unevenly sized on screen and its
+    /// aspect is very slightly off -- precisely what `PixelCrispness`'s
+    /// header warns about ("the device's own compositor resamples across
+    /// neighbouring pixels"). It is the trade the story asks for (1.6x, with
+    /// the result landing on whole device pixels), taken knowingly rather
+    /// than left implicit: base raccoons stay at an exact 1x, and
+    /// `RaccoonNodeTests.test_eliteBody_effectiveMagnification_isTheStorys1_6x_andDeliberatelyNotAnIntegerScale`
+    /// pins the elite's *effective* magnification -- and its
+    /// non-integer-ness -- rather than an `xScale` assertion that is
+    /// trivially true once all magnification lives in `size`.
     static func scaledSize(forTier tier: RaccoonTier, deviceScale: CGFloat) -> CGSize {
         let baseCellSize = RaccoonAnimationController.cellSize
         let rawSize = CGPoint(x: baseCellSize.width * tier.scale, y: baseCellSize.height * tier.scale)
@@ -137,11 +167,25 @@ final class RaccoonNode: SKNode {
         return CGSize(width: snapped.x, height: snapped.y)
     }
 
-    /// The ground shadow's width for `tier`: the tier-scaled body's width,
-    /// so an elite's shadow grows with its larger body rather than staying
-    /// pinned to the base raccoon's footprint.
+    /// The ground shadow's width for `tier`: the raccoon's **measured**
+    /// ground footprint (`RaccoonAnimationController.groundFootprintWidth`)
+    /// scaled by the tier, so an elite's shadow grows with its larger body
+    /// while a base raccoon's stays pinned to the paw span the art actually
+    /// draws.
+    ///
+    /// This passed the full 48pt cell width until review: at
+    /// `ActorShadowNode`'s 2:1 ratio that drew an ellipse as wide as the
+    /// entire sprite and 24pt tall under a 28pt cell -- a puddle rather than
+    /// a ground contact, and exactly the unjustified number
+    /// `ActorShadowNode.init(width:)` deleted its `defaultWidth` to stop
+    /// ("a shadow's size is a property of *the actor casting it* ...
+    /// `PlayerNode` passes `PlayerSpriteSheet.hitboxSize.width` (its
+    /// measured ground footprint), and the raccoon swarm (`CYBERPUN-17-8`)
+    /// will pass its own"). The footprint it passes now is measured off the
+    /// shipped art and re-measured at test time by
+    /// `RaccoonSpriteSheetPixelTests`.
     static func shadowWidth(forTier tier: RaccoonTier) -> CGFloat {
-        RaccoonAnimationController.cellSize.width * tier.scale
+        RaccoonAnimationController.groundFootprintWidth * tier.scale
     }
 
     /// Sets the facing this raccoon shows. Thin forwarding to

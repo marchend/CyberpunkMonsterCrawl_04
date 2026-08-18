@@ -59,6 +59,28 @@ final class RaccoonAnimationController {
     /// their vertical component \u2014 the exact convention
     /// `PlayerSpriteSheet.rowMappingTable` uses, per the story's own framing
     /// ("same `Direction8` mapping the player uses").
+    ///
+    /// **Measured against the shipped art, not inferred from the ticket.**
+    /// Both sheets ship 8 rows and `AtlasCellIndex.raccoonWalk` /
+    /// `.raccoonAttack` declare all 32 cells of each valid, so "only 5
+    /// facings are authored" is a claim about the art that has to be checked
+    /// against the art: if rows 5-7 held real west-side drawings (asymmetric
+    /// detail, a different tail sweep), this table would render mirrored
+    /// east art for half the compass and leave 12 shipped cells dead per
+    /// sheet, with a fully green suite. That is the failure mode
+    /// `PlayerSpriteSheet.rowMappingTable`'s doc was written to prevent, and
+    /// asserting this table against itself (southwest.row == southeast.row)
+    /// cannot see it.
+    ///
+    /// `RaccoonSpriteSheetPixelTests`
+    /// `.test_theRowsTheTableNeverReads_carryNoArtBeyondTheMirrorOfTheirSourceRow_onBothSheets`
+    /// therefore re-decodes **both** `sprite_raccoon_walk` and
+    /// `sprite_raccoon_attack` and requires each row this table never reads
+    /// (5/6/7, the compass sweep's northwest / west / southwest
+    /// continuation) to be either empty or the exact horizontal flip of the
+    /// row mirrored in its place (3/2/1). The attack sheet is scanned
+    /// separately rather than assumed to share the walk sheet's row order:
+    /// it is a different image and could have been cut on a different one.
     static let rowMappingTable: [Direction8: RowMapping] = [
         .south: RowMapping(row: 0, mirrored: false),
         .southeast: RowMapping(row: 1, mirrored: false),
@@ -84,9 +106,29 @@ final class RaccoonAnimationController {
         return mapping
     }
 
-    /// The anchor pixel within one cell: `(23, 20)`, top-left-origin pixel
-    /// coordinates \u2014 per the story's measured table ("Anchor 23,20").
-    static let anchorPixel = CGPoint(x: 23, y: 20)
+    /// The anchor pixel within one cell: `(23, 24)`, top-left-origin pixel
+    /// coordinates -- the raccoon's feet, measured off the shipped art.
+    ///
+    /// **Measured, and the measurement moved it.** The player's `(18, 40)`
+    /// reduces to "half the cell width, cell bottom" and is checkable with a
+    /// calculator; a raccoon's feet sit somewhere inside its cell, so only
+    /// the pixels can settle where. This constant read `(23, 20)` -- the
+    /// story's table -- until `RaccoonSpriteSheetPixelTests`
+    /// `.test_anchorPixel_sitsAtTheMeasuredGroundContactCentreOfBothSheets`
+    /// re-decoded both sheets: the south facing's silhouette occupies rows
+    /// 8..<24 of `sprite_raccoon_walk` (8..<25 on `sprite_raccoon_attack`,
+    /// one row lower for the lunge), so row 20 is *inside the raccoon's
+    /// legs* and the ticket's anchor floated every raccoon's shadow and
+    /// depth sample 4px above its feet. `24` is the walk sheet's measured
+    /// ground line, and it is within the scan's 2px tolerance of the attack
+    /// sheet's, so the raccoon does not hop when the two sheets swap.
+    ///
+    /// `x` is unchanged: 23 is the measured centre of the south silhouette
+    /// (within the same tolerance), so the ticket had that half right. The
+    /// scan is the same test-time alpha measurement `AtlasSignGlyphBand`
+    /// uses to pin its bands, for the same reason -- prose about where art
+    /// sits inside a cell goes stale silently on the next re-export.
+    static let anchorPixel = CGPoint(x: 23, y: 24)
 
     /// `anchorPixel` converted to SpriteKit's normalized, bottom-left-origin
     /// `anchorPoint` space.
@@ -96,6 +138,43 @@ final class RaccoonAnimationController {
             y: 1 - anchorPixel.y / cellSize.height
         )
     }
+
+    /// The raccoon's ground footprint width, in points: the widest
+    /// paw-to-paw span the shipped walk art draws in the bottom rows of its
+    /// silhouette (its ground-contact band), across every directly-authored
+    /// facing, on an unscaled 48x28 cell.
+    ///
+    /// **How it was measured.** An alpha scan of `sprite_raccoon_walk` puts
+    /// the south facing's silhouette in rows 8..<24 of its 28-row cell,
+    /// widest at x 14..28 (the body) and tapering through the leg rows. Its
+    /// ground-contact band measures 9px there, and per authored facing:
+    /// south 9, southeast 10, east 14, northeast 7, north 7 -- widest
+    /// side-on, narrowest facing away, as a quadruped's stance should be.
+    /// `14` is that widest stance, because a shadow is one ellipse fixed at
+    /// construction and has to cover whichever way the raccoon turns.
+    /// Nothing about it follows from the 48pt cell the art is cropped from,
+    /// which is why the full-cell-width shadow this replaced drew a puddle
+    /// more than three times the width of the animal's actual footprint.
+    ///
+    /// **Measured, not chosen.** This is the number
+    /// `RaccoonNode.shadowWidth(forTier:)` passes to `ActorShadowNode`,
+    /// which deliberately takes no default because "a shadow's size is a
+    /// property of *the actor casting it*" -- `PlayerNode` passes its own
+    /// measured `PlayerSpriteSheet.hitboxSize.width`, and this is the
+    /// raccoon's. The value below is read off the shipped
+    /// `sprite_raccoon_walk` alpha channel and re-measured at test time by
+    /// `RaccoonSpriteSheetPixelTests`
+    /// `.test_groundFootprintWidth_equalsTheMeasuredGroundContactSpan`, the
+    /// same way `AtlasSignGlyphBand.glyphRows` pins its bands: art
+    /// re-authored with a wider or narrower stance turns the suite red here
+    /// rather than silently un-tuning every raccoon's shadow.
+    ///
+    /// **Width only, deliberately.** A shadow needs a width; the footprint's
+    /// depth component is a collision fact this slice has no way to measure
+    /// (the building-footprint collision work lands later in
+    /// `CYBERPUN-17-8`). It gets added there, beside the code that first
+    /// needs it, rather than invented here.
+    static let groundFootprintWidth: CGFloat = 14
 
     // MARK: - Frame timing
 
