@@ -1,0 +1,16 @@
+{
+  "name": "raccoon-swarm",
+  "demonstrates": "After entering .gameplay, RaccoonSpawnDirector spawns raccoons off-screen (>= ~1,056 points away, per farAxisMinimumTiles) following a 3s initial spawn delay, and RaccoonSeekBehavior walks them in toward the player at ~121 pts/s with a walk-animation while approaching. This journey waits long enough (~30s) for at least one raccoon to have closed the off-screen gap and be visible converging on the player, then waits further (~20s more) for at least one raccoon to reach the bite standoff ring, where BiteComponent bites once per second. What the second screenshot is reviewed for is CONTACT -- a raccoon standing on the player's standoff ring -- not a specific sheet: the attack animation is a 4-frame cycle at 12 fps (RaccoonAnimationController.attackCycleDuration, 0.33s) inside each 1s bite interval, so a single sampled frame lands on the attack sheet roughly a third of the time and on the walk sheet otherwise. PR #35's review caught that it previously landed on the attack sheet NEVER: RaccoonSeekBehavior's unconditional per-frame playWalk() cleared the .attack state before RaccoonNode.update(deltaTime:) refreshed body.texture, so sprite_raccoon_attack could not draw in a real build at all. RaccoonAnimationController now holds a started attack cycle for its full duration, pinned on the production loop by RaccoonSpawnDirectorTests.test_update_whenARaccoonReachesThePlayer_theBodyDrawsAnAttackCell (which asserts on body.texture, not on animation state). HUD/HP/RABIES-row/infection-counter display is explicitly OUT OF SCOPE for this story (deferred to CYBERPUN-17-12) -- its absence in these screenshots is not a miss for CYBERPUN-17-8. Gate is human/vision review of the two gameplay screenshots below; assert_running steps only confirm the app process is still alive. The underlying spawn/seek/attack behavior is already pinned by RaccoonSwarmSceneWiringTests, RaccoonSpawnDirectorTests and RaccoonSeekBehaviorTests -- this journey exists purely so the runtime probe captures a frame late enough for a raccoon to actually be on screen, instead of one taken before any raccoon could possibly have arrived.",
+  "stories": ["CYBERPUN-17-8"],
+  "steps": [
+    {"action": "wait", "seconds": 4},
+    {"action": "assert_running"},
+    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)", "expect": "the running game -- a playable isometric city scene with a ground lattice, buildings and a player actor, not a menu or title screen"},
+    {"action": "wait", "seconds": 30},
+    {"action": "screenshot", "label": "raccoon-swarm-approaching"},
+    {"action": "assert_running"},
+    {"action": "wait", "seconds": 20},
+    {"action": "screenshot", "label": "raccoon-contact"},
+    {"action": "assert_running"}
+  ]
+}

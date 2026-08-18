@@ -229,6 +229,8 @@ final class RaccoonSeekBehaviorTests: XCTestCase {
     func test_update_switchesTheRaccoonToTheWalkAnimation() {
         let raccoon = RaccoonNode(tier: .base)
         raccoon.playAttack()
+        // Past the attack cycle, so the seek step is free to reclaim walk.
+        raccoon.update(deltaTime: RaccoonAnimationController.attackCycleDuration)
         XCTAssertEqual(raccoon.animationController.state, .attack)
 
         _ = RaccoonSeekBehavior.update(
@@ -240,6 +242,47 @@ final class RaccoonSeekBehaviorTests: XCTestCase {
         )
 
         XCTAssertEqual(raccoon.animationController.state, .walk)
+    }
+
+    /// The other half of that: a bite that landed on the previous frame
+    /// must survive this frame's seek step *and be drawn*.
+    ///
+    /// `update(...)` calls `playWalk()` before `RaccoonNode
+    /// .update(deltaTime:)` refreshes `body.texture`, so until
+    /// `RaccoonAnimationController` learned to hold a mid-flight attack
+    /// cycle this line cleared `.attack` before a single attack cell had
+    /// ever been assigned to the sprite -- `sprite_raccoon_attack` never
+    /// drew in a real build (PR #35 review). Asserted on `body.texture`,
+    /// not on `animationController.state`: reading the state is exactly
+    /// what let the old suite stay green over an invisible animation.
+    func test_update_afterABite_drawsTheAttackSheet_notTheWalkSheet() {
+        let raccoon = RaccoonNode(tier: .base, facing: .south)
+
+        // The frame a bite lands on: BiteComponent flips the state after
+        // the seek step has already refreshed the texture.
+        raccoon.playAttack()
+
+        // The very next frame of the same production loop.
+        _ = RaccoonSeekBehavior.update(
+            raccoon: raccoon,
+            currentPosition: TilePoint(x: 0, y: 0),
+            playerPosition: TilePoint(x: 5, y: 5),
+            obstructions: [],
+            deltaTime: 1.0 / 60.0
+        )
+
+        // The row follows whichever facing the seek step just chose (that is
+        // not what this test is about); the *sheet* is.
+        let row = raccoon.animationController.currentRowMapping.row
+        XCTAssertTrue(
+            raccoon.body.texture === RaccoonNode.texture(state: .attack, row: row, column: 0),
+            "the frame after a bite must draw a sprite_raccoon_attack cell - a raccoon whose state "
+                + "says .attack while its body still carries a walk texture shows the player nothing"
+        )
+        XCTAssertFalse(
+            raccoon.body.texture === RaccoonNode.texture(state: .walk, row: row, column: 0),
+            "the walk sheet must not be what a biting raccoon draws"
+        )
     }
 
     // MARK: - A zero deltaTime is a no-op

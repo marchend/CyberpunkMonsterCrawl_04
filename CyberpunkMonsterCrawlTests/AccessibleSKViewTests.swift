@@ -73,8 +73,47 @@ final class AccessibleSKViewTests: XCTestCase {
         container.frame = bounds
         host.addSubview(container)
 
+        // Paused on *both* sides of the presentation, because each side buys
+        // something different and neither alone is enough.
+        //
+        // Pausing first narrows the window that motivated the reorder:
+        // presenting kicks off SpriteKit's own update/render scheduling, and
+        // pausing only afterwards leaves an interval in which that
+        // scheduling can tick concurrently with the synchronous,
+        // main-thread mirror-frame computation this helper's caller performs
+        // immediately below. That race is invisible on an idle machine but
+        // is exactly the kind of narrow window that flakes under CI load -
+        // a real-content button frame read mid-tick instead of after
+        // settling, while a synthesized marker frame (never
+        // SpriteKit-derived) stays unaffected.
+        //
+        // Pausing again afterwards is not belt-and-braces, it is required:
+        // **`presentScene(_:)` clears a pause set before it.** That is
+        // measured, not assumed - PR #35 review asked for the postcondition
+        // to be pinned rather than reasoned about, and the assertion below
+        // failed across all 22 tests in this file when the pause was set
+        // only beforehand. So the pre-pause reorder on its own handed back a
+        // *live* view and silently deleted the very guarantee its comment
+        // claimed; every frame assertion here was running against a running
+        // render loop. Order matters and both lines are load-bearing.
+        //
+        // Why an accessibility-suite change rides along in a raccoon-swarm
+        // story (`CYBERPUN-17-8`): this file is the regression guard for the
+        // runtime probe's PLAY tap, and this story's evidence journey
+        // (`.mothership/journeys/raccoon-swarm.json`) has the probe drive
+        // that very button before it can screenshot a single raccoon. A
+        // flake here is a flake in the gate this story's evidence is
+        // captured through.
+        view.isPaused = true
         view.presentScene(scene)
         view.isPaused = true
+
+        // The postcondition itself, asserted in the helper so it covers
+        // every test in the file at once rather than one of them.
+        XCTAssertTrue(
+            view.isPaused,
+            "the helper must hand back a paused view - every frame assertion below reads settled geometry"
+        )
 
         hostView = host
         containerView = container

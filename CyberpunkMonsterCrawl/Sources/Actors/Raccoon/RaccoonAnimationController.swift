@@ -184,6 +184,16 @@ final class RaccoonAnimationController {
     /// 12 fps attack cadence, per the story ("attack 12 fps").
     static let attackFramesPerSecond: Double = 12
 
+    /// Seconds one complete attack cycle lasts: all `frameCount` frames of
+    /// `sprite_raccoon_attack` at `attackFramesPerSecond` (4 / 12 = 0.333s).
+    ///
+    /// This is the window `playWalk()` refuses to interrupt -- see its doc
+    /// comment for why the attack sheet otherwise never reaches the screen
+    /// at all.
+    static var attackCycleDuration: TimeInterval {
+        Double(frameCount) / attackFramesPerSecond
+    }
+
     /// The frame rate `state` plays at.
     static func framesPerSecond(for state: RaccoonAnimationState) -> Double {
         switch state {
@@ -236,11 +246,39 @@ final class RaccoonAnimationController {
         direction = newDirection
     }
 
+    /// Whether an attack cycle started by `playAttack()` has yet to play
+    /// all `frameCount` of its frames. `playWalk()` is held off while this
+    /// is `true`, so a started attack always gets drawn.
+    var isAttackCycleInProgress: Bool {
+        state == .attack && elapsedInCurrentState < Self.attackCycleDuration
+    }
+
     /// Switches to the walk animation, resetting the cycle if not already
     /// walking. A no-op if already walking, so a caller driving this every
     /// frame while walking does not keep restarting the cycle.
+    ///
+    /// **Also a no-op while an attack cycle is still playing**
+    /// (`isAttackCycleInProgress`) -- which is what makes
+    /// `sprite_raccoon_attack` reach the screen at all. Review of PR #35
+    /// traced one production frame: `RaccoonSpawnDirector.update` runs
+    /// `RaccoonSeekBehavior.update` first, which calls `playWalk()`
+    /// unconditionally *before* `RaccoonNode.update(deltaTime:)` refreshes
+    /// `body.texture` -- the only place the texture is assigned -- and
+    /// `BiteComponent.update` calls `playAttack()` *after* that refresh.
+    /// So `.attack` was set on the frame a bite landed, drew nothing that
+    /// frame, and was flipped back to `.walk` on the next frame before the
+    /// texture refresh could ever see it: the attack sheet never drew in a
+    /// real build, and the 12 fps attack cadence was unobservable. A unit
+    /// test reading `state` immediately after the bite saw `.attack` and
+    /// passed, which is why the suite stayed green over it.
+    ///
+    /// Holding here rather than in the seek behaviour keeps the guarantee
+    /// caller-order-independent: whoever drives walk, and whenever, an
+    /// attack that started still gets its four frames on screen before
+    /// walk can reclaim the sprite.
     func playWalk() {
         guard state != .walk else { return }
+        guard !isAttackCycleInProgress else { return }
         state = .walk
         elapsedInCurrentState = 0
     }
