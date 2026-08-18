@@ -37,18 +37,15 @@ import Foundation
 /// side.
 ///
 /// **What is still outstanding on the story, and where it is tracked.** The
-/// movement/collision/camera wiring above is done; two items are not, and
-/// neither is given an invented ticket ID here. (1) The run's spawn junction
-/// is identical on every run, because nothing in the app writes
+/// movement/collision/camera wiring above is done; one item is not, and it
+/// is not given an invented ticket ID here: the run's spawn junction is
+/// identical on every run, because nothing in the app writes
 /// `GameScene.worldSeed` -- see `GameScene.spawnTilePosition()` for the full
-/// note. (2) `GameplayScreenNode`'s `SCAFFOLDING(CYBERPUN-17-7)`
-/// `gameplay.container` marker is still mounted, because no durable in-run
-/// content exists for its two assertions to re-point at yet -- see that
-/// type's doc comment. Both are tracked on the `CYBERPUN-17-7` story itself,
-/// requested as follow-ups on its tasks. The authoritative list of what is
-/// implemented versus still outstanding for this story is the
-/// `CYBERPUN-17-7` entry in AGENT.md/CLAUDE.md; read that rather than
-/// inferring the remaining scope from these doc comments.
+/// note. It is tracked on the `CYBERPUN-17-7` story itself, requested as a
+/// follow-up on its tasks. The authoritative list of what is implemented
+/// versus still outstanding for this story is the `CYBERPUN-17-7` entry in
+/// AGENT.md/CLAUDE.md; read that rather than inferring the remaining scope
+/// from these doc comments.
 ///
 /// Both halves now share one production call site, and
 /// `ThumbstickMovementSeamTests` still drives a real

@@ -61,9 +61,9 @@ final class ScreensTests: XCTestCase {
             marker,
             "the menu must expose a container accessibility anchor independent of any one button"
         )
-        // As with `gameplay.container`: the identifier is Swift-side
-        // bookkeeping only (see `SKNodeAccessibilityIdentifier`), so the label
-        // is what any UI test or VoiceOver can actually observe.
+        // The identifier is Swift-side bookkeeping only (see
+        // `SKNodeAccessibilityIdentifier`), so the label is what any UI test
+        // or VoiceOver can actually observe.
         XCTAssertTrue(marker?.isAccessibilityElement == true)
         XCTAssertEqual(marker?.accessibilityLabel, "Menu")
     }
@@ -138,32 +138,6 @@ final class ScreensTests: XCTestCase {
 
     // MARK: - GameplayScreenNode
 
-    /// The identifier assertion alone would only prove
-    /// `SKNodeAccessibilityIdentifier` stored and handed back a string:
-    /// `SKNode` has no real `accessibilityIdentifier`, so that value never
-    /// reaches UIKit and XCUITest can never match it. The marker must also be
-    /// an accessibility element carrying an `accessibilityLabel`, because the
-    /// label is the property SpriteKit genuinely forwards and therefore the
-    /// only thing `CyberpunkMonsterCrawlUITests` can actually query when it
-    /// checks that PLAY landed on a real screen.
-    func test_gameplayScreenNode_exposesAContainerAccessibilityAnchor() {
-        let gameplay = GameplayScreenNode()
-
-        let marker = gameplay.node.children.first { $0.accessibilityIdentifier == "gameplay.container" }
-        XCTAssertNotNil(
-            marker,
-            "a UI test must be able to observe PLAY landing on a real, mounted gameplay screen"
-        )
-        XCTAssertTrue(
-            marker?.isAccessibilityElement == true,
-            "the container marker must be an accessibility element or UIKit will not surface it at all"
-        )
-        XCTAssertEqual(
-            marker?.accessibilityLabel, "Gameplay",
-            "the UI test matches this marker by accessibility label - the identifier is invisible to XCUITest"
-        )
-    }
-
     /// The gameplay screen is the one screen the world must show *through*,
     /// so unlike menu/death/high-scores it must mount nothing that blankets
     /// the viewport: `GameScene.routeTouch(at:)` returns any non-`uiLayer`
@@ -178,53 +152,18 @@ final class ScreensTests: XCTestCase {
 
         gameplay.layout(for: size, safeAreaInsets: .zero)
 
-        // Anti-vacuity precondition: a `for` loop over an empty collection
-        // asserts nothing, so without this the gate below cannot tell "no
-        // mounted node blankets the viewport" from "the screen mounted
-        // nothing, so the loop never ran".
-        //
-        // Deliberately *not* the per-child `!frame.isEmpty` guard that
-        // `test_menuScreenNode_layout_resizesBackground_andKeepsButtonsWithinBounds`
-        // uses. That test's containment assertion is a positive one (the
-        // button must sit inside the viewport), so an empty frame there
-        // hides a real failure. Here the assertion is negative (nothing may
-        // contain the viewport) and the container marker's empty frame is
-        // the correct, shipped state - a literal frame guard would fail on
-        // correct code. What actually needs pinning is that there is
-        // something to walk at all.
-        XCTAssertFalse(
+        // Direct structural fact, stated rather than inferred from an empty
+        // loop: the gameplay screen mounts no children at all, so there is
+        // nothing that could blanket the viewport in the first place.
+        XCTAssertTrue(
             gameplay.node.children.isEmpty,
-            "the gameplay screen mounted nothing at all, so the containment gate below would "
-                + "pass vacuously"
+            "the gameplay screen must mount no children at all; the world must stay reachable "
+                + "behind it"
         )
 
-        let viewport = CGRect(
-            x: -size.width / 2, y: -size.height / 2,
-            width: size.width, height: size.height
-        )
-        for node in Self.descendants(of: gameplay.node) {
-            let frame = node.calculateAccumulatedFrame()
-            XCTAssertFalse(
-                frame.contains(viewport),
-                "\(node.name ?? "\(type(of: node))") blankets the viewport; the world must stay "
-                    + "reachable behind the gameplay screen"
-            )
-        }
-
-        // The loop above is a containment check, and this screen's only node
-        // is the frameless container marker - so state the structural fact
-        // directly rather than letting the gate pass because there was
-        // nothing with a frame to measure: unlike menu / death /
-        // high-scores, this screen mounts no backdrop sprite at all.
-        //
-        // Walked over the whole subtree, at the same depth as the label gate
-        // below. The HUD container CYBERPUN-17-7 adds is exactly where a
-        // full-bleed plate would end up, and nested there it would slip past
-        // a direct-children `is SKSpriteNode` check *and* past the
-        // containment loop above (which measures the container's accumulated
-        // frame, which a plate inset by even a point would not fully
-        // contain) - leaving the one gate protecting "the world must show
-        // through" the shallower of the two.
+        // Walked over the whole subtree so a future HUD container nesting a
+        // full-bleed plate inside it still fails this gate, not just a
+        // direct-children check.
         let sprites = Self.spriteNodes(in: gameplay.node)
         XCTAssertTrue(
             sprites.isEmpty,
@@ -248,8 +187,8 @@ final class ScreensTests: XCTestCase {
     /// deleted line to stay deleted. It walks the whole subtree, not just the
     /// immediate children, so re-introducing the text inside a HUD container
     /// fails here too. It deliberately does *not* forbid `SKLabelNode`
-    /// outright: CYBERPUN-17-7 / CYBERPUN-17-12 add real HUD text (HP, XP,
-    /// timer), which must not have to fight this gate.
+    /// outright: CYBERPUN-17-12 adds real HUD text (HP, XP, timer), which
+    /// must not have to fight this gate.
     func test_gameplayScreenNode_mountsNoComingSoonText() {
         let gameplay = GameplayScreenNode()
 
@@ -271,15 +210,14 @@ final class ScreensTests: XCTestCase {
 
     /// The wording-agnostic half of the CYBERPUN-17-5-t4 pin. The gate above
     /// matches the literal text, which a *reworded* placeholder ("WORLD
-    /// PENDING", "TODO: world") would slip straight past, and it walks a
-    /// collection that is empty today. This states the structural fact
-    /// instead: after the removal the screen mounts exactly one child - the
-    /// non-visual container marker - and no text anywhere in its subtree.
+    /// PENDING", "TODO: world") would slip straight past. This states the
+    /// structural fact instead: the screen mounts no children at all, and no
+    /// text anywhere in its subtree.
     ///
-    /// This is the assertion CYBERPUN-17-7 is expected to *rewrite* when it
-    /// adds the first real HUD content and deletes the marker; the
-    /// `mountsNoComingSoonText` gate above is the one that must survive it.
-    func test_gameplayScreenNode_mountsOnlyTheContainerMarker_andNoTextAnywhere() {
+    /// This is the assertion CYBERPUN-17-12 is expected to *rewrite* when it
+    /// adds real HUD content; the `mountsNoComingSoonText` gate above is the
+    /// one that must survive it.
+    func test_gameplayScreenNode_mountsNoChildren_andNoTextAnywhere() {
         let gameplay = GameplayScreenNode()
 
         // Before and after layout: neither construction nor a layout pass
@@ -287,15 +225,10 @@ final class ScreensTests: XCTestCase {
         for insets in [UIEdgeInsets.zero, UIEdgeInsets(top: 20, left: 0, bottom: 40, right: 0)] {
             gameplay.layout(for: CGSize(width: 800, height: 400), safeAreaInsets: insets)
 
-            let children = gameplay.node.children
-            XCTAssertEqual(
-                children.count, 1,
-                "the gameplay screen must mount exactly the container marker and nothing else; "
-                    + "found \(children.map { $0.name ?? "\(type(of: $0))" })"
-            )
-            XCTAssertEqual(
-                children.first?.accessibilityLabel, "Gameplay",
-                "the screen's single child must be the non-visual gameplay.container marker"
+            XCTAssertTrue(
+                gameplay.node.children.isEmpty,
+                "the gameplay screen must mount no children at all; found "
+                    + "\(gameplay.node.children.map { $0.name ?? "\(type(of: $0))" })"
             )
 
             let labels = Self.labelNodes(in: gameplay.node)
@@ -334,7 +267,7 @@ final class ScreensTests: XCTestCase {
     /// gate's depth: `GameplayScreenNode` mounts no sprites at all, so that
     /// assertion also iterates an empty collection. This proves the walk
     /// really does surface a sprite nested inside a container - the shape a
-    /// full-bleed HUD plate would take once CYBERPUN-17-7 adds a HUD
+    /// full-bleed HUD plate would take once CYBERPUN-17-12 adds a HUD
     /// container, and the case a direct-children check would miss.
     func test_spriteNodeWalk_findsNestedSprites_soTheBackdropGateIsNotVacuous() {
         let root = SKNode()

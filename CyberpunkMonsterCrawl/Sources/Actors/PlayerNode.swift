@@ -27,9 +27,9 @@ import SpriteKit
 /// `GameScene.advanceMovementAndCamera(currentTime:)` resolves the stick
 /// against building collision, commits `position` and this node's depth
 /// itself, and passes the resulting movement vector here purely for facing
-/// and frame state. The scripted `SCAFFOLDING(CYBERPUN-17-7)` demo driver,
-/// and the `GameScene.debugPlayerDemoEnabled` flag that gated it, are
-/// deleted.
+/// and frame state. The scripted demo driver that previously stood in for
+/// real input, and the `GameScene.debugPlayerDemoEnabled` flag that gated
+/// it, are gone.
 final class PlayerNode: SKNode {
 
     /// The player's ground-collision hitbox size -- delegated to

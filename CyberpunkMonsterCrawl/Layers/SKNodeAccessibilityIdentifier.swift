@@ -53,9 +53,8 @@ private enum AccessibilityIdentifierAssociation {
 /// - `accessibilityLabel` remains the belt-and-braces match, and setting
 ///   both stays the house style. `ButtonNode` sets `accessibilityLabel =
 ///   title`, which is why `app.descendants(matching: .any)["PLAY"]` also
-///   resolves; the screen container markers in `MenuScreenNode` /
-///   `GameplayScreenNode` likewise carry `accessibilityLabel` values
-///   ("Menu" / "Gameplay").
+///   resolves; `MenuScreenNode`'s own `menu.container` marker likewise
+///   carries an `accessibilityLabel` ("Menu").
 /// - A unit-test assertion on `node.accessibilityIdentifier` still only
 ///   proves this extension stored and returned a string. Evidence that the
 ///   value is reachable by a driver comes from `AccessibleSKViewTests`

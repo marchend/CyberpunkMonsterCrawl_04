@@ -55,7 +55,7 @@ CyberpunkMonsterCrawl/
   Layers/SKNodeAccessibilityIdentifier.swift  Swift-side accessibilityIdentifier storage for SKNode (SKNode never adopts UIAccessibilityIdentification); AccessibleSKView is what carries the value into a real accessibility element, and only for nodes under uiLayer in an AccessibleSKView-hosted scene - world/effects-layer identifiers stay invisible to XCUITest
   Layers/AccessibleSKView.swift            the hosted SKView subclass: publishes one UIAccessibilityElement per accessible uiLayer node, with a screen-space accessibilityFrame derived from the same coordinate path routeTouch(at:) hit-tests, so identifier/element-driven taps (XCUITest, the runtime probe, VoiceOver) land on the button instead of missing it
   Screens/MenuScreenNode.swift             the menu: title + neon PLAY button + placeholder HIGH SCORES entry, registered for .menu
-  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; mounts no full-bleed backdrop and, since CYBERPUN-17-5-t4, no text of its own, so the streamed city + player render through it and world touches fall through; its only remaining content is the SCAFFOLDING(CYBERPUN-17-7) non-visual gameplay.container accessibility marker (removal still outstanding, owned by CYBERPUN-17-7: no durable re-point target for its two assertions until the HUD lands)
+  Screens/GameplayScreenNode.swift         skeleton .gameplay screen; mounts no full-bleed backdrop and, since CYBERPUN-17-5-t4, no text of its own, and (since CYBERPUN-17-7-t5) no accessibility marker either — the streamed city + player render through it, world touches fall through, and the screen mounts no children at all until the real HUD (CYBERPUN-17-12) lands
   Screens/DeathScreenNode.swift            skeleton .death screen; real RUN AGAIN / back-to-menu buttons, SCAFFOLDING(CYBERPUN-17-16) placeholder run-summary content
   Screens/HighScoresScreenNode.swift       skeleton .highScores screen; real back-to-menu button, SCAFFOLDING(CYBERPUN-17-16) placeholder scores content
   PrivacyInfo.xcprivacy, *.entitlements
@@ -127,7 +127,7 @@ CyberpunkMonsterCrawlTests/
   GameViewControllerCompositionTests.swift composition root builds GameScene, mounts MenuScreenNode + the three skeleton screens, wires PLAY to the state machine, and hosts the scene in an AccessibleSKView (asserted against the view actually installed in the hierarchy)
   AccessibleSKViewTests.swift              the accessibility-frame regression guard: the uiLayer accessible-node walk, and the published frame's centre being the exact scene point routeTouch(at:)/dispatchTouch(atScenePoint:) resolves to the PLAY button
 CyberpunkMonsterCrawlUITests/
-  CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it starts a run and lands on the gameplay screen
+  CyberpunkMonsterCrawlUITests.swift       menu present + PLAY hittable + tapping it unmounts the whole menu (PLAY *and* the durable menu.container anchor) with the app still foregrounded; it does NOT prove the destination screen end-to-end (GameplayScreenNode mounts no anchor until CYBERPUN-17-12) - PLAY -> .gameplay is pinned in-process by GameViewControllerCompositionTests
   AppLaunchAndRotationUITests.swift        launch shows the menu in portrait, rotation re-lays it out in landscape with nothing off-screen, PLAY dismisses the menu
 docs/bootstrap.md                          original spec (source of truth)
 .mothership/journeys/menu-to-gameplay.json product-verification journey: launch -> screenshot the menu -> navigate to PLAY (described in plain language, located visually) -> screenshot the streamed city (ground plane + building sprites + rooftop signs, player actor) with no placeholder text over it
@@ -692,9 +692,9 @@ docs/bootstrap.md                          original spec (source of truth)
   dead-zone disagreement between producer and consumer cannot ship green
   even now that the scene owns the seam. The wiring itself (touch dispatch,
   `PlayerScaffoldingDriver` deletion, collision, camera-follow) landed in
-  the later PRs of `CYBERPUN-17-7`; still open on the story are a per-run
-  `worldSeed` and deleting `GameplayScreenNode`'s `gameplay.container`
-  marker (both listed under "not built yet" below)
+  the later PRs of `CYBERPUN-17-7`; still open on the story is a per-run
+  `worldSeed` (unticketed; see "not built yet" below); `GameplayScreenNode`'s
+  `gameplay.container` marker was removed in `CYBERPUN-17-7-t5`
 - Tile-grid collision — no `SKPhysicsBody`; buildings are flat footprints
   on a tile grid. `BuildingObstruction` (discrete) and the continuous,
   sliding `CollisionResolver` (`Sources/Gameplay/`, `CYBERPUN-17-7`) are wired
@@ -764,20 +764,19 @@ docs/bootstrap.md                          original spec (source of truth)
   screenshot-driven verification however correct the rendering behind it is.
   `ScreensTests.test_gameplayScreenNode_mountsNoComingSoonText` pins the
   removal by wording (walking the whole subtree, and deliberately *not*
-  banning `SKLabelNode` outright so the real HUD text CYBERPUN-17-7 /
-  CYBERPUN-17-12 add does not have to fight the gate), and
-  `test_gameplayScreenNode_mountsOnlyTheContainerMarker_andNoTextAnywhere`
-  pins it structurally so a *reworded* placeholder fails too. The screen's
-  one remaining `SCAFFOLDING(CYBERPUN-17-7)` artifact is the non-visual
-  `gameplay.container` accessibility marker, whose *presence* both
-  `ScreensTests.test_gameplayScreenNode_exposesAContainerAccessibilityAnchor`
-  and `CyberpunkMonsterCrawlUITests` assert, so done means deleting it **and**
-  re-pointing both assertions. Still outstanding: the thumbstick sets
-  `isAccessibilityElement = false`, so no re-point target exists until the HUD
-  (CYBERPUN-17-12). Its `layout(for: safeAreaInsets:)` is deliberately a no-op
-- Per-run `worldSeed`: nothing in the app writes it, so every run spawns at
-  the identical junction (`GameScene.spawnTilePosition()`); tracked on the
-  `CYBERPUN-17-7` story (requested on `-t3`, re-stated on `-t4`), no ticket yet
+  banning `SKLabelNode` outright so the real HUD text CYBERPUN-17-12 adds
+  does not have to fight the gate), and
+  `test_gameplayScreenNode_mountsNoChildren_andNoTextAnywhere` pins it
+  structurally so a *reworded* placeholder fails too. The screen's former
+  non-visual `gameplay.container` accessibility marker (`SCAFFOLDING
+  (CYBERPUN-17-7)`) was removed in `CYBERPUN-17-7-t5` along with the two
+  assertions that depended on its presence, since no durable HUD content
+  existed to re-point them at; `GameplayScreenNode` now mounts no children
+  at all until the real HUD (CYBERPUN-17-12) lands. Its
+  `layout(for: safeAreaInsets:)` is deliberately a no-op
+- Per-run `worldSeed`: **unmet** product gate 6 ("every run starts at a new
+  junction") - nothing writes it (`GameScene.spawnTilePosition()`); asked on
+  `-t3`/`-t4`/`-t5`, still NO TICKET ID - file one here before closing the story
 - Local high-score persistence
 - SCAFFOLDING marker grep gate
 - Audio, app icon art, launch screen polish, App Store metadata/submission

@@ -17,6 +17,20 @@ final class CyberpunkMonsterCrawlUITests: XCTestCase {
         app.descendants(matching: .any)["PLAY"]
     }
 
+    /// `MenuScreenNode`'s `menu.container` anchor (label "Menu"). Unlike
+    /// `GameplayScreenNode`'s deleted `gameplay.container` marker, this one is
+    /// a **durable shipping accessibility contract** - see `MenuScreenNode`'s
+    /// doc comment, which says in as many words that the identifier is to stay
+    /// stable across restyles - so asserting on it here creates no future
+    /// removal debt the way asserting on scaffolding did.
+    /// `AppLaunchAndRotationUITests` matches the same anchor by identifier,
+    /// which is what proves the query resolves at runtime (`AccessibleSKView`
+    /// republishes `uiLayer` markers as real elements carrying their
+    /// identifier).
+    private func menuContainer(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["menu.container"]
+    }
+
     func test_launchesIntoMenu_withAHittablePlayButton_thatStartsARun() {
         let app = XCUIApplication()
         app.launch()
@@ -29,29 +43,56 @@ final class CyberpunkMonsterCrawlUITests: XCTestCase {
         )
         XCTAssertTrue(play.isHittable, "the PLAY button must be hittable, not painted over by the world layer")
 
+        // Pinned *before* the tap on purpose: it is what keeps the
+        // disappearance assertion below non-vacuous. A query that could never
+        // resolve (the failure mode the deleted `gameplay.container` comment
+        // described) satisfies "exists == false" trivially, so the anchor has
+        // to be observed present first for its absence to mean anything.
+        let menuAnchor = menuContainer(in: app)
+        XCTAssertTrue(
+            menuAnchor.waitForExistence(timeout: 10),
+            "the menu's durable menu.container anchor must be present before PLAY is tapped"
+        )
+
         play.tap()
 
         let menuDismissed = expectation(
             for: NSPredicate(format: "exists == false"),
             evaluatedWith: play
         )
-        wait(for: [menuDismissed], timeout: 5)
+        // The whole menu unmounted, not just its button: PLAY vanishing alone
+        // also matches a restyle that drops the button while leaving the menu
+        // mounted.
+        let menuAnchorDismissed = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: menuAnchor
+        )
+        wait(for: [menuDismissed, menuAnchorDismissed], timeout: 5)
         XCTAssertEqual(app.state, .runningForeground)
 
-        // Matched on the container marker's accessibility *label*, not on
-        // `gameplay.container`. `SKNode` has no real `accessibilityIdentifier`
-        // (see `SKNodeAccessibilityIdentifier`): that property is a Swift-side
-        // associated object that never reaches the accessibility element
-        // `SKView` synthesises, so an identifier subscript here would be a
-        // silent no-op that can never match - the exact "green over an
-        // unplayable build" failure this test exists to prevent. SpriteKit does
-        // forward `accessibilityLabel`, which is why the PLAY query above
-        // resolves, and `GameplayScreenNode`'s marker sets
-        // `accessibilityLabel = "Gameplay"`.
-        let gameplayContainer = app.descendants(matching: .any)["Gameplay"]
-        XCTAssertTrue(
-            gameplayContainer.waitForExistence(timeout: 5),
-            "PLAY must land on the (skeleton) gameplay screen, not an empty uiLayer"
-        )
+        // Deliberate, reviewed gap - read this before "strengthening" the
+        // assertions above with a new marker.
+        //
+        // `GameplayScreenNode` mounts no accessibility anchor of its own (the
+        // skeleton screen mounts no content at all until the real HUD,
+        // CYBERPUN-17-12 - see that type's doc comment), and its former
+        // `gameplay.container` marker was scaffolding deleted in
+        // CYBERPUN-17-7-t5. So the strongest thing this end-to-end test can
+        // honestly say today is "the menu unmounted and the app is still
+        // running": it cannot, in a real app process, distinguish `.gameplay`
+        // from `.highScores` or a blank `uiLayer`. Do not re-add a marker to
+        // close that gap - a UI test asserting a scaffolding node's presence
+        // is precisely how scaffolding outlives the ticket meant to remove it.
+        //
+        // What does pin the destination, in-process:
+        //   - `GameViewControllerCompositionTests`
+        //     `.test_compositionRoot_playButton_isWiredToTheStateMachine`
+        //     pins PLAY -> `.gameplay` through the real composition root.
+        //   - `ThumbstickSceneWiringTests` pins `isRunActive`, i.e. that the
+        //     run really started rather than the menu merely unmounting.
+        // The residual gap is therefore "nothing proves the destination
+        // end-to-end in a real app process", and it closes for free once
+        // CYBERPUN-17-12 gives the gameplay screen durable HUD content to
+        // match on.
     }
 }
