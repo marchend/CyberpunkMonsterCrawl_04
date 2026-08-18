@@ -37,7 +37,20 @@ final class AccessibleSKViewTests: XCTestCase {
     /// `AccessibleSKView`, "part 3").
     private var containerView: SceneAccessibilityContainerView!
 
+    /// Torn down explicitly rather than left to ARC (CYBERPUN-17-17): the
+    /// identity assertions in this file compare published elements with
+    /// `===`, so a container/host pair left to be deallocated implicitly -
+    /// possibly after the next test method has already started building its
+    /// own fixture in the same process - is exactly the kind of residue a
+    /// hermetic-fixture bug hides behind. `resetForTesting()` tears every
+    /// mirror down immediately and unconditionally (not just on the lifecycle
+    /// refresh points production code uses), and removing the views from
+    /// their host severs the last strong reference this test held before the
+    /// instance itself goes away.
     override func tearDown() {
+        containerView?.resetForTesting()
+        containerView?.removeFromSuperview()
+        hostView?.subviews.forEach { $0.removeFromSuperview() }
         hostView = nil
         containerView = nil
         super.tearDown()
@@ -909,6 +922,45 @@ final class AccessibleSKViewTests: XCTestCase {
         scene.dispatchTouch(atScenePoint: scenePoint)
 
         XCTAssertEqual(scene.stateMachine.currentState, .gameplay)
+    }
+
+    /// Regression guard for CYBERPUN-17-17: the same six identity assertions
+    /// in this file broke on two independent, unrelated branches (combat-only
+    /// and pickups-only diffs, neither touching an AX file) purely because
+    /// *other* test classes elsewhere in the suite had constructed their own
+    /// `SKView`/`SKScene` pairs before this family ran - a suite-composition
+    /// hazard, not a defect in either shipped diff.
+    ///
+    /// Rather than depend on file/class execution order (which this suite
+    /// does not control and which is exactly what made the failure look
+    /// unrelated-branch-dependent), this test manufactures that hazard
+    /// directly: it builds and presents an unrelated `SKView`/`SKScene` pair
+    /// - deliberately never touching `AccessibleSKView`,
+    /// `SceneAccessibilityContainerView` or `GameScene` - and lets it be
+    /// deallocated, *before* building this test's own fixture and repeating
+    /// one of the six identity assertions. If suite growth elsewhere can ever
+    /// again leak into this family, it goes red here regardless of where in
+    /// the suite the offending class happens to sit.
+    func test_accessibilityHitTest_survivesAnUnrelatedSKViewAndSceneBuiltFirst() throws {
+        do {
+            let unrelatedScene = SKScene(size: CGSize(width: 123, height: 456))
+            let unrelatedView = SKView(frame: CGRect(x: 0, y: 0, width: 123, height: 456))
+            unrelatedView.presentScene(unrelatedScene)
+            unrelatedView.isPaused = true
+        }
+
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton")
+        let hit = try elementResolved(atContainerPoint: publishedCentre(of: play))
+
+        XCTAssertTrue(
+            hit === play,
+            "an unrelated SKView/SKScene built earlier in the process must not affect this "
+                + "container's own published identity - suite growth elsewhere breaking this "
+                + "family is exactly CYBERPUN-17-17"
+        )
     }
 
     /// The other identity-map assumption: a view frame equal to the scene

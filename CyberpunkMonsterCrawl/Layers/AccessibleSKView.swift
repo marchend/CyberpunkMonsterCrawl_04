@@ -807,4 +807,23 @@ final class SceneAccessibilityContainerView: UIView {
         for mirror in mirrorViews { mirror.removeFromSuperview() }
         mirrorViews = []
     }
+
+    // MARK: - Test seam
+
+    /// Tears every mirror down immediately, bypassing the lifecycle refresh
+    /// points `hitTest(_:with:)` deliberately does not call into.
+    ///
+    /// This container holds no `static`/global state of its own - every
+    /// mirror lives in `mirrorViews`, an instance property - but
+    /// `AccessibleSKViewTests` still calls this from `tearDown()`
+    /// (CYBERPUN-17-17): the identity assertions in that file compare
+    /// published elements with `===`, and a container left to be deallocated
+    /// implicitly, mid-way between two test methods sharing the same process,
+    /// is exactly the kind of residue that a hermetic-fixture bug hides
+    /// behind. Calling this explicitly makes "nothing of this container's is
+    /// still reachable" a fact the next test can rely on rather than an
+    /// accident of ARC timing.
+    func resetForTesting() {
+        removeAllMirrors()
+    }
 }
