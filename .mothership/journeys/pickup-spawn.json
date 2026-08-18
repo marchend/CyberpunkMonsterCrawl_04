@@ -1,0 +1,17 @@
+{
+  "name": "pickup-spawn",
+  "demonstrates": "PickupManager schedules the first pickup spawn ~8s after a run begins (per PickupManagerTests) and each pickup persists for a ~20s lifetime, placed on a street tile clear of adjacent buildings (per the placement-search rules pinned by PickupIntegrationTests). This journey waits ~12s past PLAY (past the 8s first-spawn delay with margin for the placement search and frame timing) and takes a screenshot labelled pickup-spawned, reviewed for a small bobbing med-kit or garbage-can icon rendered over an accent-tinted pad -- the tint sits on the pad only, never on the icon itself -- sitting on a street tile and depth-sorted correctly next to any nearby building (not overlapping or drawn behind it), with med kits and garbage cans visually distinguishable from one another. It then waits a further ~10s (now ~22s past PLAY, inside the pickup's lifetime window and past a plausible player-collection window) and takes a second screenshot labelled pickup-lifecycle, reviewed to confirm the pickup mechanic keeps operating over time (the original pickup still aging/present, replaced, or freshly collected) independent of camera movement, rather than a one-shot spawn that never recurs. Gate is human/vision review of both screenshots; assert_running steps only confirm the app process is still alive. The underlying spawn timing, placement rules, bobbing/tinted rendering, collection and depth-sort behavior are already pinned by PickupManagerTests, PickupNodeTests, PickupIntegrationTests, RaccoonPickupDiversionTests and PlayerHealTests -- this journey exists purely so the runtime probe captures frames late enough for a pickup to actually be on screen, instead of the menu-to-gameplay journey's 5s screenshot which fires well before the first pickup can possibly exist.",
+  "stories": ["CYBERPUN-17-11"],
+  "steps": [
+    {"action": "wait", "seconds": 4},
+    {"action": "assert_running"},
+    {"action": "screenshot", "label": "menu"},
+    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)", "expect": "the running game -- a playable isometric city scene with a ground lattice, buildings and a player actor, not a menu or title screen"},
+    {"action": "wait", "seconds": 12},
+    {"action": "screenshot", "label": "pickup-spawned"},
+    {"action": "assert_running"},
+    {"action": "wait", "seconds": 10},
+    {"action": "screenshot", "label": "pickup-lifecycle"},
+    {"action": "assert_running"}
+  ]
+}
