@@ -302,9 +302,11 @@ final class RaccoonSpawnDirector {
                 // `updateWithDiversion` above -- this only retires the
                 // record. Never `attemptCollectGarbageCan(at:radius:)`,
                 // which would roll a second 1d6 nothing applies (see
-                // `PickupManager.expireConsumedGarbageCan(at:)`'s own doc
-                // comment).
-                pickupManager?.expireConsumedGarbageCan(at: nearestGarbageCan.position)
+                // `PickupManager.expireConsumedGarbageCan(id:)`'s own doc
+                // comment). Retired by `Pickup.id` -- the identity of the
+                // very record queried above -- so no recomputed position
+                // can ever miss it.
+                pickupManager?.expireConsumedGarbageCan(id: nearestGarbageCan.id)
             }
 
             // The contact check the bite trigger always needed a caller

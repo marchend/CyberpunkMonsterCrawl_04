@@ -293,6 +293,22 @@ final class GameScene: SKScene {
             worldSeed: worldSeed,
             obstructionsProvider: { [weak self] in
                 self?.groundPlane?.streaming.residentChunks.values.flatMap(\.buildingPlacements) ?? []
+            },
+            // The real screen-space visibility question, asked with the
+            // helper that already answers it for the raccoon swarm.
+            // `pickupVisibleTileRect()` alone only bounds the *sampling*
+            // window (the bounding box of the visible diamond, ~3.3x the
+            // area the camera actually shows -- see that method's own doc
+            // comment), so without this predicate roughly two spawns in
+            // three would land off camera and the story's "first spawn is
+            // visible in normal play" gate would be a coin flip.
+            isVisibleOnScreen: { [weak self] tile in
+                guard let self else { return false }
+                return RaccoonSpawnDirector.isOnScreen(
+                    tile: tile,
+                    cameraPosition: self.cameraWorldPosition,
+                    viewportSize: self.size
+                )
             }
         )
 
@@ -345,6 +361,12 @@ final class GameScene: SKScene {
             // `startPlayer(at:)` exist rather than assuming nothing needs
             // resetting.
             raccoonSpawnDirector.reset()
+            // ... a fresh set of pickups, for the same reason: without
+            // this, RUN AGAIN would inherit run 1's still-alive pickups
+            // (frozen mid-lifetime, since `updatePickups` is gated on
+            // `.gameplay`), their already-mounted nodes, and whatever was
+            // left of run 1's spawn cadence.
+            startPickups()
             // ... and fresh counters for a fresh run, for the same reason:
             // RUN AGAIN must not report the previous run's kills and
             // infections. (`startPlayer(at:)` above resets the player's own
@@ -610,6 +632,31 @@ final class GameScene: SKScene {
 
     // MARK: - Pickups (`CYBERPUN-17-11` PR 3)
 
+    /// Brings the pickups engine in step with a fresh run, the same way
+    /// `startGroundPlane()` / `startPlayer(at:)` do for the ground and the
+    /// player: `pickupManager.reset(worldSeed:)` drops every pickup left
+    /// over from the previous run and re-arms both kinds' cadence timers at
+    /// their tuned `firstSpawnDelay`, and the immediate `syncPickupNodes()`
+    /// unmounts the now-orphaned `PickupNode`s right here rather than
+    /// leaving last run's icons on screen until the next frame runs.
+    ///
+    /// The manager instance is reset in place, not rebuilt:
+    /// `raccoonSpawnDirector` was handed a reference to it at construction
+    /// (`commonInit()`), so swapping the object would leave the swarm
+    /// querying a detached manager -- the same reason `startPlayer(at:)`
+    /// reuses the mounted `PlayerNode` and calls `resetCombatState()`
+    /// instead of building a second one.
+    ///
+    /// The seed is passed through on every entry (rather than only when it
+    /// changes, as `startGroundPlane()` must, since it owns expensive
+    /// node state) because `worldSeed` is a `var` a per-run seed will one
+    /// day vary: placement validation must classify tiles against the city
+    /// `startGroundPlane()` just streamed, never the previous run's.
+    private func startPickups() {
+        pickupManager.reset(worldSeed: worldSeed)
+        syncPickupNodes()
+    }
+
     /// Advances `pickupManager` by one frame, mounts/unmounts `PickupNode`s
     /// for whatever spawned or expired/was-consumed, and resolves the
     /// player's own med-kit collection on contact.
@@ -641,10 +688,29 @@ final class GameScene: SKScene {
     }
 
     /// The tile-space rectangle `pickupManager.update(deltaTime:visibleRect:)`
-    /// may place a new spawn within this frame: an axis-aligned square in
-    /// tile space, centred on `cameraWorldPosition`, sized so its
+    /// **samples** candidate spawn tiles from this frame: an axis-aligned
+    /// square in tile space, centred on `cameraWorldPosition`, sized so its
     /// screen-space image (a diamond, under `IsometricProjection`'s linear
     /// transform) fully covers the current `size`-sized viewport.
+    ///
+    /// **This is the bounding box of the visible region, not the visible
+    /// region** (PR #38 review). The inverse image of a rectangular
+    /// viewport is a 45-degree-rotated square, so the box strictly
+    /// over-covers it: with `|det J| = 2 * tileHalfWidth * tileHalfHeight
+    /// = 2304`, a 390x844pt viewport shows about `390 * 844 / 2304 = 143`
+    /// tiles-squared while this box spans `(2 * 10.82)^2 = 469` -- roughly
+    /// 70% of the tiles drawn from it are off camera. Sampling from the box
+    /// is deliberate (it is a cheap closed form, and a rejected draw simply
+    /// costs one more of `PickupManager.maxPlacementAttemptsPerSpawn`), but
+    /// it is *not* on its own the "spawns within the visible rect" the
+    /// story asks for: the `isVisibleOnScreen` predicate handed to
+    /// `PickupManager` in `commonInit()` --
+    /// `RaccoonSpawnDirector.isOnScreen(tile:cameraPosition:viewportSize:)`,
+    /// whose own doc comment warns that a tile-space rect does not
+    /// correspond to a screen-space one on this uneven 2:1 projection -- is
+    /// what rejects the off-camera remainder, and
+    /// `PickupIntegrationTests.test_everyPickupMounted_spawnsWhereTheCameraCanSeeIt`
+    /// pins that end to end.
     ///
     /// Derived algebraically, not assumed: `IsometricProjection`'s forward
     /// transform has no translation term, so the *inverse* image of an

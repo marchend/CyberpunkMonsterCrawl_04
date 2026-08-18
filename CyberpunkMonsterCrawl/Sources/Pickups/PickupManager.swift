@@ -65,8 +65,35 @@ final class PickupManager {
     /// again next `update` call rather than looping unboundedly this one.
     static let maxPlacementAttemptsPerSpawn = 64
 
-    private let worldSeed: WorldSeed
+    /// The city seed every candidate tile is classified against
+    /// (`CityLatticeGenerator.classify`). A `var`, not a `let`, because
+    /// `GameScene.worldSeed` is itself a `var` that a per-run seed will one
+    /// day change: `reset(worldSeed:)` re-seeds this instance on each fresh
+    /// `.gameplay` entry, so placement validation can never run against the
+    /// previous run's city while the streamed one is new (PR #38 review).
+    private var worldSeed: WorldSeed
     private let obstructionsProvider: () -> [BuildingPlacementRecord]
+
+    /// Optional screen-space visibility test a candidate tile must also
+    /// pass before it is spawned on (PR #38 review).
+    ///
+    /// `visibleRect` alone is the axis-aligned **bounding box** of the
+    /// visible region in tile space, not the visible region: the inverse
+    /// image of a rectangular viewport under `IsometricProjection`'s 2:1
+    /// transform is a 45-degree-rotated square, so roughly 70% of the box
+    /// is off-camera at a phone viewport. Left unfiltered, most spawns land
+    /// where the player cannot see them, which is exactly what the story's
+    /// "first spawn is visible in normal play" gate asks about. `GameScene`
+    /// passes `RaccoonSpawnDirector.isOnScreen(tile:cameraPosition:
+    /// viewportSize:)` here -- the helper that already answers the
+    /// screen-space question -- so the rect stays the cheap *sampling
+    /// window* and this closure decides actual visibility.
+    ///
+    /// `nil` (the default) accepts any tile inside `visibleRect`, which is
+    /// what every unit test driving this type with a hand-built rect wants;
+    /// nothing about ageing, cadence or the cap changes either way.
+    private let isVisibleOnScreen: ((TileCoordinate) -> Bool)?
+
     private var rng: SplitMix64RandomNumberGenerator
 
     /// Every pickup currently alive: not yet expired by age and not yet
@@ -88,6 +115,10 @@ final class PickupManager {
     ///     backed by a moving `ChunkStreamingManager` can hand over
     ///     `groundPlane.residentObstructions` without this type needing to
     ///     know that type exists.
+    ///   - isVisibleOnScreen: the screen-space visibility predicate a
+    ///     candidate tile must also satisfy -- see that property's own doc
+    ///     comment for why `visibleRect` is not enough on its own. Defaults
+    ///     to `nil` (accept anything inside `visibleRect`).
     ///   - rng: the placement/roll random source. Defaults to a freshly
     ///     seeded generator (real gameplay variety needs no determinism);
     ///     tests inject a fixed seed instead, the same convention
@@ -95,14 +126,47 @@ final class PickupManager {
     init(
         worldSeed: WorldSeed,
         obstructionsProvider: @escaping () -> [BuildingPlacementRecord] = { [] },
+        isVisibleOnScreen: ((TileCoordinate) -> Bool)? = nil,
         rng: SplitMix64RandomNumberGenerator = SplitMix64RandomNumberGenerator(
             seed: UInt64.random(in: UInt64.min...UInt64.max)
         )
     ) {
         self.worldSeed = worldSeed
         self.obstructionsProvider = obstructionsProvider
+        self.isVisibleOnScreen = isVisibleOnScreen
         self.rng = rng
         self.timeUntilNextSpawn = Dictionary(
+            uniqueKeysWithValues: PickupKind.allCases.map { ($0, $0.tuning.firstSpawnDelay) }
+        )
+    }
+
+    // MARK: - Run lifecycle
+
+    /// Returns this manager to its just-constructed state: no active
+    /// pickups, and both kinds' timers re-armed at their own
+    /// `PickupKind.Tuning.firstSpawnDelay` (PR #38 review).
+    ///
+    /// `GameScene` calls this on every fresh `.gameplay` entry, alongside
+    /// `RaccoonSpawnDirector.reset()` / `RunSummaryStats.reset()`, so RUN
+    /// AGAIN cannot inherit the previous run's still-alive pickups (which
+    /// stop ageing on the death screen, where `updatePickups` is gated off)
+    /// nor whatever was left of its cadence. The instance itself is kept
+    /// rather than rebuilt because `RaccoonSpawnDirector` was handed a
+    /// reference to it at construction -- the same reason
+    /// `GameScene.startPlayer(at:)` reuses the mounted `PlayerNode` and
+    /// resets its combat state instead of building a second one.
+    ///
+    /// - Parameter worldSeed: the city seed placement validation should use
+    ///   from now on. Pass the run's current `GameScene.worldSeed`: a seed
+    ///   that has changed since construction means a different city, and
+    ///   validating against the stale one would let a pickup land on a
+    ///   building tile. `nil` keeps the existing seed.
+    func reset(worldSeed newWorldSeed: WorldSeed? = nil) {
+        if let newWorldSeed {
+            worldSeed = newWorldSeed
+        }
+        activePickups.removeAll()
+        timeUntilNextSpawn = Dictionary(
             uniqueKeysWithValues: PickupKind.allCases.map { ($0, $0.tuning.firstSpawnDelay) }
         )
     }
@@ -118,13 +182,14 @@ final class PickupManager {
     ///   - deltaTime: real elapsed seconds since the previous call. Ignored
     ///     (a no-op call) when `<= 0`, the same guard
     ///     `RaccoonSpawnDirector.update` uses.
-    ///   - visibleRect: the **tile-space** rectangle pickups may be placed
-    ///     within -- e.g. the camera's current viewport expressed in tile
-    ///     space (`origin`/`size` in tile units, not screen points). A
-    ///     future scene-wiring PR derives this from the live camera the same
-    ///     way `RaccoonSpawnDirector.isOnScreen` derives its own
-    ///     screen-space check; nothing in this type assumes how that
-    ///     derivation is done, and this value is consulted only while
+    ///   - visibleRect: the **tile-space** rectangle candidate spawn tiles
+    ///     are sampled from (`origin`/`size` in tile units, not screen
+    ///     points). This is a sampling *window*, not a statement that every
+    ///     tile in it is on camera: `GameScene.pickupVisibleTileRect()`
+    ///     passes the axis-aligned bounding box of the visible diamond, and
+    ///     the `isVisibleOnScreen` predicate handed to `init` is what
+    ///     rejects the off-camera remainder. Nothing in this type assumes
+    ///     how either is derived, and this value is consulted only while
     ///     searching for a spawn location -- never used to age or expire an
     ///     already-placed pickup (see this type's own doc comment).
     func update(deltaTime: TimeInterval, visibleRect: CGRect) {
@@ -202,8 +267,8 @@ final class PickupManager {
         return activePickups[index]
     }
 
-    /// Retires the active garbage can at exactly `position`, **without**
-    /// rolling `PickupKind.garbageCan`'s dice again (`CYBERPUN-17-11`
+    /// Retires the active garbage can with `id`, **without** rolling
+    /// `PickupKind.garbageCan`'s dice again (`CYBERPUN-17-11`
     /// PR 3) -- the wounded-raccoon diversion path
     /// (`RaccoonSeekBehavior.updateWithDiversion(...)`) already rolled and
     /// applied that can's 1d6 itself, on the raccoon, the instant it
@@ -213,17 +278,27 @@ final class PickupManager {
     /// second 1d6 that nothing applies -- exactly the double-roll this
     /// type's own PR2 note warns a wiring caller away from.
     ///
-    /// `position` must be the exact `Pickup.position` a prior
-    /// `nearestGarbageCan(within:of:)` call reported for this same can --
-    /// not an independently-computed point -- since the lookup here is an
-    /// exact (zero-radius) match, the same tolerance
-    /// `isOccupiedByActivePickup(_:)` uses for its own rounded-tile
-    /// equality check. Returns whether a matching, still-active garbage can
-    /// was actually found and retired; `false` is a no-op (already
-    /// retired, or nothing was ever there).
+    /// Keyed on `Pickup.id` -- the identity a prior
+    /// `nearestGarbageCan(within:of:)` call already handed the caller --
+    /// rather than on that can's position (PR #38 review). The earlier
+    /// position-keyed spelling matched on **exact floating-point equality**
+    /// of both axes (a zero-radius nearest-match), so a caller that passed
+    /// an independently recomputed or rounded tile got a silent `false` and
+    /// the can never retired. That is *not* the tolerance
+    /// `isOccupiedByActivePickup(_:)` applies to its own rounded-tile
+    /// comparison, which forgives any sub-half-tile error; an id lookup
+    /// makes the "must be this exact record" requirement structurally
+    /// impossible to get wrong instead of documented-against, the same
+    /// discipline `IsometricProjection`'s header states for `TilePoint`.
+    ///
+    /// Returns whether a matching, still-active garbage can was actually
+    /// found and retired; `false` is a no-op (already retired, expired by
+    /// age in between, or never there).
     @discardableResult
-    func expireConsumedGarbageCan(at position: TilePoint) -> Bool {
-        guard let index = nearestActiveIndex(kind: .garbageCan, of: position, within: 0) else { return false }
+    func expireConsumedGarbageCan(id: UUID) -> Bool {
+        guard let index = activePickups.firstIndex(where: {
+            $0.id == id && $0.kind == .garbageCan && !$0.isConsumed
+        }) else { return false }
         activePickups[index].isConsumed = true
         return true
     }
@@ -278,7 +353,10 @@ final class PickupManager {
     /// A candidate tile is legal when: it is still inside `visibleRect`
     /// (rounding a random draw to the nearest whole tile can only ever move
     /// it *toward* the sampled range's own bounds, but the check is made
-    /// explicit rather than assumed), it classifies as a street kind
+    /// explicit rather than assumed), it passes `isVisibleOnScreen` when
+    /// one was supplied (the rect is only the bounding box of the visible
+    /// region -- see that property's own doc comment), it classifies as a
+    /// street kind
     /// (`isStreetKind`), no already-active pickup occupies it
     /// (`isOccupiedByActivePickup`), and the tile itself plus every one of
     /// its 8 neighbours is free of any building footprint.
@@ -294,6 +372,11 @@ final class PickupManager {
     /// future placement pass reserving a tile the lattice calls street.
     private func isLegalPlacement(_ tile: TileCoordinate, visibleRect: CGRect) -> Bool {
         guard visibleRect.contains(CGPoint(x: CGFloat(tile.tileX), y: CGFloat(tile.tileY))) else { return false }
+
+        // The rect is a strict superset of what the camera actually shows
+        // (a rotated square's bounding box), so ask the screen-space
+        // predicate too when the caller supplied one.
+        if let isVisibleOnScreen, !isVisibleOnScreen(tile) { return false }
 
         let info = CityLatticeGenerator.classify(tileX: tile.tileX, tileY: tile.tileY, seed: worldSeed)
         guard Self.isStreetKind(info.kind) else { return false }

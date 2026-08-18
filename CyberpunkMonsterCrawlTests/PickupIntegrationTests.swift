@@ -285,4 +285,130 @@ final class PickupIntegrationTests: XCTestCase {
             "consuming the garbage can must heal the raccoon, through the real RaccoonSpawnDirector call site"
         )
     }
+
+    // MARK: - A pickup that ages out is unmounted, not left as visible debris
+
+    /// The consumed half of `GameScene.syncPickupNodes()`'s unmount branch is
+    /// covered by the med-kit test above; this pins the *age-expiry* half
+    /// (PR #38 review) -- the path that leaves a stale icon on the ground if
+    /// it regresses, uncollectable forever since collection goes through the
+    /// manager. It also gives the story's "lifetime >= 15s / expires by age"
+    /// AC an assertion through the live scene rather than only inside
+    /// `PickupManagerTests`.
+    func test_aPickupThatReachesItsLifetime_hasItsMountedNodeUnmounted() throws {
+        let scene = makeGameplayScene()
+        let spawnTile = try XCTUnwrap(scene.playerWorldPosition)
+
+        // Forced onto the guaranteed-street crossing around the run's own
+        // spawn tile (this file's `crossingVisibleRect` doc comment), and a
+        // garbage can specifically: nothing in this scenario consumes one
+        // (no raccoon here is ever wounded, and the player never collects
+        // one), so age is the only thing that can retire it.
+        scene.pickupManager.update(
+            deltaTime: PickupKind.garbageCan.tuning.firstSpawnDelay,
+            visibleRect: crossingVisibleRect(around: spawnTile)
+        )
+        let garbageCan = try XCTUnwrap(
+            scene.pickupManager.activePickups.first { $0.kind == .garbageCan },
+            "sanity: the 3x3 street crossing around the run's own spawn tile must always be a legal placement"
+        )
+
+        // One live frame mounts it -- `syncPickupNodes()` runs even on the
+        // zero-delta first frame.
+        scene.update(1)
+        let mountedNode = try XCTUnwrap(
+            mountedPickupNodes(scene).first { $0.kind == .garbageCan },
+            "sanity: the forced garbage can must be mounted by the first live frame"
+        )
+        XCTAssertTrue(mountedNode.parent === scene.worldLayer)
+
+        // Past `PickupKind.Tuning.lifetime` (20s).
+        advance(scene, seconds: 22, startingAt: 1)
+
+        XCTAssertFalse(
+            scene.pickupManager.activePickups.contains { $0.id == garbageCan.id },
+            "a pickup that reaches its kind's lifetime must be pruned from activePickups"
+        )
+        XCTAssertNil(
+            mountedNode.parent,
+            "the expired pickup's PickupNode must be removed from worldLayer -- an icon that outlives its record is "
+                + "debris no player can ever collect"
+        )
+        XCTAssertFalse(
+            mountedPickupNodes(scene).contains { $0 === mountedNode },
+            "the expired pickup's node must no longer be among the scene's mounted pickups"
+        )
+    }
+
+    // MARK: - Spawns land where the camera can actually see them
+
+    /// `GameScene.pickupVisibleTileRect()` is the axis-aligned bounding box
+    /// of the visible diamond, so roughly 70% of the tiles it samples are
+    /// off camera (PR #38 review). The `isVisibleOnScreen` predicate handed
+    /// to `PickupManager` in `commonInit()` is what rejects those; this
+    /// audits the end result against the same screen-space definition
+    /// `RaccoonSpawnDirector`'s own off-screen spawn guarantee is tested
+    /// with, rather than merely asserting a node is mounted.
+    func test_everyPickupMounted_spawnsWhereTheCameraCanSeeIt() {
+        let scene = makeGameplayScene()
+
+        // No stick input, so the camera never leaves the run's spawn tile:
+        // every node below was placed against the very camera position it
+        // is being audited against here.
+        advance(scene, seconds: 12)
+
+        let mounted = mountedPickupNodes(scene)
+        XCTAssertGreaterThan(mounted.count, 0, "sanity: 12s of gameplay frames must mount at least one pickup")
+
+        for node in mounted {
+            let tile = IsometricProjection.screenToTile(node.position)
+            XCTAssertTrue(
+                RaccoonSpawnDirector.isOnScreen(
+                    tile: TileCoordinate(tileX: Int(tile.x.rounded()), tileY: Int(tile.y.rounded())),
+                    cameraPosition: scene.cameraWorldPosition,
+                    viewportSize: scene.size
+                ),
+                "a spawned pickup must be inside the viewport, not merely inside the bounding box of the visible "
+                    + "diamond -- the story's first-spawn gate is about what the player can see"
+            )
+        }
+    }
+
+    // MARK: - RUN AGAIN starts with a clean pickups engine
+
+    func test_runAgain_resetsThePickupsEngine_andDoesNotInheritTheLastRunsPickups() {
+        let scene = makeGameplayScene()
+        let afterRun = advance(scene, seconds: 12)
+        XCTAssertGreaterThan(mountedPickupNodes(scene).count, 0, "sanity: run 1 must have mounted at least one pickup")
+
+        XCTAssertTrue(scene.stateMachine.transition(to: .death))
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+
+        XCTAssertTrue(
+            scene.pickupManager.activePickups.isEmpty,
+            "re-entering .gameplay must reset the pickups engine, exactly as it resets the swarm/stats/player -- run "
+                + "1's pickups stop ageing on the death screen (updatePickups is gated on .gameplay), so an inherited "
+                + "one would sit on run 2's ground scattered along last run's path"
+        )
+        XCTAssertTrue(
+            mountedPickupNodes(scene).isEmpty,
+            "run 1's PickupNodes must be unmounted at the transition itself, not left visible until some later frame"
+        )
+
+        // Run 2's cadence is re-armed from the top rather than inheriting
+        // whatever was left of run 1's: nothing may spawn before the tuned
+        // first-spawn delay.
+        let beforeFirstSpawn = PickupKind.medKit.tuning.firstSpawnDelay - 2
+        let afterQuietWindow = advance(scene, seconds: beforeFirstSpawn, startingAt: afterRun)
+        XCTAssertTrue(
+            mountedPickupNodes(scene).isEmpty,
+            "run 2 must wait its own full firstSpawnDelay -- a carried-over timer would spawn early"
+        )
+
+        advance(scene, seconds: 12, startingAt: afterQuietWindow)
+        XCTAssertGreaterThan(
+            mountedPickupNodes(scene).count, 0,
+            "spawning must resume on a new run, not latch off after the first death"
+        )
+    }
 }
