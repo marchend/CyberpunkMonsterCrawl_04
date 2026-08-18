@@ -20,7 +20,40 @@ import SpriteKit
 /// **Scope of this PR.** Node lifecycle only: claiming/returning a
 /// `BulletNode` and reconfiguring it in place. Nothing here decides when a
 /// bullet is fired (`WeaponFiringController`, PR 1) or releases a bullet on
-/// impact/off-screen -- both are the later scene-wiring PR's job.
+/// impact/off-screen.
+///
+/// **Mounting precondition: the caller MUST own a release path.** This is a
+/// hard contract, not a nicety, and it is stated here because the failure is
+/// silent. `acquire` returns `nil` once every node is on loan, so a caller
+/// that mounts this pool without calling `release(_:)` on impact and on
+/// leaving the screen gets `capacity` bullets that stay `isHidden == false`
+/// forever, a permanently exhausted pool, and *every subsequent shot drawing
+/// nothing* -- with no crash, no log, and a green suite, because the tests
+/// in `BulletPoolTests` release by hand. That exhausted state is now pinned
+/// by `BulletPoolTests`
+/// `.test_aCallerWithNoReleasePath_permanentlyExhaustsThePool`, so the
+/// consequence is asserted rather than merely described: whoever mounts this
+/// can read what breaks if they skip the release path.
+///
+/// **Why this slice lands with no production caller -- and what that
+/// costs.** Nothing in this PR constructs a `BulletPool`, a `BulletNode`, a
+/// `HitEffects` or a `WeaponOverlayRenderer`: `GameScene` is untouched, so a
+/// device build still shows no bullet. That is the same shape PR #34 review
+/// rejected for `BiteComponent`, and `GroundTileRenderer`'s doc records the
+/// repo rule it comes from ("a factory with no production caller is exactly
+/// the shape of feature that never gets switched on"). The blocker is the
+/// one `WeaponFiringController`'s own doc comment already records: a real
+/// caller needs the per-frame `[TargetSelection.Candidate]` array built from
+/// `RaccoonSpawnDirector`'s live swarm, whose `ActiveRaccoon` bookkeeping is
+/// still `private` to that type and still owned by the raccoon-swarm story.
+///
+/// The wiring + release path is therefore still deferred, and deliberately
+/// **not** cited here as a ticket ID: none has been filed, and this codebase
+/// does not reference invented ticket IDs (`WeaponFiringController` states
+/// the same rule for the same reason). Filing it is a human call, so it is
+/// requested on this story's task record (`CYBERPUN-17-9-t2`) and in PR #42's
+/// review thread; when that ticket exists, this paragraph and
+/// `WeaponFiringController`'s should cite it in place of "the wiring PR".
 final class BulletPool {
 
     /// This pool's fixed capacity -- the maximum number of bullets that can
@@ -68,13 +101,21 @@ final class BulletPool {
     /// simultaneous bullets; a caller that gets `nil` simply drops that
     /// shot's visual bullet (the decision layer's fire-rate/range gating
     /// already keeps this a rare, bounded case rather than a normal one).
+    ///
+    /// `spriteKitShotVector` names the space it is in, the same way
+    /// `BulletNode.angle(forSpriteKitShotVector:)` does: a tile-space caller
+    /// converts via `BulletNode.angle(fromTileOrigin:toTileTarget:)`'s
+    /// transform rather than handing a raw tile delta to this seam.
+    ///
+    /// **A caller that never calls `release(_:)` exhausts this pool
+    /// permanently** -- see the type's own doc comment.
     @discardableResult
-    func acquire(origin: CGPoint, direction: CGVector, tier: WeaponTier) -> BulletNode? {
+    func acquire(origin: CGPoint, spriteKitShotVector: CGVector, tier: WeaponTier) -> BulletNode? {
         guard let freeNode = nodes.first(where: { !activeIdentifiers.contains(ObjectIdentifier($0)) }) else {
             return nil
         }
 
-        freeNode.configure(tier: tier, position: origin, shotVector: direction)
+        freeNode.configure(tier: tier, position: origin, spriteKitShotVector: spriteKitShotVector)
         freeNode.isHidden = false
         activeIdentifiers.insert(ObjectIdentifier(freeNode))
         return freeNode

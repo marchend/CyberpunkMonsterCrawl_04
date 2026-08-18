@@ -19,16 +19,45 @@ import SpriteKit
 /// `ChunkStreamingManager`/`GroundPlaneStreamer` and
 /// `RaccoonSpawnDirector`/`RaccoonNode`.
 ///
-/// **Column ordering.** `sprite_player_weapons` authors real art for every
-/// one of its 8 columns -- unlike `sprite_player_walk`, which authors only
-/// 5 rows directly and mirrors the rest (`PlayerSpriteSheet
-/// .rowMappingTable`) -- so there is no measured mirror pairing to re-derive
-/// here the way `PlayerSpriteSheetTests` does for the walk sheet. Columns
-/// follow `Direction8.allCases`'s own declared order (south, southeast,
-/// east, northeast, north, northwest, west, southwest): a naming convention
-/// this file and `WeaponOverlayRendererTests` pin together, not a fact
-/// re-derived from the shipped art (there is nothing to measure -- every
-/// column is real, unmirrored art).
+/// **Column ordering.** Columns follow `Direction8.allCases`'s own declared
+/// order (south, southeast, east, northeast, north, northwest, west,
+/// southwest).
+///
+/// **Every column carries its own art -- measured, and not what PR 2 first
+/// claimed.** `AtlasSheet.playerWeapons` pins only the grid (288x120 /
+/// 36x40 -- *that* there are 8 columns, never what is in them), so what the
+/// columns hold is a claim about the shipped PNG and is re-decoded from the
+/// pixels at test time, the way `PlayerSpriteSheetTests`,
+/// `AtlasGroundDiamondTests` and `RooftopSignSpriteAlignmentTests` already
+/// do for their sheets. Two measurements, in `WeaponOverlayRendererTests`:
+///
+/// - `.test_everyWeaponCell_carriesAuthoredArt_andNoWestColumnIsAnUnflippedCopyOfItsEast`
+///   -- every one of the 24 cells holds at least one opaque pixel (an empty
+///   column would draw an invisible gun for that facing/tier), and no west
+///   column is an unflipped copy of its east counterpart (which would draw
+///   an east-pointing gun on a west-facing body).
+/// - `.test_theWestColumns_areHorizontalFlipsOfTheirEastCounterparts` --
+///   for every tier row, columns 5/6/7 (northwest/west/southwest) measure as
+///   the **horizontal flips** of columns 3/2/1 (northeast/east/southeast).
+///
+/// That second result is the correction: this file originally stated, by
+/// convention rather than measurement, that all 8 columns were "real,
+/// unmirrored art" and that there was "nothing to measure". The sheet is in
+/// fact mirror-authored, the same way `sprite_player_walk` is
+/// (`PlayerSpriteSheet.rowMappingTable`). It renders correctly anyway --
+/// each west column already holds a west-posed gun, so the overlay must
+/// draw it *unflipped*, which is exactly what the flip-cancellation below
+/// produces -- but the reason stated here is now the measured one.
+/// `test_everyTierDirectionPair_resolvesADistinctTexture` could never have
+/// seen any of this: it compares `ObjectIdentifier`s of distinct `SKTexture`
+/// crops, which differ whether or not the pixels underneath are empty or
+/// duplicated.
+///
+/// What the scan deliberately does *not* claim: which column is which
+/// compass facing. No pixel measurement can settle "column 3 is
+/// northeast" -- that stays a naming convention this file and
+/// `WeaponOverlayRendererTests` pin together, and the scan's job is to rule
+/// out the two failure modes that convention cannot detect.
 ///
 /// **Same cell, same anchor.** `overlay.size`/`overlay.anchorPoint` are
 /// copied from `body` once, at construction, and never re-derived per
@@ -40,11 +69,28 @@ import SpriteKit
 /// for the three facings `PlayerSpriteSheet` produces by flipping a
 /// directly-authored row (southwest/west/northwest) rather than by
 /// authoring new art. Because `overlay` is a *child* of `body`, it would
-/// inherit that flip -- but `sprite_player_weapons` has real, unmirrored
-/// art for those same three directions, so a double negative would render
-/// backwards weapon art. `update(tier:direction:)` reads the body's
-/// *current* `xScale` sign each call and sets `overlay.xScale` to match it,
-/// canceling the inherited flip back out to a net, always-unmirrored `+1`.
+/// inherit that flip -- and `sprite_player_weapons` ships each of those three
+/// columns already posed for its own facing (measured: they are the
+/// horizontal flips of their east counterparts, see above), so inheriting
+/// the body's `-1` would flip a west-posed gun back to pointing east on a
+/// west-facing body. `overlay.xScale` therefore cancels the inherited flip
+/// back out to a net, always-unmirrored `+1`, drawing every column exactly
+/// as authored.
+///
+/// **Where that cancellation's sign comes from.** From
+/// `PlayerSpriteSheet.xScale(for:)` -- the accessor on `rowMappingTable`,
+/// the documented *single owning* `Direction8 -> (row, mirrored)` table --
+/// applied to the `direction` this type is handed, **not** read back off
+/// `body.xScale`'s sign. Same value either way, but sourcing it from the
+/// table removes a frame-ordering dependency:
+/// `PlayerNode.update(deltaTime:movementVector:)` is what writes
+/// `body.xScale`, so a scene-wiring caller that drives this renderer before
+/// the body -- or that changes facing without a movement vector, since
+/// `PlayerNode` keeps `facing` across `.zero` vectors -- would otherwise get
+/// one frame of overlay flipped against the texture it is showing. Since
+/// both `init` and `update(tier:direction:)` already take `direction`
+/// explicitly, the table's answer is self-consistent regardless of call
+/// order within the frame.
 final class WeaponOverlayRenderer {
 
     /// The live overlay node, parented as a child of `body` at
@@ -65,11 +111,6 @@ final class WeaponOverlayRenderer {
     private(set) var tier: WeaponTier
     private(set) var direction: Direction8
 
-    /// Weak so this type never keeps the body sprite alive on its own --
-    /// the overlay is already a *child* of `body`, so `body`'s own strong
-    /// reference (its `PlayerNode` owner) is what keeps both alive.
-    private weak var body: SKSpriteNode?
-
     /// - Parameters:
     ///   - body: the player's body sprite. The overlay is added as its
     ///     child, sized and anchored identically, and left at `position ==
@@ -77,7 +118,6 @@ final class WeaponOverlayRenderer {
     ///   - tier: initial weapon tier shown.
     ///   - direction: initial facing shown.
     init(body: SKSpriteNode, tier: WeaponTier, direction: Direction8) {
-        self.body = body
         self.tier = tier
         self.direction = direction
 
@@ -88,7 +128,7 @@ final class WeaponOverlayRenderer {
 
         body.addChild(overlay)
         PixelCrispness.apply(to: overlay)
-        overlay.xScale = body.xScale < 0 ? -1 : 1
+        overlay.xScale = PlayerSpriteSheet.xScale(for: direction)
     }
 
     /// Swaps the visible texture for `tier`/`direction`, without touching
@@ -99,9 +139,7 @@ final class WeaponOverlayRenderer {
         self.tier = tier
         self.direction = direction
         overlay.texture = Self.texture(tier: tier, direction: direction)
-        if let body = body {
-            overlay.xScale = body.xScale < 0 ? -1 : 1
-        }
+        overlay.xScale = PlayerSpriteSheet.xScale(for: direction)
     }
 
     /// This direction's column within `AtlasSheet.playerWeapons`'s 8-column

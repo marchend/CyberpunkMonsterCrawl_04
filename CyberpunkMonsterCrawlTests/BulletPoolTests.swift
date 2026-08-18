@@ -14,9 +14,9 @@ final class BulletPoolTests: XCTestCase {
         let parent = SKNode()
         let pool = BulletPool(capacity: 3, parent: parent)
 
-        let first = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)
-        let second = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)
-        let third = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)
+        let first = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun)
+        let second = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun)
+        let third = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun)
 
         XCTAssertNotNil(first)
         XCTAssertNotNil(second)
@@ -24,7 +24,7 @@ final class BulletPoolTests: XCTestCase {
         XCTAssertEqual(pool.activeCount, 3)
 
         // The pool is exhausted: a fourth acquire must not exceed capacity.
-        let fourth = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)
+        let fourth = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun)
         XCTAssertNil(fourth, "acquiring beyond capacity must fail rather than grow the pool.")
         XCTAssertEqual(pool.activeCount, 3, "activeCount must never exceed capacity.")
 
@@ -32,7 +32,7 @@ final class BulletPoolTests: XCTestCase {
         // past capacity either.
         for _ in 0..<10 {
             pool.release(first!)
-            let reacquired = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)
+            let reacquired = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun)
             XCTAssertNotNil(reacquired)
             XCTAssertLessThanOrEqual(pool.activeCount, 3)
         }
@@ -44,18 +44,22 @@ final class BulletPoolTests: XCTestCase {
         let parent = SKNode()
         let pool = BulletPool(capacity: 1, parent: parent)
 
-        let bullet = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)
+        let bullet = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun)
         XCTAssertNotNil(bullet)
         XCTAssertEqual(pool.activeCount, 1)
 
         // Capacity 1, already on loan: nothing free to give.
-        XCTAssertNil(pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun))
+        XCTAssertNil(pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun))
 
         pool.release(bullet!)
         XCTAssertEqual(pool.activeCount, 0)
         XCTAssertTrue(bullet!.isHidden, "a released bullet must be hidden again.")
 
-        let reacquired = pool.acquire(origin: CGPoint(x: 5, y: 5), direction: CGVector(dx: 0, dy: 1), tier: .smg)
+        let reacquired = pool.acquire(
+            origin: CGPoint(x: 5, y: 5),
+            spriteKitShotVector: CGVector(dx: 0, dy: 1),
+            tier: .smg
+        )
         XCTAssertNotNil(reacquired, "a released node must be available for a fresh acquire.")
         XCTAssertEqual(pool.activeCount, 1)
         XCTAssertFalse(reacquired!.isHidden)
@@ -66,7 +70,7 @@ final class BulletPoolTests: XCTestCase {
     func test_doubleRelease_isASafeNoOp() {
         let parent = SKNode()
         let pool = BulletPool(capacity: 2, parent: parent)
-        let bullet = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)!
+        let bullet = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun)!
 
         pool.release(bullet)
         XCTAssertEqual(pool.activeCount, 0)
@@ -77,8 +81,8 @@ final class BulletPoolTests: XCTestCase {
 
         // The freed slot must still be acquirable exactly once (capacity 2,
         // one still free from construction).
-        XCTAssertNotNil(pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun))
-        XCTAssertNotNil(pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun))
+        XCTAssertNotNil(pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun))
+        XCTAssertNotNil(pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun))
         XCTAssertEqual(pool.activeCount, 2)
     }
 
@@ -91,8 +95,55 @@ final class BulletPoolTests: XCTestCase {
         pool.release(foreignNode)
         XCTAssertEqual(pool.activeCount, 0)
 
-        XCTAssertNotNil(pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun))
+        XCTAssertNotNil(pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun))
         XCTAssertEqual(pool.activeCount, 1)
+    }
+
+    // MARK: - The cost of mounting this pool without a release path
+
+    /// `BulletPool` has no release-on-impact/off-screen path of its own -- a
+    /// mounting caller owns it. This pins what that costs if the caller
+    /// skips it, since nothing else in this file can see it: every other
+    /// test here releases by hand, so the suite is green straight through
+    /// the exhausted state.
+    ///
+    /// Measured, not described: after `capacity` shots with no release, the
+    /// pool hands out nothing further and every node stays visible forever,
+    /// so every subsequent shot silently draws no bullet. This is the state
+    /// `BulletPool`'s "mounting precondition" doc paragraph warns about, and
+    /// it fails loudly if a future change makes exhaustion recoverable
+    /// (auto-eviction, growth) without that paragraph being updated.
+    func test_aCallerWithNoReleasePath_permanentlyExhaustsThePool() {
+        let parent = SKNode()
+        let capacity = 4
+        let pool = BulletPool(capacity: capacity, parent: parent)
+
+        for shot in 0..<capacity {
+            XCTAssertNotNil(
+                pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun),
+                "shot \(shot) is within capacity and must be served."
+            )
+        }
+
+        XCTAssertEqual(pool.activeCount, capacity)
+
+        // No release path: every further shot draws nothing, forever.
+        for shot in capacity..<(capacity * 3) {
+            XCTAssertNil(
+                pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: .handgun),
+                "shot \(shot) must be dropped: without a release path the pool never recovers a slot."
+            )
+        }
+
+        XCTAssertEqual(
+            pool.activeCount, capacity,
+            "every node stays on loan: nothing in this type reclaims a bullet on its own."
+        )
+        XCTAssertTrue(
+            parent.children.allSatisfy { !$0.isHidden },
+            "every pool node stays visible forever, which is the on-screen symptom of the missing "
+                + "release path: stuck bullets plus no new ones."
+        )
     }
 
     // MARK: - Bullet texture index matches tier
@@ -102,7 +153,7 @@ final class BulletPoolTests: XCTestCase {
         let pool = BulletPool(capacity: 3, parent: parent)
 
         for tier in WeaponTier.allCases {
-            let bullet = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: tier)
+            let bullet = pool.acquire(origin: .zero, spriteKitShotVector: CGVector(dx: 1, dy: 0), tier: tier)
             XCTAssertNotNil(bullet)
             XCTAssertTrue(
                 bullet!.texture === BulletNode.texture(forTier: tier),
@@ -128,7 +179,11 @@ final class BulletPoolTests: XCTestCase {
         let parent = SKNode()
         let pool = BulletPool(capacity: 1, parent: parent)
 
-        let rightwardBullet = pool.acquire(origin: .zero, direction: CGVector(dx: 1, dy: 0), tier: .handgun)!
+        let rightwardBullet = pool.acquire(
+            origin: .zero,
+            spriteKitShotVector: CGVector(dx: 1, dy: 0),
+            tier: .handgun
+        )!
         XCTAssertEqual(rightwardBullet.zRotation, 0, accuracy: 1e-6, "screen-right must match the authored, unrotated pose.")
         pool.release(rightwardBullet)
 
@@ -138,20 +193,71 @@ final class BulletPoolTests: XCTestCase {
         // away from the `Double` value of `.pi`. That is a representation
         // artifact, not a rotation error, so the accuracy is sized to
         // float32's own precision at this magnitude (~1e-6) rather than 1e-9.
-        let leftwardBullet = pool.acquire(origin: .zero, direction: CGVector(dx: -1, dy: 0), tier: .handgun)!
+        let leftwardBullet = pool.acquire(
+            origin: .zero,
+            spriteKitShotVector: CGVector(dx: -1, dy: 0),
+            tier: .handgun
+        )!
         XCTAssertEqual(
             abs(leftwardBullet.zRotation), .pi, accuracy: 1e-6,
             "a shot to screen-left must be rotated exactly 180 degrees from the authored screen-right art."
         )
     }
 
-    func test_angleForShotVector_matchesSpriteKitsOwnRotationConvention() {
+    func test_angleForSpriteKitShotVector_matchesSpriteKitsOwnRotationConvention() {
         // SpriteKit: zero at east, counter-clockwise positive, y-up.
-        XCTAssertEqual(BulletNode.angle(forShotVector: CGVector(dx: 1, dy: 0)), 0, accuracy: 1e-9)
-        XCTAssertEqual(BulletNode.angle(forShotVector: CGVector(dx: 0, dy: 1)), .pi / 2, accuracy: 1e-9)
-        XCTAssertEqual(abs(BulletNode.angle(forShotVector: CGVector(dx: -1, dy: 0))), .pi, accuracy: 1e-9)
-        XCTAssertEqual(BulletNode.angle(forShotVector: CGVector(dx: 0, dy: -1)), -.pi / 2, accuracy: 1e-9)
-        XCTAssertEqual(BulletNode.angle(forShotVector: .zero), 0, accuracy: 1e-9)
+        XCTAssertEqual(BulletNode.angle(forSpriteKitShotVector: CGVector(dx: 1, dy: 0)), 0, accuracy: 1e-9)
+        XCTAssertEqual(BulletNode.angle(forSpriteKitShotVector: CGVector(dx: 0, dy: 1)), .pi / 2, accuracy: 1e-9)
+        XCTAssertEqual(
+            abs(BulletNode.angle(forSpriteKitShotVector: CGVector(dx: -1, dy: 0))), .pi, accuracy: 1e-9
+        )
+        XCTAssertEqual(
+            BulletNode.angle(forSpriteKitShotVector: CGVector(dx: 0, dy: -1)), -.pi / 2, accuracy: 1e-9
+        )
+        XCTAssertEqual(BulletNode.angle(forSpriteKitShotVector: .zero), 0, accuracy: 1e-9)
+    }
+
+    // MARK: - Tile-space callers get the conversion, not an unlabelled seam
+
+    /// The tile-space overload owns the tile -> screen transform, so the
+    /// mount PR (whose shot arrives as two `TilePoint`s from
+    /// `WeaponFiringController.onFire`) cannot feed tile components into a
+    /// SpriteKit-space `atan2`.
+    ///
+    /// These cases are discriminating, not decorative: on the 2:1 isometric
+    /// lattice `IsometricProjection` defines, a tile delta of `(1, -1)`
+    /// projects to due screen-**east** and `(1, 1)` to due screen-**north**,
+    /// while a naive `atan2` over the raw tile components would answer
+    /// `-pi/4` and `+pi/4`. A tile delta is sheared into screen space, not
+    /// merely y-flipped, so the error is not confined to north/south.
+    func test_angleFromTileOrigin_projectsThroughTheIsometricTransform() {
+        let origin = TilePoint(x: 0, y: 0)
+
+        XCTAssertEqual(
+            BulletNode.angle(fromTileOrigin: origin, toTileTarget: TilePoint(x: 1, y: -1)),
+            0, accuracy: 1e-9,
+            "tile delta (1, -1) projects to due screen-east, which is the authored, unrotated pose."
+        )
+        XCTAssertEqual(
+            BulletNode.angle(fromTileOrigin: origin, toTileTarget: TilePoint(x: 1, y: 1)),
+            .pi / 2, accuracy: 1e-9,
+            "tile delta (1, 1) projects to due screen-north (+y in SpriteKit)."
+        )
+        XCTAssertEqual(
+            abs(BulletNode.angle(fromTileOrigin: origin, toTileTarget: TilePoint(x: -1, y: 1))),
+            .pi, accuracy: 1e-9,
+            "tile delta (-1, 1) projects to due screen-west, 180 degrees from the authored art."
+        )
+        XCTAssertEqual(
+            BulletNode.angle(fromTileOrigin: origin, toTileTarget: TilePoint(x: -1, y: -1)),
+            -.pi / 2, accuracy: 1e-9,
+            "tile delta (-1, -1) projects to due screen-south (-y in SpriteKit)."
+        )
+        XCTAssertEqual(
+            BulletNode.angle(fromTileOrigin: origin, toTileTarget: origin),
+            0, accuracy: 1e-9,
+            "origin == target carries no heading, matching the zero-vector contract."
+        )
     }
 
     // MARK: - configure never changes the measured 16x16 cell size
@@ -160,7 +266,11 @@ final class BulletPoolTests: XCTestCase {
         let bullet = BulletNode(tier: .handgun)
         let originalSize = bullet.size
 
-        bullet.configure(tier: .assaultRifle, position: CGPoint(x: 10, y: 10), shotVector: CGVector(dx: 0, dy: 1))
+        bullet.configure(
+            tier: .assaultRifle,
+            position: CGPoint(x: 10, y: 10),
+            spriteKitShotVector: CGVector(dx: 0, dy: 1)
+        )
 
         XCTAssertEqual(bullet.size, originalSize)
     }
