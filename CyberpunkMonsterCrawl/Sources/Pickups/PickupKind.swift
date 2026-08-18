@@ -55,8 +55,9 @@ enum PickupKind: CaseIterable, Equatable, Hashable {
         /// exercised path.
         ///
         /// Recorded here rather than left for a reader to infer, because
-        /// `PickupManagerTests.test_maxAlivePerKind_isNeverExceeded` would
-        /// otherwise read as coverage of a cap it never reaches. That test
+        /// `PickupManagerTests`'
+        /// `test_maxAlivePerKind_isNeverExceeded_andTheObservedCeilingIsPinned`
+        /// would otherwise read as coverage of a cap it never reaches. That test
         /// carries an anti-vacuity guard (the shape
         /// `ChunkStreamingManagerTests`' viewport coverage uses) pinning the
         /// observed ceiling at exactly 1, so a future retune that makes the
