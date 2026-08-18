@@ -180,3 +180,218 @@ enum RaccoonSeekBehavior {
         return CGVector(dx: screenPoint.x, dy: screenPoint.y)
     }
 }
+
+// MARK: - Wounded-raccoon garbage-can diversion (`CYBERPUN-17-11` PR 2)
+//
+// The consumer-side half of the garbage-can pickup: a wounded raccoon
+// (`RaccoonNode.isWounded`, exposed by `CYBERPUN-17-8` precisely for this
+// story to read) within range of one abandons the player, walks to it
+// instead, consumes it for `PickupKind.garbageCan`'s 1d6 (PR 1) once
+// arrived, and resumes seeking the player afterward.
+//
+// **Scope of this PR.** Proven here entirely in isolation from GameScene:
+// `updateWithDiversion(...)` takes a raw `garbageCanPosition: TilePoint?`
+// rather than a live `Pickup`/`PickupManager`. A caller that owns a real
+// `Pickup` should still expire it once `DiversionResult.consumedGarbageCan`
+// comes back `true` -- but the consume effect no longer *depends* on the
+// caller doing so: the raccoon itself records the can it consumed
+// (`RaccoonNode.consumedGarbageCanPosition`), so keeping the same position
+// coming cannot re-roll the heal (PR #37 review).
+//
+// **One roll per can, and the raccoon's steering owns it.** The wiring PR
+// should locate the can with the non-rolling
+// `PickupManager.nearestGarbageCan(within:of:)` query and expire it on the
+// consumed frame -- *not* with `attemptCollectGarbageCan(at:radius:)`,
+// which rolls a second 1d6 that nothing applies. (The med-kit path is the
+// mirror image: there the manager owns the roll and
+// `PlayerNode.heal(_:)` applies it.)
+//
+// Deliberately no shared code with the player's own med-kit consume effect
+// (`PlayerNode+Pickups.swift`) beyond the `PickupKind` tuning table and
+// `DiceSpec.roll(using:)` both read -- per this story's PR2 scope note,
+// which is about the two *effects*, not about copying one dice roller.
+extension RaccoonSeekBehavior {
+
+    /// Tile-space radius within which a wounded raccoon abandons the
+    /// player and diverts toward a garbage-can pickup instead. An initial
+    /// tuning constant -- like `pointsPerSecond` and
+    /// `contactStandoffPoints(forTier:)`, the story defers exact
+    /// difficulty/feel numbers to playtesting.
+    static let garbageCanDiversionRangeTiles: Double = 6.0
+
+    /// Tile-space radius at which a diverted raccoon is considered to have
+    /// arrived at the garbage can and consumes it. Small and fixed rather
+    /// than tier-scaled (unlike `contactStandoffPoints(forTier:)`'s
+    /// player-contact ring) -- a garbage can is a stationary point, not
+    /// another actor's footprint to stand off from.
+    static let garbageCanArrivalRangeTiles: Double = 0.5
+
+    /// The result of one frame's diversion-aware step.
+    struct DiversionResult: Equatable {
+        /// This raccoon's new tile-space position, exactly as plain
+        /// `update(...)` would report for whichever target
+        /// (`seekTarget(...)`) this frame resolved to.
+        let position: TilePoint
+        /// Whether this call rolled and applied the garbage can's 1d6
+        /// consume effect -- `true` on (and only on) the one frame the
+        /// raccoon's resolved `position` first lands within
+        /// `garbageCanArrivalRangeTiles` of `garbageCanPosition`.
+        ///
+        /// The "only on" half is enforced here, not delegated to the
+        /// caller: the arrival frame records the can on
+        /// `RaccoonNode.consumedGarbageCanPosition`, and every later call
+        /// still passing that same position resolves back to the player
+        /// and reports `false` (PR #37 review -- this used to re-fire every
+        /// frame the raccoon sat in the arrival radius, so a caller that
+        /// discarded this `@discardableResult` healed 1d6 *per frame*).
+        ///
+        /// A caller that owns the real `Pickup` should still treat `true`
+        /// as the signal to remove/expire it.
+        let consumedGarbageCan: Bool
+    }
+
+    /// One frame of diversion-aware seek/steer, wrapping plain
+    /// `update(raccoon:currentPosition:playerPosition:obstructions:
+    /// deltaTime:)` with a target resolved by `seekTarget(...)`, then rolls
+    /// the garbage can's consume effect the instant the raccoon arrives.
+    ///
+    /// - Parameters:
+    ///   - garbageCanPosition: the nearest active garbage-can pickup's
+    ///     tile-space position, or `nil` if none exists (or the caller has
+    ///     already treated a prior one as consumed) -- an unwounded
+    ///     raccoon ignores this parameter entirely (see `seekTarget`).
+    ///   - rng: the consume roll's random source, generic and `inout` --
+    ///     the same shape `RabiesStatusEffect.rollInfects(tier:rng:)` uses,
+    ///     so a test can pin the exact roll with a scripted generator.
+    ///
+    /// A dead raccoon (`RaccoonNode.isDead`, i.e. `hp <= 0`) is a complete
+    /// no-op: it neither steers nor consumes, and `currentPosition` comes
+    /// straight back. `isWounded` is `true` at `hp == 0`, so without this
+    /// guard a raccoon whose `die()` had already fired -- kill counted,
+    /// node already `removeFromParent()`-ed -- could still be walked to a
+    /// garbage can and healed back above zero, un-setting `isDead` on a
+    /// node that has left the scene graph (PR #37 review). It is
+    /// `takeDamage(_:)`'s own `guard !isDead` seen from the healing side.
+    @discardableResult
+    static func updateWithDiversion<R: RandomNumberGenerator>(
+        raccoon: RaccoonNode,
+        currentPosition: TilePoint,
+        playerPosition: TilePoint,
+        garbageCanPosition: TilePoint?,
+        obstructions: [CollisionResolver.FootprintBounds],
+        deltaTime: TimeInterval,
+        rng: inout R
+    ) -> DiversionResult {
+        guard !raccoon.isDead else {
+            return DiversionResult(position: currentPosition, consumedGarbageCan: false)
+        }
+
+        // Latch upkeep: the "already consumed" record only ever refers to
+        // the can this raccoon last consumed. The first frame a different
+        // position (or `nil`) arrives, it is stale -- clear it, so a can
+        // that later spawns on the very same tile is still consumable.
+        if raccoon.consumedGarbageCanPosition != garbageCanPosition {
+            raccoon.consumedGarbageCanPosition = nil
+        }
+
+        // The diversion decision itself, rather than `target !=
+        // playerPosition` as a proxy for it: a can sitting on the player's
+        // exact tile used to silently disable consumption (PR #37 review).
+        let divertTo = divertTarget(
+            raccoon: raccoon,
+            currentPosition: currentPosition,
+            garbageCanPosition: garbageCanPosition
+        )
+
+        let resolved = update(
+            raccoon: raccoon,
+            currentPosition: currentPosition,
+            playerPosition: divertTo ?? playerPosition,
+            obstructions: obstructions,
+            deltaTime: deltaTime
+        )
+
+        var consumed = false
+        if let divertTo, tileDistance(resolved, divertTo) <= garbageCanArrivalRangeTiles {
+            consumeGarbageCan(raccoon: raccoon, rng: &rng)
+            raccoon.consumedGarbageCanPosition = divertTo
+            consumed = true
+        }
+
+        return DiversionResult(position: resolved, consumedGarbageCan: consumed)
+    }
+
+    /// This frame's steering target: `garbageCanPosition` when
+    /// `divertTarget(...)` says this raccoon is diverting;
+    /// `playerPosition` in every other case -- including, unconditionally,
+    /// for an unwounded raccoon (step 4 of this PR's plan: "an unwounded
+    /// raccoon's targeting logic is untouched by the new branch").
+    static func seekTarget(
+        raccoon: RaccoonNode,
+        currentPosition: TilePoint,
+        playerPosition: TilePoint,
+        garbageCanPosition: TilePoint?
+    ) -> TilePoint {
+        divertTarget(
+            raccoon: raccoon,
+            currentPosition: currentPosition,
+            garbageCanPosition: garbageCanPosition
+        ) ?? playerPosition
+    }
+
+    /// The garbage can this raccoon is diverting to this frame, or `nil`
+    /// when it is not diverting at all -- the direct, testable form of the
+    /// decision `seekTarget(...)` folds into a target position, and the one
+    /// `updateWithDiversion(...)` consumes. Takes no `playerPosition` on
+    /// purpose: "am I diverting?" must not depend on where the player
+    /// happens to be standing (a can on the player's exact tile once made
+    /// the two indistinguishable).
+    ///
+    /// `nil` unless the raccoon `.isWounded`, is within
+    /// `garbageCanDiversionRangeTiles` of a non-`nil` `garbageCanPosition`,
+    /// and has not already consumed the can at that position
+    /// (`RaccoonNode.consumedGarbageCanPosition`).
+    static func divertTarget(
+        raccoon: RaccoonNode,
+        currentPosition: TilePoint,
+        garbageCanPosition: TilePoint?
+    ) -> TilePoint? {
+        guard !raccoon.isDead, raccoon.isWounded, let garbageCanPosition else { return nil }
+        guard raccoon.consumedGarbageCanPosition != garbageCanPosition else { return nil }
+        guard tileDistance(currentPosition, garbageCanPosition) <= garbageCanDiversionRangeTiles else {
+            return nil
+        }
+        return garbageCanPosition
+    }
+
+    /// Plain tile-space Euclidean distance -- not the screen-space
+    /// distance `contactStandoffPoints`/`isInContact` use, since a garbage
+    /// can's diversion/arrival ranges are defined directly in tile units
+    /// (mirroring `PickupManager.attemptCollect(kind:at:radius:)`'s own
+    /// tile-space radius, the shape a later wiring PR needs to match).
+    private static func tileDistance(_ a: TilePoint, _ b: TilePoint) -> Double {
+        hypot(a.x - b.x, a.y - b.y)
+    }
+
+    /// Rolls `PickupKind.garbageCan.tuning.dice` (1d6, from PR 1) via the
+    /// shared `DiceSpec.roll(using:)` and applies the result directly to
+    /// `raccoon.hp`, capped at `raccoon.maxHP` -- the raccoon-side mirror
+    /// of `PlayerNode.heal(_:)`'s apply-then-cap shape, deliberately not
+    /// shared code with it (see this file's own scope note).
+    ///
+    /// Guarded on `!raccoon.isDead` as well as at the
+    /// `updateWithDiversion(...)` entry point: `isWounded` is `true` at
+    /// `hp == 0`, and a heal that resurrects an already-counted,
+    /// already-despawned raccoon is exactly the double-bookkeeping
+    /// `RaccoonNode+Combat.takeDamage(_:)`'s own guard exists to prevent
+    /// (PR #37 review). Returns the amount actually applied -- `0` for a
+    /// dead or already-full raccoon.
+    @discardableResult
+    private static func consumeGarbageCan<R: RandomNumberGenerator>(raccoon: RaccoonNode, rng: inout R) -> Int {
+        guard !raccoon.isDead else { return 0 }
+        let roll = PickupKind.garbageCan.tuning.dice.roll(using: &rng)
+        let before = raccoon.hp
+        raccoon.hp = min(raccoon.maxHP, raccoon.hp + roll)
+        return raccoon.hp - before
+    }
+}

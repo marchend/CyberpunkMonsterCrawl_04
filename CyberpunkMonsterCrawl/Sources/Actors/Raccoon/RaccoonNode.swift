@@ -106,6 +106,25 @@ final class RaccoonNode: SKNode {
     /// wounded raccoon.
     var isWounded: Bool { hp < maxHP }
 
+    /// The tile-space position of the garbage can this raccoon most
+    /// recently consumed (`CYBERPUN-17-11`), or `nil` if it has not
+    /// consumed one since it was last handed a different (or no) can.
+    ///
+    /// Owned by `RaccoonSeekBehavior.updateWithDiversion(...)`, which sets
+    /// it on the arrival frame and refuses to divert to \u2014 or consume \u2014 a
+    /// can at that same position again. It lives here, as an ordinary
+    /// stored property beside `hp`/`onDeath`/`runStats` (the shape PR #34
+    /// review settled on for this actor's state), because the steering
+    /// itself is a stateless `enum` namespace: parked in the caller
+    /// instead, the "already consumed" bit is a `@discardableResult` away
+    /// from being dropped, and a caller that drops it heals every
+    /// diverting raccoon 1d6 *per frame* (PR #37 review).
+    ///
+    /// Cleared automatically the first frame a *different* can position (or
+    /// `nil`) is passed, so a raccoon can still consume a second can later
+    /// in the run \u2014 including one that later spawns on the same tile.
+    var consumedGarbageCanPosition: TilePoint?
+
     /// - Parameters:
     ///   - tier: base or elite; fixes `maxHP` and the rendered scale.
     ///   - facing: initial facing; defaults to `.south`, matching
