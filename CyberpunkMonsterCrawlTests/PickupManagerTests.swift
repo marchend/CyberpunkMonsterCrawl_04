@@ -11,11 +11,13 @@ final class PickupManagerTests: XCTestCase {
 
     private func makeManager(
         rngSeed: UInt64 = 1,
-        obstructionsProvider: @escaping () -> [BuildingPlacementRecord] = { [] }
+        obstructionsProvider: @escaping () -> [BuildingPlacementRecord] = { [] },
+        isVisibleOnScreen: ((TileCoordinate) -> Bool)? = nil
     ) -> PickupManager {
         PickupManager(
             worldSeed: seed,
             obstructionsProvider: obstructionsProvider,
+            isVisibleOnScreen: isVisibleOnScreen,
             rng: SplitMix64RandomNumberGenerator(seed: rngSeed)
         )
     }
@@ -406,5 +408,114 @@ final class PickupManagerTests: XCTestCase {
 
         // A read-only query -- the pickup must still be collectable afterward.
         XCTAssertNotNil(manager.attemptCollectGarbageCan(at: position, radius: 0.5))
+    }
+
+    // MARK: - Retiring a raccoon-consumed can, by identity (PR #38 review)
+
+    func test_expireConsumedGarbageCanByID_retiresThatExactRecord_andIsANoOpTheSecondTime() throws {
+        let manager = makeManager(rngSeed: 5)
+        manager.update(deltaTime: 8, visibleRect: crossingVisibleRect(around: knownGoodStreetTile))
+
+        let garbageCan = try XCTUnwrap(manager.activePickups.first { $0.kind == .garbageCan })
+
+        XCTAssertTrue(manager.expireConsumedGarbageCan(id: garbageCan.id))
+        XCTAssertTrue(
+            manager.activePickups.first { $0.id == garbageCan.id }?.isConsumed == true,
+            "the record must be marked consumed in place, pruned by the next update -- never re-rolled"
+        )
+
+        // Already retired: a second call finds nothing, rather than
+        // silently marking some other can.
+        XCTAssertFalse(manager.expireConsumedGarbageCan(id: garbageCan.id))
+        // ...and a med kit's id is never matched by the garbage-can API.
+        let medKit = try XCTUnwrap(manager.activePickups.first { $0.kind == .medKit })
+        XCTAssertFalse(manager.expireConsumedGarbageCan(id: medKit.id))
+        XCTAssertEqual(
+            manager.activePickups.first { $0.id == medKit.id }?.isConsumed, false,
+            "the garbage-can retire API must never consume a med kit, whatever id it is handed"
+        )
+    }
+
+    // MARK: - Screen-space visibility predicate (PR #38 review)
+
+    func test_aCandidateTileRejectedByTheVisibilityPredicate_isNeverSpawnedOn() {
+        let manager = makeManager(rngSeed: 5, isVisibleOnScreen: { _ in false })
+        manager.update(deltaTime: 8, visibleRect: crossingVisibleRect(around: knownGoodStreetTile))
+
+        XCTAssertTrue(
+            manager.activePickups.isEmpty,
+            "visibleRect is only the bounding box of the visible region -- a tile the screen-space predicate rejects "
+                + "must not be spawned on, however legal it is otherwise"
+        )
+    }
+
+    func test_theVisibilityPredicate_isNotConsultedForAlreadyPlacedPickups() {
+        var isVisible = true
+        let manager = makeManager(rngSeed: 5, isVisibleOnScreen: { _ in isVisible })
+        manager.update(deltaTime: 8, visibleRect: crossingVisibleRect(around: knownGoodStreetTile))
+        XCTAssertFalse(manager.activePickups.isEmpty, "sanity: a visible crossing must place at least one pickup")
+        let placed = manager.activePickups.map(\.id)
+
+        // The camera turns away: placement is blocked from here on, but an
+        // already-placed pickup is never re-validated or removed -- age is
+        // the only lifetime clock (this type's own doc comment).
+        isVisible = false
+        manager.update(deltaTime: 1, visibleRect: crossingVisibleRect(around: knownGoodStreetTile))
+
+        XCTAssertEqual(
+            manager.activePickups.map(\.id), placed,
+            "an off-camera pickup must keep ageing on the ground, not be culled by visibility"
+        )
+    }
+
+    // MARK: - Per-run reset (PR #38 review)
+
+    func test_reset_clearsActivePickups_andReArmsBothKindsFirstSpawnDelay() {
+        let manager = makeManager(rngSeed: 5)
+        let rect = crossingVisibleRect(around: knownGoodStreetTile)
+        manager.update(deltaTime: 8, visibleRect: rect)
+        XCTAssertFalse(manager.activePickups.isEmpty, "sanity: run 1 must have spawned something to inherit")
+
+        manager.reset()
+
+        XCTAssertTrue(manager.activePickups.isEmpty, "reset() must drop every pickup left over from the previous run")
+
+        // The cadence is re-armed from the top, not left wherever run 1
+        // stopped: one second short of `firstSpawnDelay` still spawns
+        // nothing.
+        manager.update(deltaTime: PickupKind.medKit.tuning.firstSpawnDelay - 1, visibleRect: rect)
+        XCTAssertTrue(
+            manager.activePickups.isEmpty,
+            "a reset manager must wait the full firstSpawnDelay again, rather than inheriting run 1's remaining timer"
+        )
+
+        manager.update(deltaTime: 1, visibleRect: rect)
+        XCTAssertFalse(manager.activePickups.isEmpty, "the re-armed timer must then elapse and spawn as usual")
+    }
+
+    func test_resetWithANewWorldSeed_validatesPlacementAgainstTheNewCity() {
+        let manager = makeManager(rngSeed: 5)
+        let otherSeed = WorldSeed(rawValue: 0x0C17_5EED)
+        manager.reset(worldSeed: otherSeed)
+
+        // A crossing of the *new* seed's own city: legal only if placement
+        // is now classified against that seed rather than the constructed
+        // one.
+        let newCityTile = RunSpawnSelector.selectSpawnTile(seed: otherSeed)
+        manager.update(deltaTime: 8, visibleRect: crossingVisibleRect(around: newCityTile))
+
+        XCTAssertFalse(
+            manager.activePickups.isEmpty,
+            "after reset(worldSeed:) the manager must classify candidate tiles against the new city"
+        )
+        for pickup in manager.activePickups {
+            let info = CityLatticeGenerator.classify(
+                tileX: Int(pickup.position.x.rounded()),
+                tileY: Int(pickup.position.y.rounded()),
+                seed: otherSeed
+            )
+            XCTAssertNotEqual(info.kind, .buildingFootprint, "a pickup must never be placed on a building tile")
+            XCTAssertNotEqual(info.kind, .lot, "a pickup must only be placed on a street sub-kind")
+        }
     }
 }

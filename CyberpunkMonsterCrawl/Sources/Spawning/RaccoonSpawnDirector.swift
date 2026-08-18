@@ -151,6 +151,17 @@ final class RaccoonSpawnDirector {
     /// infection into it (`BiteComponent` -> `PlayerNode.infect(stats:)`).
     private let stats: RunSummaryStats
 
+    /// The pickups engine (`CYBERPUN-17-11` PR 3), consulted once per live
+    /// raccoon per frame for its nearest garbage can so
+    /// `RaccoonSeekBehavior.updateWithDiversion(...)` can divert a wounded
+    /// raccoon to it and consume it on arrival. `nil` for a director built
+    /// without one (every test that predates this story, and any test that
+    /// only cares about spawn/seek behaviour), in which case every raccoon
+    /// simply seeks the player -- exactly `RaccoonSeekBehavior
+    /// .updateWithDiversion(...)`'s own contract for a `nil`
+    /// `garbageCanPosition`.
+    private let pickupManager: PickupManager?
+
     // MARK: - State
 
     private struct ActiveRaccoon {
@@ -186,18 +197,25 @@ final class RaccoonSpawnDirector {
     ///     recorded into. `GameScene` passes its own per-run instance;
     ///     defaults to a throwaway for tests that assert on spawn cadence
     ///     rather than on counters.
+    ///   - pickupManager: the pickups engine a wounded raccoon's garbage-can
+    ///     diversion queries and consumes from (`CYBERPUN-17-11` PR 3).
+    ///     `GameScene` passes its own single instance; defaults to `nil` so
+    ///     every test predating this story keeps compiling and every
+    ///     raccoon it drives simply seeks the player.
     init(
         worldLayer: SKNode,
         deviceScale: @escaping () -> CGFloat = { 1 },
         rng: SplitMix64RandomNumberGenerator = SplitMix64RandomNumberGenerator(
             seed: UInt64.random(in: UInt64.min...UInt64.max)
         ),
-        stats: RunSummaryStats = RunSummaryStats()
+        stats: RunSummaryStats = RunSummaryStats(),
+        pickupManager: PickupManager? = nil
     ) {
         self.worldLayer = worldLayer
         self.deviceScale = deviceScale
         self.rng = rng
         self.stats = stats
+        self.pickupManager = pickupManager
         self.timeUntilNextSpawn = Self.initialSpawnInterval
     }
 
@@ -252,15 +270,44 @@ final class RaccoonSpawnDirector {
         }
 
         for index in activeRaccoons.indices {
-            let resolved = RaccoonSeekBehavior.update(
-                raccoon: activeRaccoons[index].node,
-                currentPosition: activeRaccoons[index].position,
-                playerPosition: playerPosition,
-                obstructions: obstructions,
-                deltaTime: deltaTime
+            let raccoon = activeRaccoons[index].node
+            let currentPosition = activeRaccoons[index].position
+
+            // `CYBERPUN-17-11` PR 3: query the nearest garbage can within
+            // diversion range *before* stepping this raccoon, so
+            // `updateWithDiversion` can decide whether to divert this same
+            // frame -- `nil` (from either a `nil` pickupManager, meaning no
+            // pickups engine at all, or simply no can in range) resolves to
+            // plain player-seeking, exactly `RaccoonSeekBehavior`'s own
+            // contract for a `nil` `garbageCanPosition`.
+            let nearestGarbageCan = pickupManager?.nearestGarbageCan(
+                within: RaccoonSeekBehavior.garbageCanDiversionRangeTiles,
+                of: currentPosition
             )
+            let diversion = RaccoonSeekBehavior.updateWithDiversion(
+                raccoon: raccoon,
+                currentPosition: currentPosition,
+                playerPosition: playerPosition,
+                garbageCanPosition: nearestGarbageCan?.position,
+                obstructions: obstructions,
+                deltaTime: deltaTime,
+                rng: &rng
+            )
+            let resolved = diversion.position
             activeRaccoons[index].position = resolved
-            applyScreenPosition(resolved, to: activeRaccoons[index].node)
+            applyScreenPosition(resolved, to: raccoon)
+
+            if diversion.consumedGarbageCan, let nearestGarbageCan {
+                // The consume roll already happened inside
+                // `updateWithDiversion` above -- this only retires the
+                // record. Never `attemptCollectGarbageCan(at:radius:)`,
+                // which would roll a second 1d6 nothing applies (see
+                // `PickupManager.expireConsumedGarbageCan(id:)`'s own doc
+                // comment). Retired by `Pickup.id` -- the identity of the
+                // very record queried above -- so no recomputed position
+                // can ever miss it.
+                pickupManager?.expireConsumedGarbageCan(id: nearestGarbageCan.id)
+            }
 
             // The contact check the bite trigger always needed a caller
             // for: the seek above settles a raccoon on
@@ -271,7 +318,6 @@ final class RaccoonSpawnDirector {
             // driving it every frame of sustained contact is correct --
             // it is a no-op until the interval elapses.
             guard let player else { continue }
-            let raccoon = activeRaccoons[index].node
             guard BiteComponent.isInContact(
                 raccoonPosition: resolved,
                 playerPosition: playerPosition,
