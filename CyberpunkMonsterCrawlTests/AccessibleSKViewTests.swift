@@ -73,8 +73,19 @@ final class AccessibleSKViewTests: XCTestCase {
         container.frame = bounds
         host.addSubview(container)
 
-        view.presentScene(scene)
+        // Paused *before* the scene is presented, not after: presenting can
+        // kick off SpriteKit's own update/render scheduling, and pausing
+        // only afterwards leaves a window in which that scheduling can tick
+        // concurrently with the synchronous, main-thread mirror-frame
+        // computation this helper's caller performs immediately below. That
+        // race is invisible on an idle machine (nothing has a chance to fire
+        // before the test's own synchronous reads) but is exactly the kind
+        // of narrow window that flakes under CI load - a real-content
+        // button frame read mid-tick instead of after settling, while a
+        // synthesized marker frame (never SpriteKit-derived) stays
+        // unaffected. Pausing first removes the window entirely.
         view.isPaused = true
+        view.presentScene(scene)
 
         hostView = host
         containerView = container
