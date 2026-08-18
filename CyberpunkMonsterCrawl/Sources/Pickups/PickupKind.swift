@@ -1,0 +1,96 @@
+import Foundation
+
+/// A simple `NdM` dice specification: `count` dice of `sides` faces each,
+/// summed. Carries no dependency on any particular random source --
+/// `PickupManager` rolls it against its own injected generator, the same
+/// separation `RaccoonSpawnDirector`'s pure `selectTier`/`selectSpawnTile`
+/// helpers keep from that type's RNG.
+struct DiceSpec: Equatable {
+    /// Number of dice rolled.
+    let count: Int
+    /// Faces per die.
+    let sides: Int
+
+    /// The inclusive range every roll of this spec can produce:
+    /// `count...(count * sides)`.
+    var range: ClosedRange<Int> { count...(count * sides) }
+}
+
+/// The two ground-pickup kinds a run spawns: a med kit (heals the player)
+/// and a garbage can (a distraction/consume item -- `RaccoonNode.isWounded`'s
+/// own doc comment names the intended later consumer: diverting a wounded
+/// raccoon toward one).
+///
+/// **Scope of `CYBERPUN-17-11` PR 1.** The frozen tuned constants and the
+/// per-kind dice spec live here; nothing in this PR applies a rolled value
+/// to a player's HP or a raccoon's behaviour yet -- `PickupManager
+/// .attemptCollectMedKit`/`attemptCollectGarbageCan` merely report the roll,
+/// exactly the query-API shape a later wiring PR needs.
+enum PickupKind: CaseIterable, Equatable, Hashable {
+    case medKit
+    case garbageCan
+
+    /// One kind's frozen tuning: spawn cadence, concurrency cap, on-ground
+    /// lifetime and roll dice. **Frozen, not a placeholder** -- unlike
+    /// `RaccoonSpawnDirector`'s own tunables (explicitly expected to move in
+    /// a later playtesting pass), the story hands these numbers over as
+    /// exact values to ship.
+    struct Tuning: Equatable {
+        /// Seconds into a run before this kind's very first spawn attempt.
+        let firstSpawnDelay: TimeInterval
+        /// Seconds between spawn attempts once this kind's cadence is
+        /// running (after the first spawn, and after every subsequent one).
+        let spawnCadence: TimeInterval
+        /// Hard cap on concurrently-alive, uncollected pickups of this kind.
+        let maxAlive: Int
+        /// Seconds an uncollected pickup of this kind survives on the
+        /// ground before `PickupManager` expires it, aged strictly by real
+        /// `deltaTime` (see `PickupManager.update(deltaTime:visibleRect:)`).
+        let lifetime: TimeInterval
+        /// The dice rolled for the value a successful collection reports.
+        let dice: DiceSpec
+    }
+
+    /// One small static table, per this story's plan: both kinds share
+    /// every timing number (8s first spawn, 25s cadence, 2 max alive, 20s
+    /// lifetime); only the dice differ -- 1d10 healing for a med kit, 1d6
+    /// for a garbage can's consume value.
+    private static let tuningTable: [PickupKind: Tuning] = [
+        .medKit: Tuning(
+            firstSpawnDelay: 8,
+            spawnCadence: 25,
+            maxAlive: 2,
+            lifetime: 20,
+            dice: DiceSpec(count: 1, sides: 10)
+        ),
+        .garbageCan: Tuning(
+            firstSpawnDelay: 8,
+            spawnCadence: 25,
+            maxAlive: 2,
+            lifetime: 20,
+            dice: DiceSpec(count: 1, sides: 6)
+        ),
+    ]
+
+    /// This kind's frozen tuning. A missing table entry is a programmer
+    /// error (a case added to `PickupKind` without a matching row above),
+    /// not a recoverable runtime condition -- the same "precondition, never
+    /// silently pass" discipline `SpriteSheet.init`'s measurement check
+    /// applies.
+    var tuning: Tuning {
+        guard let value = Self.tuningTable[self] else {
+            preconditionFailure("PickupKind.tuningTable is missing an entry for \(self).")
+        }
+        return value
+    }
+
+    /// Column index into `AtlasSheet.pickups`' single-row grid
+    /// (`AtlasCellIndex.pickups`): med kit at cell 0, garbage can at cell 1,
+    /// per the measured 48x24px sheet / 24x24px cells.
+    var atlasColumn: Int {
+        switch self {
+        case .medKit: return 0
+        case .garbageCan: return 1
+        }
+    }
+}
