@@ -130,7 +130,7 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         // initial 3s cadence is only 120s), so the cap is genuinely reached
         // and then held, not merely approached.
         for _ in 0..<6_000 {
-            director.update(deltaTime: 0.1, playerPosition: playerPosition, obstructions: [])
+            director.update(deltaTime: 0.1, playerPosition: playerPosition, player: nil, obstructions: [])
             XCTAssertLessThanOrEqual(director.swarmCount, RaccoonSpawnDirector.maxConcurrentSwarmSize)
         }
 
@@ -150,7 +150,7 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         var elapsed: TimeInterval = 0
         let step: TimeInterval = 0.1
         while elapsed + step < RaccoonSpawnDirector.initialSpawnInterval {
-            director.update(deltaTime: step, playerPosition: playerPosition, obstructions: [])
+            director.update(deltaTime: step, playerPosition: playerPosition, player: nil, obstructions: [])
             elapsed += step
         }
 
@@ -164,6 +164,7 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         director.update(
             deltaTime: RaccoonSpawnDirector.initialSpawnInterval + 0.01,
             playerPosition: TilePoint(x: 0, y: 0),
+            player: nil,
             obstructions: []
         )
 
@@ -179,6 +180,7 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         director.update(
             deltaTime: RaccoonSpawnDirector.initialSpawnInterval + 0.01,
             playerPosition: TilePoint(x: 0, y: 0),
+            player: nil,
             obstructions: []
         )
 
@@ -195,6 +197,7 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         director.update(
             deltaTime: RaccoonSpawnDirector.initialSpawnInterval + 0.01,
             playerPosition: TilePoint(x: 0, y: 0),
+            player: nil,
             obstructions: []
         )
         XCTAssertEqual(director.swarmCount, 1)
@@ -205,7 +208,7 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         XCTAssertEqual(worldLayer.children.count, 0, "reset() must remove the mounted node, not just forget it")
 
         // The timer restarted from scratch, so nothing spawns immediately.
-        director.update(deltaTime: 0.1, playerPosition: TilePoint(x: 0, y: 0), obstructions: [])
+        director.update(deltaTime: 0.1, playerPosition: TilePoint(x: 0, y: 0), player: nil, obstructions: [])
         XCTAssertEqual(director.swarmCount, 0)
     }
 }

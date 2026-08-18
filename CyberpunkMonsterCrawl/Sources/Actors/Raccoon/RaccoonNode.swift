@@ -65,6 +65,25 @@ final class RaccoonNode: SKNode {
     /// pipeline is a later PR's.
     var hp: Int
 
+    /// Invoked exactly once, the instant this raccoon dies (`die()`, in
+    /// `RaccoonNode+Combat.swift`) -- the kill-award seam `CYBERPUN-17-9`'s
+    /// XP/kill system consumes. `nil` by default (nothing awarded), so this
+    /// story does not have to invent that system's own bookkeeping, and a
+    /// raccoon constructed directly in a unit test needs no callback at all.
+    ///
+    /// An ordinary stored property, like every other piece of actor state
+    /// on this class: it lived in an Objective-C associated object on the
+    /// `Damageable` extension until review (PR #34) called that out.
+    var onDeath: (() -> Void)?
+
+    /// The run's counters this raccoon's death increments (`killCount`).
+    /// `RaccoonSpawnDirector.spawnRaccoon(near:)` sets this on every
+    /// raccoon it mounts in a real run; `nil` for a raccoon a test builds
+    /// directly and does not assert counters on. Held strongly (as the
+    /// associated object it replaces was): `RunSummaryStats` holds no
+    /// reference back to the scene graph, so there is no cycle to break.
+    var runStats: RunSummaryStats?
+
     /// The walk/attack animation + facing state machine driving `body`.
     let animationController: RaccoonAnimationController
 

@@ -47,4 +47,18 @@ final class RunSummaryStats {
     func recordKill() {
         killCount += 1
     }
+
+    /// Zeroes every counter for a fresh run.
+    ///
+    /// `GameScene` holds one instance for the lifetime of the scene (so a
+    /// later HUD/summary consumer can hold the same reference) and calls
+    /// this on every `.gameplay` entry, beside
+    /// `RaccoonSpawnDirector.reset()` and `PlayerNode.resetCombatState()`.
+    /// Without it, RUN AGAIN would report the previous run's kills and
+    /// infections -- the same inherited-state bug those two resets exist
+    /// to prevent.
+    func reset() {
+        timesInfected = 0
+        killCount = 0
+    }
 }

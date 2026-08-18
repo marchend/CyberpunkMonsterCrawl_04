@@ -19,16 +19,7 @@ targets:
   CyberpunkMonsterCrawl:
     type: application
     platform: iOS
-    sources:
-      - path: CyberpunkMonsterCrawl
-        excludes:
-          # Stray empty duplicate left behind by an earlier reorg attempt;
-          # the real implementation lives at
-          # Sources/Actors/PlayerNode+Rabies.swift. Two files sharing one
-          # basename in the same target is a hard Swift compiler error
-          # ("Filename ... used twice"), so this stub must be excluded
-          # from the build until it is deleted outright.
-          - "Sources/Actors/Player/PlayerNode+Rabies.swift"
+    sources: [CyberpunkMonsterCrawl]
     settings:
       base:
         PRODUCT_NAME: $(TARGET_NAME)

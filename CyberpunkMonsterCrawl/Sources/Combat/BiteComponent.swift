@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// The on-contact bite trigger (`CYBERPUN-17-8` PR 3): turns "a raccoon is
@@ -5,24 +6,28 @@ import Foundation
 /// rabies-roll event, at a fixed cadence rather than every single frame
 /// contact holds.
 ///
-/// **Who determines "contact".** This type has no positional/collision
-/// logic of its own -- it does not touch `RaccoonSeekBehavior` or
-/// `BuildingAvoidance` (PR 2's files, left unmodified by this PR). A
-/// caller drives `update(...)` only on frames where it has already decided
-/// the raccoon and player are in contact, e.g. by comparing their
-/// tile/screen-space distance against `RaccoonSeekBehavior
-/// .contactStandoffPoints(forTier:)` -- the exact public seam that
-/// constant already exists for. Wiring that per-frame contact check into
-/// the live scene loop (`GameScene`) is scene-integration work for a later
-/// PR in this story (see the `CYBERPUN-17-8` entry in AGENT.md/CLAUDE.md
-/// for what remains outstanding); this PR ships the bite trigger itself,
-/// fully unit-tested against the two collaborators it does own
-/// (`RaccoonNode`/`PlayerNode`).
+/// **Who determines "contact".** `isInContact(raccoonPosition:
+/// playerPosition:tier:)` below, from the same
+/// `RaccoonSeekBehavior.contactStandoffPoints(forTier:)` ring the swarm
+/// already settles on. `update(...)` itself carries no positional logic --
+/// a caller drives it only on frames where that predicate held.
+///
+/// **The production caller.** `RaccoonSpawnDirector` owns one instance of
+/// this per live raccoon (see "One instance per raccoon" below) and drives
+/// it from its own per-frame loop, which already has each raccoon's
+/// resolved tile position and the player's; `GameScene
+/// .advanceMovementAndCamera(currentTime:)` passes the mounted
+/// `PlayerNode` in, inside the existing `stateMachine.currentState ==
+/// .gameplay` gate. Review of PR #34 caught that this file previously had
+/// *no* production caller at all -- nothing in a device build could bite,
+/// which is the shape of feature that never gets switched on, so the
+/// contact check landed here rather than being deferred.
 ///
 /// **One instance per raccoon.** Each raccoon needs its own bite cadence
-/// independent of every other raccoon biting the same player, so a caller
-/// (a later PR's per-raccoon bookkeeping) owns one `BiteComponent` per
-/// live raccoon rather than sharing a single instance across the swarm.
+/// independent of every other raccoon biting the same player, so
+/// `RaccoonSpawnDirector` builds one `BiteComponent` per live raccoon (in
+/// its `ActiveRaccoon` record, retired with the raccoon) rather than
+/// sharing a single instance across the swarm.
 final class BiteComponent {
 
     /// Seconds between successive bites from one raccoon while contact is
@@ -34,6 +39,48 @@ final class BiteComponent {
     /// Direct HP damage one bite deals to the player, independent of the
     /// separate rabies DoT. An initial tuning constant.
     static let biteDamage: Int = 5
+
+    /// On-screen slack (points) added to the standoff ring when deciding
+    /// contact. `RaccoonSeekBehavior.tileDisplacement` clamps a raccoon's
+    /// step so it settles at *exactly*
+    /// `contactStandoffPoints(forTier:)` -- the distance at which the two
+    /// ground footprints touch -- so a strict `<` comparison would depend
+    /// on the sign of the last floating-point rounding in that clamp for
+    /// whether the swarm ever bites at all. One point is smaller than a
+    /// device pixel at `@2x`/`@3x` and far smaller than a single frame's
+    /// travel (`RaccoonSeekBehavior.pointsPerSecond` is in the hundreds),
+    /// so it widens the ring by nothing a player could perceive.
+    static let contactSlackPoints: Double = 1.0
+
+    /// Whether a raccoon of `tier` standing at tile `raccoonPosition` is
+    /// touching a player at tile `playerPosition`: their **screen**-space
+    /// distance is within `RaccoonSeekBehavior.contactStandoffPoints(
+    /// forTier:)` (plus `contactSlackPoints`) -- the same ring
+    /// `RaccoonSeekBehavior` steers the swarm onto, so "close enough to
+    /// stop walking" and "close enough to bite" are one number rather than
+    /// two that can drift apart.
+    ///
+    /// Screen space (not tile distance) because the standoff itself is
+    /// measured in points off the shipped art, and this 2:1 isometric
+    /// projection makes a fixed tile radius a different on-screen distance
+    /// per heading.
+    ///
+    /// A pure `static` function so tests can pin the threshold without a
+    /// live scene, the same shape `RaccoonSpawnDirector.isOnScreen(tile:
+    /// cameraPosition:viewportSize:)` uses.
+    static func isInContact(
+        raccoonPosition: TilePoint,
+        playerPosition: TilePoint,
+        tier: RaccoonTier
+    ) -> Bool {
+        let raccoonScreen = IsometricProjection.tileToScreen(raccoonPosition)
+        let playerScreen = IsometricProjection.tileToScreen(playerPosition)
+        let distance = hypot(
+            Double(raccoonScreen.x - playerScreen.x),
+            Double(raccoonScreen.y - playerScreen.y)
+        )
+        return distance <= RaccoonSeekBehavior.contactStandoffPoints(forTier: tier) + contactSlackPoints
+    }
 
     private let stats: RunSummaryStats
 

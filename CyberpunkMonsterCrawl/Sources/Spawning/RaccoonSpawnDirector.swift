@@ -31,15 +31,15 @@ struct SplitMix64RandomNumberGenerator: RandomNumberGenerator {
 /// Off-screen street-tile spawn selection and swarm-size/cadence
 /// management for the raccoon swarm (`CYBERPUN-17-8` PR 2).
 ///
-/// **Scope of this PR.** Spawning and per-frame seek movement only -- no
-/// bite/damage/rabies and no death/despawn, so a raccoon mounted here only
-/// ever leaves `activeRaccoons` via `reset()` (a new run starting). The
-/// swarm therefore only ever grows toward `maxConcurrentSwarmSize` within
-/// one run; a later PR's `takeDamage`/death entry point is what shrinks it
-/// back down. Until then the swarm rings the player at
-/// `RaccoonSeekBehavior.contactStandoffPoints(forTier:)` rather than
-/// stacking onto his exact tile -- see that function's doc comment for why
-/// the stop radius exists before the bite does.
+/// **Scope.** Spawning, per-frame seek movement, and (from PR 3) driving
+/// each raccoon's `BiteComponent` once it has closed to
+/// `RaccoonSeekBehavior.contactStandoffPoints(forTier:)` -- this is where
+/// "raccoon X is in contact with the player" is decided in a real run.
+/// Nothing here damages a *raccoon*: no weapon exists yet
+/// (`CYBERPUN-17-9`), so within one run the swarm still only grows toward
+/// `maxConcurrentSwarmSize`. The dead-raccoon prune in
+/// `update(deltaTime:playerPosition:player:obstructions:)` is the seam that
+/// shrinks it back down the moment something does.
 ///
 /// No invented ticket ID is given here for the outstanding scope:
 /// following the convention `PlayerMovementController`'s own
@@ -145,11 +145,22 @@ final class RaccoonSpawnDirector {
     private let deviceScale: () -> CGFloat
     private var rng: SplitMix64RandomNumberGenerator
 
+    /// The run's counters. Every raccoon spawned here records its death
+    /// into this (`RaccoonNode.runStats` -> `killCount`), and every
+    /// successful rabies roll from one of this swarm's bites records its
+    /// infection into it (`BiteComponent` -> `PlayerNode.infect(stats:)`).
+    private let stats: RunSummaryStats
+
     // MARK: - State
 
     private struct ActiveRaccoon {
         let node: RaccoonNode
         var position: TilePoint
+
+        /// This raccoon's own bite cadence -- one `BiteComponent` per live
+        /// raccoon, so one raccoon's cooldown never gates another's (see
+        /// that type's "One instance per raccoon" note).
+        let bite: BiteComponent
     }
 
     private var activeRaccoons: [ActiveRaccoon] = []
@@ -167,36 +178,65 @@ final class RaccoonSpawnDirector {
     ///     scale and screen position are snapped to, read live per call
     ///     like `GameScene.deviceScale`. Defaults to `1`, the whole-point
     ///     fallback for a headless, view-less scene (unit tests).
-    ///   - rng: the spawn-selection random source. Defaults to a
-    ///     freshly-seeded generator (real gameplay variety needs no
-    ///     determinism); tests inject a fixed seed instead.
+    ///   - rng: the spawn-selection random source, also used for each
+    ///     bite's `RabiesStatusEffect` roll. Defaults to a freshly-seeded
+    ///     generator (real gameplay variety needs no determinism); tests
+    ///     inject a fixed seed instead.
+    ///   - stats: the run's counters this swarm's kills and infections are
+    ///     recorded into. `GameScene` passes its own per-run instance;
+    ///     defaults to a throwaway for tests that assert on spawn cadence
+    ///     rather than on counters.
     init(
         worldLayer: SKNode,
         deviceScale: @escaping () -> CGFloat = { 1 },
         rng: SplitMix64RandomNumberGenerator = SplitMix64RandomNumberGenerator(
             seed: UInt64.random(in: UInt64.min...UInt64.max)
-        )
+        ),
+        stats: RunSummaryStats = RunSummaryStats()
     ) {
         self.worldLayer = worldLayer
         self.deviceScale = deviceScale
         self.rng = rng
+        self.stats = stats
         self.timeUntilNextSpawn = Self.initialSpawnInterval
     }
 
     /// Advances the swarm by one frame: ramps the spawn timer, spawns a new
     /// raccoon (off-screen, on a street tile) whenever it elapses and the
-    /// swarm has room, and steers every live raccoon toward
-    /// `playerPosition` through `RaccoonSeekBehavior`/`BuildingAvoidance`.
+    /// swarm has room, steers every live raccoon toward `playerPosition`
+    /// through `RaccoonSeekBehavior`/`BuildingAvoidance`, and bites `player`
+    /// with every raccoon that has reached him.
     ///
     /// At most one raccoon is spawned per call, however large `deltaTime`
     /// is -- a stalled frame catches up on the *next* call rather than
     /// bursting every missed spawn out at once, the same bounded-work-per-
     /// frame discipline `GroundPlaneStreamer.advanceIncrementalMount()`
     /// follows.
-    func update(deltaTime: TimeInterval, playerPosition: TilePoint, obstructions: [CollisionResolver.FootprintBounds]) {
+    ///
+    /// - Parameter player: the mounted player raccoons bite on contact.
+    ///   `nil` drives spawning and steering only -- what a unit test that
+    ///   asserts on spawn cadence alone passes. `GameScene` always passes
+    ///   the real node, so a device build bites.
+    func update(
+        deltaTime: TimeInterval,
+        playerPosition: TilePoint,
+        player: PlayerNode?,
+        obstructions: [CollisionResolver.FootprintBounds]
+    ) {
         guard deltaTime > 0 else { return }
         elapsedRunTime += deltaTime
         timeUntilNextSpawn -= deltaTime
+
+        // A dead raccoon has already removed itself from the scene graph
+        // (`RaccoonNode.die()`), so drop it here rather than steering a
+        // detached node and holding a slot against
+        // `maxConcurrentSwarmSize` forever. Nothing damages a raccoon in
+        // production yet (the weapons story, `CYBERPUN-17-9`, is what
+        // will), so today this only ever prunes a raccoon a test killed --
+        // but it is the seam that keeps the cap honest the moment damage
+        // lands, and doing it here (rather than re-entrantly from
+        // `onDeath`) means a kill can never mutate the array mid-loop.
+        activeRaccoons.removeAll { $0.node.isDead }
 
         if timeUntilNextSpawn <= 0 {
             if activeRaccoons.count < Self.maxConcurrentSwarmSize {
@@ -221,6 +261,29 @@ final class RaccoonSpawnDirector {
             )
             activeRaccoons[index].position = resolved
             applyScreenPosition(resolved, to: activeRaccoons[index].node)
+
+            // The contact check the bite trigger always needed a caller
+            // for: the seek above settles a raccoon on
+            // `RaccoonSeekBehavior.contactStandoffPoints(forTier:)`, and
+            // `BiteComponent.isInContact` reads that same ring, so a
+            // raccoon that has finished its approach starts biting on the
+            // very next frame. `BiteComponent` owns the 1s cadence, so
+            // driving it every frame of sustained contact is correct --
+            // it is a no-op until the interval elapses.
+            guard let player else { continue }
+            let raccoon = activeRaccoons[index].node
+            guard BiteComponent.isInContact(
+                raccoonPosition: resolved,
+                playerPosition: playerPosition,
+                tier: raccoon.tier
+            ) else { continue }
+
+            activeRaccoons[index].bite.update(
+                raccoon: raccoon,
+                player: player,
+                deltaTime: deltaTime,
+                rng: &rng
+            )
         }
     }
 
@@ -248,10 +311,15 @@ final class RaccoonSpawnDirector {
         let tier = Self.selectTier(rng: &rng)
 
         let raccoon = RaccoonNode(tier: tier, deviceScale: deviceScale())
+        // Set at spawn, on the production path, so a kill counts in a real
+        // run rather than only in a test that injects the counters by hand.
+        raccoon.runStats = stats
         worldLayer.addChild(raccoon)
         applyScreenPosition(position, to: raccoon)
 
-        activeRaccoons.append(ActiveRaccoon(node: raccoon, position: position))
+        activeRaccoons.append(
+            ActiveRaccoon(node: raccoon, position: position, bite: BiteComponent(stats: stats))
+        )
     }
 
     private func applyScreenPosition(_ position: TilePoint, to raccoon: RaccoonNode) {

@@ -1,63 +1,29 @@
-import ObjectiveC
 import SpriteKit
 
-/// Adds the player's HP and rabies-infection status-effect state to
-/// `PlayerNode` (`CYBERPUN-17-8` PR 3), via Objective-C associated objects
-/// rather than stored properties on `PlayerNode` itself. `PlayerNode`
-/// (SpriteKit's `SKNode`, an `NSObject` subclass) supports this the same
-/// way `RaccoonNode+Combat.swift` adds its own kill-award hook to
-/// `RaccoonNode` -- and it is what keeps `PlayerNode.swift`'s own diff to
-/// the single per-frame `tickRabies(deltaTime:)` call its existing
-/// `update(deltaTime:movementVector:)` adds (see that file).
+/// The player's rabies-infection/HP **behaviour** (`CYBERPUN-17-8` PR 3):
+/// direct damage, starting an infection, the per-frame DoT tick and the
+/// per-run reset. The state these operate on (`maxHP`, `hp`, `isInfected`,
+/// `rabiesDamageAccumulator`) is declared as ordinary stored properties on
+/// `PlayerNode` itself -- see that file's "Combat state" section. This file
+/// used to hold that state in Objective-C associated objects; review
+/// (PR #34) called that out and it was replaced with stored properties,
+/// which restores the reset seam below, keeps the `0...maxHP` invariant
+/// visible from `PlayerNode.swift`, and takes the `objc_*` lookup plus
+/// `as?` unbox off the per-frame `tickRabies` path.
 ///
 /// **Scope of this PR.** HP plus the rabies DoT/infection status only --
 /// no death handling. What happens when the player's HP reaches zero is
 /// the death screen, `CYBERPUN-17-13`, a later PR in this story; this PR
-/// only clamps `hp` at zero and leaves it there. `PlayerNode` deliberately
+/// only clamps `hp` at zero and leaves it there, so a player who runs out
+/// of HP keeps playing at 0 HP (biteable, still ticking) until that PR
+/// lands -- a known, recorded consequence rather than a bug (see the
+/// `CYBERPUN-17-8` entry in AGENT.md/CLAUDE.md). `PlayerNode` deliberately
 /// does not conform to `Damageable` for that reason -- see that
 /// protocol's own doc comment.
 extension PlayerNode {
 
-    private static var maxHPKey: UInt8 = 0
-    private static var hpKey: UInt8 = 0
-    private static var isInfectedKey: UInt8 = 0
-    private static var rabiesAccumulatorKey: UInt8 = 0
-
-    /// The player's baseline max HP. `PlayerNode` carried no HP concept
-    /// before this PR (movement/rendering only); introduced here because
-    /// the rabies DoT tick and the bite's direct damage are the first
-    /// things that need one. An initial tuning constant, expected to move
-    /// in a later playtesting pass, like `RaccoonNode.baseMaxHP`.
-    static let baseMaxHP: Int = 100
-
-    var maxHP: Int {
-        get { (objc_getAssociatedObject(self, &Self.maxHPKey) as? Int) ?? Self.baseMaxHP }
-        set { objc_setAssociatedObject(self, &Self.maxHPKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
-    }
-
-    /// The player's current HP, clamped to `0...maxHP` by this property's
-    /// own setter. Defaults to a full `maxHP` on first read -- the same
-    /// "spawns at full HP" convention `RaccoonNode.init(hp:)` documents.
-    var hp: Int {
-        get { (objc_getAssociatedObject(self, &Self.hpKey) as? Int) ?? maxHP }
-        set { objc_setAssociatedObject(self, &Self.hpKey, min(max(0, newValue), maxHP), .OBJC_ASSOCIATION_RETAIN) }
-    }
-
-    /// Whether the player currently carries the rabies infection.
-    var isInfected: Bool {
-        get { (objc_getAssociatedObject(self, &Self.isInfectedKey) as? Bool) ?? false }
-        set { objc_setAssociatedObject(self, &Self.isInfectedKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
-    }
-
-    /// Seconds' worth of rabies damage accumulated but not yet applied as
-    /// a whole HP -- see `tickRabies(deltaTime:)`.
-    private var rabiesDamageAccumulator: Double {
-        get { (objc_getAssociatedObject(self, &Self.rabiesAccumulatorKey) as? Double) ?? 0 }
-        set { objc_setAssociatedObject(self, &Self.rabiesAccumulatorKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
-    }
-
     /// Applies `amount` direct damage, clamped at zero via `hp`'s own
-    /// setter. `BiteComponent`'s direct bite damage and
+    /// `didSet`. `BiteComponent`'s direct bite damage and
     /// `tickRabies(deltaTime:)`'s DoT both funnel through this one entry
     /// point.
     func takeDamage(_ amount: Int) {
@@ -95,8 +61,7 @@ extension PlayerNode {
     /// A no-op while not infected, or for a non-positive `deltaTime`.
     ///
     /// `PlayerNode.update(deltaTime:movementVector:)` calls this once per
-    /// frame -- the single line this PR adds to `PlayerNode.swift`'s
-    /// existing per-frame update.
+    /// frame, from the scene's own per-frame player update.
     func tickRabies(deltaTime: TimeInterval) {
         guard isInfected, deltaTime > 0 else { return }
         rabiesDamageAccumulator += deltaTime * RabiesStatusEffect.damagePerSecond
@@ -104,5 +69,22 @@ extension PlayerNode {
         guard wholeDamage > 0 else { return }
         rabiesDamageAccumulator -= Double(wholeDamage)
         takeDamage(wholeDamage)
+    }
+
+    /// Returns the player's combat state to a fresh run's starting point:
+    /// full HP, uninfected, no carried DoT remainder.
+    ///
+    /// `GameScene.startPlayer(at:)` calls this on every `.gameplay` entry,
+    /// alongside the reposition. A restart deliberately **reuses** the
+    /// existing `PlayerNode` (that method's own doc comment explains why),
+    /// so without this a RUN AGAIN would start on the HP the previous run
+    /// ended with and -- because `infect(stats:)` is one-way -- permanently
+    /// infected, ticking 1 HP/s from frame one. That is the same class of
+    /// leak `RaccoonSpawnDirector.reset()` exists to prevent for the swarm.
+    func resetCombatState() {
+        maxHP = Self.baseMaxHP
+        hp = maxHP
+        isInfected = false
+        rabiesDamageAccumulator = 0
     }
 }
