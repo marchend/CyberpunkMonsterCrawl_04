@@ -149,6 +149,10 @@ final class PlayerNode: SKNode {
     /// 4. Assigns the resulting texture and sets `body.xScale`'s *sign*
     ///    from the mirror flag, preserving its magnitude.
     func update(deltaTime: TimeInterval, movementVector: CGVector) {
+        // CYBERPUN-17-8 PR 3: the rabies DoT tick (`PlayerNode+Rabies.swift`).
+        // A no-op while not infected.
+        tickRabies(deltaTime: deltaTime)
+
         let newlyMoving = movementVector.dx != 0 || movementVector.dy != 0
 
         if newlyMoving, let resolvedDirection = Direction8.from(spriteKitVector: movementVector) {

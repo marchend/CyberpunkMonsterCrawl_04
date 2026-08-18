@@ -743,12 +743,11 @@ docs/bootstrap.md                          original spec (source of truth)
   and the raccoon swarm (CYBERPUN-17-8-t2, `RaccoonSpawnDirector`) are no longer deferred, so product gate 4 is reachable in a real
   build — precisely the justification for the CYBERPUN-17-5-t4 placeholder-label removal described below
 - Raccoon swarm (`CYBERPUN-17-8`) — **the authoritative implemented-vs-outstanding list for this story; read this rather than inferring the remaining scope from `RaccoonNode`/`RaccoonSeekBehavior`/`RaccoonSpawnDirector`'s doc comments.**
-  Implemented: the actor layer (`-t1` — `RaccoonNode`, `RaccoonAnimationController`, measured sheet/anchor/footprint) and off-screen spawning + per-frame seek/avoid steering (`-t2` — `RaccoonSpawnDirector`,
-  `RaccoonSeekBehavior`, `BuildingAvoidance`), driven once per run frame from `GameScene.advanceMovementAndCamera` and gated on `.gameplay`, so the swarm neither spawns nor steers behind the death/high-scores/menu screens.
-  Outstanding, with no invented ticket IDs: bite/contact damage, the RABIES status row and its d20 infection roll, kill/XP hooks, and death + despawn — nothing shrinks a run's swarm today, raccoons only leave
-  via `reset()` — plus the playtesting pass that retunes the named cadence/swarm-size constants (`initialSpawnInterval`, `spawnIntervalHalfLife`, `maxConcurrentSwarmSize`, `eliteSpawnFraction`).
-  Two bounds are recorded in code meanwhile: buildings only obstruct a raccoon once it is inside the resident chunk window (see `RaccoonSpawnDirector.farAxisMinimumTiles`, spawn radius 40-56 tiles against
-  `ChunkStreamingManager.guaranteedMarginTiles` 24), and the swarm rings the player at `RaccoonSeekBehavior.contactStandoffPoints(forTier:)` rather than stacking onto his tile, because no bite gives contact a consequence yet
+  Implemented: the actor layer (`-t1`); off-screen spawning + per-frame seek/avoid steering (`-t2` — `RaccoonSpawnDirector`/`RaccoonSeekBehavior`/`BuildingAvoidance`, from `GameScene.advanceMovementAndCamera`,
+  gated on `.gameplay`); and the combat/status-effect layer (`-t3` — `Damageable`/`RaccoonNode+Combat` (damage/death/removal/kill hook), `BiteComponent` (attack anim + damage + rabies roll, 1s cooldown so
+  sustained contact can't re-trigger every frame), `RabiesStatusEffect` (d20-vs-tier-threshold, injectable RNG), `PlayerNode+Rabies` (HP + 1 HP/s DoT, ticked from `PlayerNode.update`), `RunSummaryStats`).
+  Outstanding, no invented ticket IDs: **scene integration** (nothing yet decides "raccoon X is in contact" and drives `BiteComponent` from a live run; `RaccoonNode.runStats`/`.onDeath` unset in production spawn),
+  the kill/XP hook's consumer (`CYBERPUN-17-9`), a rabies HUD indicator, and the playtesting pass retuning every named constant. The swarm still rings the player at `RaccoonSeekBehavior.contactStandoffPoints(forTier:)` meanwhile, since the scene loop doesn't yet drive `BiteComponent` from that distance
 - Final gameplay HUD, death-screen run-summary rows and the high-scores list
   are explicitly out of scope for CYBERPUN-17-2 (see the story's "Out of
   scope" section): navigation (PLAY, RUN AGAIN, back-to-menu) is real; the
