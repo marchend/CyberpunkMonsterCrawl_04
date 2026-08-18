@@ -32,11 +32,21 @@ struct SplitMix64RandomNumberGenerator: RandomNumberGenerator {
 /// management for the raccoon swarm (`CYBERPUN-17-8` PR 2).
 ///
 /// **Scope of this PR.** Spawning and per-frame seek movement only -- no
-/// bite/damage/rabies (a later part of the `CYBERPUN-17-8` story) and no
-/// death/despawn, so a raccoon mounted here only ever leaves
-/// `activeRaccoons` via `reset()` (a new run starting). The swarm therefore
-/// only ever grows toward `maxConcurrentSwarmSize` within one run; a later
-/// PR's `takeDamage`/death entry point is what shrinks it back down.
+/// bite/damage/rabies and no death/despawn, so a raccoon mounted here only
+/// ever leaves `activeRaccoons` via `reset()` (a new run starting). The
+/// swarm therefore only ever grows toward `maxConcurrentSwarmSize` within
+/// one run; a later PR's `takeDamage`/death entry point is what shrinks it
+/// back down. Until then the swarm rings the player at
+/// `RaccoonSeekBehavior.contactStandoffPoints(forTier:)` rather than
+/// stacking onto his exact tile -- see that function's doc comment for why
+/// the stop radius exists before the bite does.
+///
+/// No invented ticket ID is given here for the outstanding scope:
+/// following the convention `PlayerMovementController`'s own
+/// outstanding-scope note sets, the authoritative list of what is
+/// implemented versus still outstanding for this story is the
+/// `CYBERPUN-17-8` entry in AGENT.md/CLAUDE.md -- read that rather than
+/// inferring the remaining scope from these doc comments.
 ///
 /// **Single production caller.** `GameScene` constructs one of these in
 /// `commonInit()` and calls `update(deltaTime:playerPosition:obstructions:)`
@@ -93,6 +103,34 @@ final class RaccoonSpawnDirector {
     /// never visible on the frame it lands. `RaccoonSpawnDirectorTests`
     /// checks this directly against `isOnScreen(tile:cameraPosition:
     /// viewportSize:)` rather than trusting the arithmetic in prose.
+    ///
+    /// **What this distance does *not* buy: building collision for the
+    /// first stretch of the approach.** This radius is outside the streamed
+    /// world. `GroundPlaneStreamer.residentObstructions` is derived from
+    /// `ChunkStreamingManager`'s resident chunks alone, which guarantee only
+    /// `ChunkStreamingManager.guaranteedMarginTiles` (`residentRadius * Chunk.size`
+    /// = 24) tiles of margin around the camera -- less than
+    /// `farAxisMinimumTiles`. So for roughly the first 16-32 tiles of its
+    /// walk a freshly-spawned raccoon steers against an obstruction set that
+    /// contains no buildings near it, and will walk straight through
+    /// footprints out there. The story's "they collide with building
+    /// footprints and route around them" therefore holds from the moment a
+    /// raccoon enters the resident window -- which is every frame it is
+    /// near the player, and every frame it is visible -- and not before.
+    ///
+    /// This is bounded and self-healing rather than corrupting: the spawn
+    /// tile itself is lane-snapped street (see `nearestStreetLaneIndex(_:)`),
+    /// so a raccoon never spawns *inside* a footprint; `CollisionResolver`
+    /// skips an obstruction that already contains the current position, so
+    /// one that did drift inside walks back out; and all of it happens well
+    /// off-screen. Clamping the radius inside `guaranteedMarginTiles` would
+    /// extend the collision claim to a raccoon's whole life, but only by
+    /// spawning at the window's own 24-tile edge -- which would also force
+    /// `nearAxisRange` down to about +/-3 to keep the off-screen guarantee
+    /// above, and would still leave under two tiles' worth of screen-x
+    /// margin beyond the largest supported viewport. That trades a
+    /// documented, off-screen steering gap for visible pop-in at the screen
+    /// edge, so the bound is recorded here instead.
     static let farAxisMinimumTiles: Double = 40
     static let farAxisMaximumTiles: Double = 56
 

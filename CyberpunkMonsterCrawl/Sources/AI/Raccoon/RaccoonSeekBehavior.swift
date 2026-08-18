@@ -7,11 +7,16 @@ import Foundation
 /// the result (`CYBERPUN-17-8` PR 2).
 ///
 /// **Scope of this PR.** Seek-and-avoid steering only -- no bite/damage,
-/// no rabies, no death (later parts of the `CYBERPUN-17-8` story). This
-/// type only ever calls `RaccoonNode.setDirection(_:)` / `.playWalk()` /
-/// `.update(deltaTime:)`, the exact public surface
-/// `RaccoonNode`/`RaccoonAnimationController` expose "for a later PR's seek
-/// behaviour to drive" (see those types' own doc comments).
+/// no rabies, no death. This type only ever calls
+/// `RaccoonNode.setDirection(_:)` / `.playWalk()` / `.update(deltaTime:)`,
+/// the exact public surface `RaccoonNode`/`RaccoonAnimationController`
+/// expose "for a later PR's seek behaviour to drive" (see those types' own
+/// doc comments). No invented ticket ID is given here for the rest:
+/// following the convention `PlayerMovementController`'s own
+/// outstanding-scope note sets, the authoritative list of what is
+/// implemented versus still outstanding for this story is the
+/// `CYBERPUN-17-8` entry in AGENT.md/CLAUDE.md -- read that rather than
+/// inferring the remaining scope from these doc comments.
 ///
 /// **Facing tracks the intended direction, not the collision-resolved
 /// one** -- the same split `PlayerMovementController.facingVector` /
@@ -31,6 +36,31 @@ enum RaccoonSeekBehavior {
     /// -- an initial tuning constant; the story explicitly defers exact
     /// difficulty numbers to playtesting.
     static let pointsPerSecond: Double = PlayerMovementController.maxPointsPerSecond * 0.75
+
+    /// On-screen distance (points) from the player a raccoon of `tier`
+    /// stops closing at: half the player's measured ground footprint plus
+    /// half the raccoon's own (`RaccoonNode.shadowWidth(forTier:)`, which is
+    /// `RaccoonAnimationController.groundFootprintWidth` scaled by the
+    /// tier), i.e. the distance at which the two ground footprints are
+    /// touching rather than overlapping. Both halves are measured off the
+    /// shipped art, so this is not an invented number.
+    ///
+    /// **Why a standoff exists before the bite lands.** Bite/damage and
+    /// death/despawn are still outstanding on this story (the
+    /// `CYBERPUN-17-8` entry in AGENT.md/CLAUDE.md is the authoritative
+    /// list), so nothing yet gives contact a consequence or removes a
+    /// raccoon. Without a standoff, `tileDisplacement`'s overshoot clamp
+    /// lands every one of `RaccoonSpawnDirector.maxConcurrentSwarmSize`
+    /// raccoons on the player's *exact* tile and holds them there, where
+    /// they render as a single sprite -- which is what a real build's first
+    /// impression of the swarm would be until the bite PR lands. Stopping
+    /// at contact instead leaves them ringed around the player, each still
+    /// facing and animating toward him. It is a stop radius, not a
+    /// separation model: inter-raccoon spacing belongs with the PR that
+    /// gives contact meaning.
+    static func contactStandoffPoints(forTier tier: RaccoonTier) -> Double {
+        Double((PlayerSpriteSheet.hitboxSize.width + RaccoonNode.shadowWidth(forTier: tier)) / 2)
+    }
 
     /// Advances one raccoon by one frame: computes the tile-space step
     /// toward `playerPosition`, resolves it against `obstructions` via
@@ -59,6 +89,7 @@ enum RaccoonSeekBehavior {
         let proposedDelta = tileDisplacement(
             currentPosition: currentPosition,
             playerPosition: playerPosition,
+            standoffPoints: contactStandoffPoints(forTier: raccoon.tier),
             deltaTime: deltaTime
         )
         guard proposedDelta != .zero else { return currentPosition }
@@ -100,13 +131,16 @@ enum RaccoonSeekBehavior {
     /// "scale in screen space, then invert" shape, so a raccoon's on-screen
     /// speed is heading-independent exactly like the player's.
     ///
-    /// Capped so a single frame can never overshoot the player's own tile:
-    /// `screenDistance` is clamped to the *actual* screen-space distance to
-    /// the player, which is what stops a raccoon oscillating around the
-    /// player once it gets close, instead of settling onto its tile.
+    /// Capped so a single frame can never overshoot: `screenDistance` is
+    /// clamped to the screen-space distance still *available* to close --
+    /// the actual distance to the player less `standoffPoints` -- which is
+    /// what stops a raccoon oscillating around the player once it gets
+    /// close, instead of settling onto the standoff ring. A raccoon already
+    /// at (or inside) the standoff proposes no movement at all.
     private static func tileDisplacement(
         currentPosition: TilePoint,
         playerPosition: TilePoint,
+        standoffPoints: Double,
         deltaTime: TimeInterval
     ) -> CGVector {
         let tileDelta = seekVector(currentPosition: currentPosition, playerPosition: playerPosition)
@@ -116,7 +150,10 @@ enum RaccoonSeekBehavior {
         let screenDistanceToPlayer = hypot(Double(screenDelta.dx), Double(screenDelta.dy))
         guard screenDistanceToPlayer > 0 else { return .zero }
 
-        let screenDistance = min(pointsPerSecond * deltaTime, screenDistanceToPlayer)
+        let closableDistance = screenDistanceToPlayer - standoffPoints
+        guard closableDistance > 0 else { return .zero }
+
+        let screenDistance = min(pointsPerSecond * deltaTime, closableDistance)
         let screenStep = CGPoint(
             x: CGFloat(Double(screenDelta.dx) / screenDistanceToPlayer * screenDistance),
             y: CGFloat(Double(screenDelta.dy) / screenDistanceToPlayer * screenDistance)

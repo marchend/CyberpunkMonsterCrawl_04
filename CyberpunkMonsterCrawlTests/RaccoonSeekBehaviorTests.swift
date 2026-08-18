@@ -33,24 +33,49 @@ final class RaccoonSeekBehaviorTests: XCTestCase {
 
     // MARK: - Facing tracks the player, and updates continuously as the player moves
 
-    func test_facing_differsBetweenOppositeSidesOfTheRaccoon() {
+    /// The exact `Direction8` each cardinal *tile* direction must produce,
+    /// derived from `IsometricProjection`'s own basis rather than from what
+    /// the code happens to return: a tile delta `(dx, dy)` projects to
+    /// SpriteKit (y-up) screen space as `((dx - dy) * 48, (dx + dy) * 24)`,
+    /// so tile `+x` points up-and-right on screen (`.northeast`), tile `-x`
+    /// down-and-left (`.southwest`), tile `+y` up-and-left (`.northwest`)
+    /// and tile `-y` down-and-right (`.southeast`).
+    ///
+    /// **Pinned exactly, not as "the probes are not all the same value".**
+    /// If `facing(...)` were built on `Direction8.from(vector:)` instead of
+    /// `from(spriteKitVector:)` -- i.e. the y-flip that type owns dropped --
+    /// all four probes would still yield four *distinct* cases, so a
+    /// distinctness assertion stays green while every raccoon on a device
+    /// faces the wrong way vertically. That is the exact silent failure
+    /// `Direction8`'s own doc comment warns about ("north/south flip while
+    /// east/west stay right, so a facing-vs-movement bug looks like an art
+    /// problem"), and product gate 3 ("every actor faces and animates its
+    /// movement") is the AC standing behind it. Asserting the values pins
+    /// the y-convention and the tile->screen basis at the same time.
+    private struct CardinalProbe {
+        /// A unit step along one tile axis.
+        let tileDelta: TilePoint
+        let expected: Direction8
+    }
+
+    private static let cardinalFacings: [CardinalProbe] = [
+        CardinalProbe(tileDelta: TilePoint(x: 1, y: 0), expected: .northeast),
+        CardinalProbe(tileDelta: TilePoint(x: -1, y: 0), expected: .southwest),
+        CardinalProbe(tileDelta: TilePoint(x: 0, y: 1), expected: .northwest),
+        CardinalProbe(tileDelta: TilePoint(x: 0, y: -1), expected: .southeast),
+    ]
+
+    func test_facing_matchesTheIsometricProjection_inEveryCardinalTileDirection() {
         let raccoonPosition = TilePoint(x: 0, y: 0)
 
-        let east = RaccoonSeekBehavior.facing(fromCurrentPosition: raccoonPosition, toPlayerPosition: TilePoint(x: 5, y: 0))
-        let west = RaccoonSeekBehavior.facing(fromCurrentPosition: raccoonPosition, toPlayerPosition: TilePoint(x: -5, y: 0))
-        let north = RaccoonSeekBehavior.facing(fromCurrentPosition: raccoonPosition, toPlayerPosition: TilePoint(x: 0, y: 5))
-        let south = RaccoonSeekBehavior.facing(fromCurrentPosition: raccoonPosition, toPlayerPosition: TilePoint(x: 0, y: -5))
-
-        XCTAssertNotNil(east)
-        XCTAssertNotNil(west)
-        XCTAssertNotNil(north)
-        XCTAssertNotNil(south)
-
-        let facings = Set([east, west, north, south].compactMap { $0 })
-        XCTAssertGreaterThan(
-            facings.count, 1,
-            "facing must differ as the player moves to opposite sides of the raccoon, got \(facings)"
-        )
+        for probe in Self.cardinalFacings {
+            let playerPosition = TilePoint(x: probe.tileDelta.x * 5, y: probe.tileDelta.y * 5)
+            XCTAssertEqual(
+                RaccoonSeekBehavior.facing(fromCurrentPosition: raccoonPosition, toPlayerPosition: playerPosition),
+                probe.expected,
+                "a player at tile delta (\(probe.tileDelta.x), \(probe.tileDelta.y)) must be faced as \(probe.expected)"
+            )
+        }
     }
 
     func test_facing_isNil_whenTheRaccoonIsAlreadyOnThePlayersTile() {
@@ -59,25 +84,23 @@ final class RaccoonSeekBehaviorTests: XCTestCase {
     }
 
     /// Drives a live `RaccoonNode` through several frames of a player
-    /// visiting four different quadrants around it, and asserts the node's
-    /// own `facing` (not just the pure helper) keeps tracking the player
-    /// continuously rather than freezing after the first frame.
+    /// visiting each cardinal tile direction around it, and asserts the
+    /// node's own `facing` (not just the pure helper) tracks the player
+    /// continuously *and lands on the exact expected case each time* --
+    /// same reasoning as `cardinalFacings`: an "it changed at least once"
+    /// assertion cannot see a dropped y-flip.
     func test_update_drivesRaccoonNodeFacing_continuouslyAsThePlayerMoves() {
         let raccoon = RaccoonNode(tier: .base)
         var position = TilePoint(x: 0, y: 0)
-        var observedFacings: Set<Direction8> = []
+        var observedFacings: [Direction8] = []
 
-        let playerPositions: [TilePoint] = [
-            TilePoint(x: 500, y: 0),
-            TilePoint(x: 0, y: 500),
-            TilePoint(x: -500, y: 0),
-            TilePoint(x: 0, y: -500),
-        ]
-
-        for playerPosition in playerPositions {
-            // Many small frames so the raccoon never actually reaches the
-            // (far-away) player tile mid-sweep, keeping the facing purely a
-            // function of this step's direction rather than converging.
+        for probe in Self.cardinalFacings {
+            // 500 tiles out, walked for only a handful of small frames, so
+            // the raccoon covers a fraction of a tile and never reaches the
+            // player mid-sweep: the facing stays the pure cardinal case
+            // rather than converging or being skewed by the previous leg's
+            // drift.
+            let playerPosition = TilePoint(x: probe.tileDelta.x * 500, y: probe.tileDelta.y * 500)
             for _ in 0..<3 {
                 position = RaccoonSeekBehavior.update(
                     raccoon: raccoon,
@@ -87,12 +110,13 @@ final class RaccoonSeekBehaviorTests: XCTestCase {
                     deltaTime: 1.0 / 60.0
                 )
             }
-            observedFacings.insert(raccoon.facing)
+            observedFacings.append(raccoon.facing)
         }
 
-        XCTAssertGreaterThan(
-            observedFacings.count, 1,
-            "the raccoon's facing never changed as the player visited 4 different quadrants: \(observedFacings)"
+        XCTAssertEqual(
+            observedFacings,
+            Self.cardinalFacings.map(\.expected),
+            "the raccoon's facing must follow the player through every cardinal tile direction, in the projection's own screen-space convention"
         )
     }
 
@@ -124,14 +148,14 @@ final class RaccoonSeekBehaviorTests: XCTestCase {
         XCTAssertLessThan(previousDistance, 20.0, "the raccoon must have made real progress toward the player")
     }
 
-    func test_update_neverOvershootsThePlayersTile_onAStalledFrame() {
+    func test_update_stopsAtTheContactStandoff_andNeverOvershoots_onAStalledFrame() {
         let raccoon = RaccoonNode(tier: .base)
         let playerPosition = TilePoint(x: 1, y: 0)
         let position = TilePoint(x: 0, y: 0)
 
         // A large deltaTime -- a stalled frame -- would overshoot a naive
         // fixed-speed step; `update` must clamp to land exactly on the
-        // player's tile instead.
+        // contact standoff ring instead, and never step past the player.
         let resolved = RaccoonSeekBehavior.update(
             raccoon: raccoon,
             currentPosition: position,
@@ -140,8 +164,64 @@ final class RaccoonSeekBehaviorTests: XCTestCase {
             deltaTime: 5.0
         )
 
-        XCTAssertEqual(resolved.x, playerPosition.x, accuracy: 1e-9)
+        XCTAssertEqual(
+            screenDistance(from: resolved, to: playerPosition),
+            RaccoonSeekBehavior.contactStandoffPoints(forTier: .base),
+            accuracy: 1e-9,
+            "a stalled frame must land the raccoon on the standoff ring, not on the player's tile"
+        )
+        XCTAssertGreaterThan(resolved.x, position.x, "the raccoon must still have closed on the player")
+        XCTAssertLessThan(resolved.x, playerPosition.x, "the raccoon must never step past the player")
         XCTAssertEqual(resolved.y, playerPosition.y, accuracy: 1e-9)
+    }
+
+    /// The intermediate-state guard review asked for: with no bite and no
+    /// death/despawn in this slice, nothing removes a raccoon that has
+    /// reached the player, so without a stop radius all
+    /// `RaccoonSpawnDirector.maxConcurrentSwarmSize` raccoons would converge
+    /// onto the player's exact tile and stack into what renders as a single
+    /// sprite, permanently. Every tier must settle *on* the standoff ring
+    /// instead -- reached, and never crossed.
+    func test_update_settlesOnTheContactStandoff_andNeverReachesThePlayersTile() {
+        for tier in [RaccoonTier.base, .elite] {
+            let raccoon = RaccoonNode(tier: tier)
+            let playerPosition = TilePoint(x: 3, y: -2)
+            var position = TilePoint(x: 0, y: 0)
+            let standoff = RaccoonSeekBehavior.contactStandoffPoints(forTier: tier)
+
+            for tick in 0..<200 {
+                position = RaccoonSeekBehavior.update(
+                    raccoon: raccoon,
+                    currentPosition: position,
+                    playerPosition: playerPosition,
+                    obstructions: [],
+                    deltaTime: 1.0 / 10.0
+                )
+                XCTAssertGreaterThanOrEqual(
+                    screenDistance(from: position, to: playerPosition),
+                    standoff - 1e-9,
+                    "\(tier) tick \(tick): a raccoon must never close inside the contact standoff"
+                )
+            }
+
+            XCTAssertEqual(
+                screenDistance(from: position, to: playerPosition),
+                standoff,
+                accuracy: 1e-6,
+                "\(tier): a raccoon must settle on the standoff ring, not stall short of it"
+            )
+        }
+    }
+
+    /// Screen-space (points) distance between two tile-space positions, via
+    /// the same projection the seek step is scaled in -- the space the
+    /// standoff is defined in.
+    private func screenDistance(from origin: TilePoint, to destination: TilePoint) -> Double {
+        let delta = IsometricProjection.tileToScreen(
+            tileX: destination.x - origin.x,
+            tileY: destination.y - origin.y
+        )
+        return hypot(Double(delta.x), Double(delta.y))
     }
 
     // MARK: - update(...) plays the walk animation

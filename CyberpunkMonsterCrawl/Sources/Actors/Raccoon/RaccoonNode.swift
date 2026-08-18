@@ -10,20 +10,26 @@ import SpriteKit
 /// bite/rabies logic and no spawning here; those are later parts of the
 /// `CYBERPUN-17-8` story.
 ///
-/// **No production caller yet, and that is a debt rather than a
-/// precedent.** Nothing in the app mounts a `RaccoonNode`: it is reachable
-/// only from `RaccoonNodeTests`, so the anchor, the elite draw size, the
-/// shadow width and the depth offset are exercised by the suite and never
-/// by a frame on a device. This slice explicitly does **not** follow
+/// **The production caller landed with PR 2 of this story.**
+/// `RaccoonSpawnDirector` mounts real `RaccoonNode`s into
+/// `GameScene.worldLayer` and `RaccoonSeekBehavior` drives their
+/// facing/animation every frame of a run, so the anchor, the elite draw
+/// size, the shadow width and the depth offset are now exercised by a frame
+/// on a device and not only by `RaccoonNodeTests`. When this slice
+/// (`-t1`) shipped on its own that was not yet true, and it explicitly did
+/// **not** follow
 /// `PlayerNode` (`CYBERPUN-17-6-t2`) here -- that PR shipped its own
 /// production caller (`GameScene.startPlayer(at:)`) in the same PR,
 /// precisely to satisfy the rule `GroundTileRenderer`'s type doc writes
 /// down for this repo: *"a factory with no production caller is exactly the
-/// shape of feature that never gets switched on"*. The swarm-spawning PR of
-/// this story is what switches the raccoon on. Until it lands, the pixel
-/// measurements in `RaccoonSpriteSheetPixelTests` (row/mirror table,
-/// anchor, ground footprint) are this slice's only line of defence, which
+/// shape of feature that never gets switched on"*. The pixel measurements
+/// in `RaccoonSpriteSheetPixelTests` (row/mirror table, anchor, ground
+/// footprint) were that slice's only line of defence in the meantime, which
 /// is why they measure the shipped art instead of restating the ticket.
+///
+/// The authoritative list of what is implemented versus still outstanding
+/// for this story (bite/damage, rabies, death/despawn) is the
+/// `CYBERPUN-17-8` entry in AGENT.md/CLAUDE.md, not these doc comments.
 final class RaccoonNode: SKNode {
 
     /// The baseline (tier `.base`) raccoon max HP. Elites scale this via

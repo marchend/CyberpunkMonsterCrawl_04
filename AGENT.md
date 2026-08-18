@@ -737,19 +737,18 @@ docs/bootstrap.md                          original spec (source of truth)
 
 ## Deferred work
 
-- Wiring the *remaining* real texture consumers (raccoons, bullets, pickups,
-  pulse, hit puff) into an actual on-screen scene — `TextureLoading.texture(named:)`
-  exists and is tested, but no scene mounts those sprites yet (later PRs).
-  Ground tiles, buildings and rooftop signs are no longer deferred:
-  `GroundPlaneStreamer.mountChunk` parents one
-  `TileFieldRenderer.makeBuildingNode(for:)` node per
-  `Chunk.buildingPlacements` record straight into `GameScene.worldLayer`
-  alongside that chunk's ground nodes (CYBERPUN-17-5-t2), with the chunk's
-  `roofSigns` attached as children of the carrier building node
-  (CYBERPUN-17-5-t3), and the player actor mounts with CYBERPUN-17-6. Product
-  gate 4 is therefore reachable in a real build, which is precisely the
-  justification for the CYBERPUN-17-5-t4 placeholder-label removal described
-  below
+- Wiring the *remaining* real texture consumers (bullets, pickups, pulse, hit puff) into an actual on-screen scene —
+  `TextureLoading.texture(named:)` exists and is tested, but no scene mounts those sprites yet (later PRs). Ground tiles, buildings and
+  rooftop signs (CYBERPUN-17-5-t2/-t3, `GroundPlaneStreamer.mountChunk` into `GameScene.worldLayer`), the player actor (CYBERPUN-17-6)
+  and the raccoon swarm (CYBERPUN-17-8-t2, `RaccoonSpawnDirector`) are no longer deferred, so product gate 4 is reachable in a real
+  build — precisely the justification for the CYBERPUN-17-5-t4 placeholder-label removal described below
+- Raccoon swarm (`CYBERPUN-17-8`) — **the authoritative implemented-vs-outstanding list for this story; read this rather than inferring the remaining scope from `RaccoonNode`/`RaccoonSeekBehavior`/`RaccoonSpawnDirector`'s doc comments.**
+  Implemented: the actor layer (`-t1` — `RaccoonNode`, `RaccoonAnimationController`, measured sheet/anchor/footprint) and off-screen spawning + per-frame seek/avoid steering (`-t2` — `RaccoonSpawnDirector`,
+  `RaccoonSeekBehavior`, `BuildingAvoidance`), driven once per run frame from `GameScene.advanceMovementAndCamera` and gated on `.gameplay`, so the swarm neither spawns nor steers behind the death/high-scores/menu screens.
+  Outstanding, with no invented ticket IDs: bite/contact damage, the RABIES status row and its d20 infection roll, kill/XP hooks, and death + despawn — nothing shrinks a run's swarm today, raccoons only leave
+  via `reset()` — plus the playtesting pass that retunes the named cadence/swarm-size constants (`initialSpawnInterval`, `spawnIntervalHalfLife`, `maxConcurrentSwarmSize`, `eliteSpawnFraction`).
+  Two bounds are recorded in code meanwhile: buildings only obstruct a raccoon once it is inside the resident chunk window (see `RaccoonSpawnDirector.farAxisMinimumTiles`, spawn radius 40-56 tiles against
+  `ChunkStreamingManager.guaranteedMarginTiles` 24), and the swarm rings the player at `RaccoonSeekBehavior.contactStandoffPoints(forTier:)` rather than stacking onto his tile, because no bite gives contact a consequence yet
 - Final gameplay HUD, death-screen run-summary rows and the high-scores list
   are explicitly out of scope for CYBERPUN-17-2 (see the story's "Out of
   scope" section): navigation (PLAY, RUN AGAIN, back-to-menu) is real; the
