@@ -202,6 +202,32 @@ final class PickupManager {
         return activePickups[index]
     }
 
+    /// Retires the active garbage can at exactly `position`, **without**
+    /// rolling `PickupKind.garbageCan`'s dice again (`CYBERPUN-17-11`
+    /// PR 3) -- the wounded-raccoon diversion path
+    /// (`RaccoonSeekBehavior.updateWithDiversion(...)`) already rolled and
+    /// applied that can's 1d6 itself, on the raccoon, the instant it
+    /// arrived, so this call only needs to mark the record consumed (pruned
+    /// by the very next `update(deltaTime:visibleRect:)` call). Calling
+    /// `attemptCollectGarbageCan(at:radius:)` here instead would roll a
+    /// second 1d6 that nothing applies -- exactly the double-roll this
+    /// type's own PR2 note warns a wiring caller away from.
+    ///
+    /// `position` must be the exact `Pickup.position` a prior
+    /// `nearestGarbageCan(within:of:)` call reported for this same can --
+    /// not an independently-computed point -- since the lookup here is an
+    /// exact (zero-radius) match, the same tolerance
+    /// `isOccupiedByActivePickup(_:)` uses for its own rounded-tile
+    /// equality check. Returns whether a matching, still-active garbage can
+    /// was actually found and retired; `false` is a no-op (already
+    /// retired, or nothing was ever there).
+    @discardableResult
+    func expireConsumedGarbageCan(at position: TilePoint) -> Bool {
+        guard let index = nearestActiveIndex(kind: .garbageCan, of: position, within: 0) else { return false }
+        activePickups[index].isConsumed = true
+        return true
+    }
+
     private func attemptCollect(kind: PickupKind, at position: TilePoint, radius: Double) -> Int? {
         guard let index = nearestActiveIndex(kind: kind, of: position, within: radius) else { return nil }
         activePickups[index].isConsumed = true

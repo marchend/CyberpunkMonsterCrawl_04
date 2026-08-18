@@ -165,6 +165,39 @@ final class GameScene: SKScene {
     /// guard above it is not enough on its own).
     private var raccoonSpawnDirector: RaccoonSpawnDirector!
 
+    /// Spawn/placement/lifetime engine for ground pickups (med kits,
+    /// garbage cans) -- `CYBERPUN-17-11` PR 3, the wiring PR for the
+    /// pure-logic `PickupManager` (PR 1) and the player/raccoon consume
+    /// effects (PR 2). Built in `commonInit()`, once `worldLayer` exists,
+    /// implicitly-unwrapped like `cameraController`/`raccoonSpawnDirector`.
+    /// `raccoonSpawnDirector` is handed a reference to this same instance so
+    /// `RaccoonSeekBehavior`'s garbage-can diversion (PR 2) can query and
+    /// consume a real, currently-active pickup rather than only the
+    /// isolated `TilePoint?` its own tests pass by hand.
+    ///
+    /// `private(set)` (not `private`) so `PickupIntegrationTests` can assert
+    /// on `activePickups.count` directly, the same way `groundPlane` and
+    /// `runStats` are exposed for their own scene-integration tests.
+    private(set) var pickupManager: PickupManager!
+
+    /// One mounted `PickupNode` per `Pickup` `pickupManager` currently
+    /// reports active (and not yet consumed), keyed by `Pickup.id` so
+    /// `syncPickupNodes()` mounts/unmounts exactly the nodes that changed
+    /// each frame rather than tearing down and rebuilding the whole set --
+    /// the same "diff, don't rebuild" discipline `GroundPlaneStreamer`'s
+    /// pool follows for its own much larger node population.
+    private var pickupNodes: [UUID: PickupNode] = [:]
+
+    /// Tile-space radius within which the player collects a med kit on
+    /// contact. Small and fixed, the same order of magnitude as
+    /// `RaccoonSeekBehavior.garbageCanArrivalRangeTiles` (`0.5`) -- a
+    /// stationary ground pickup consumed by proximity, not a hitbox-overlap
+    /// test against `PlayerSpriteSheet.hitboxSize`. An initial tuning
+    /// constant, like every other pickup-feel number this story ships
+    /// (`RaccoonSeekBehavior.pointsPerSecond` etc.) -- expected to move in a
+    /// later playtesting pass.
+    static let medKitCollectionRadiusTiles: Double = 0.5
+
     /// The current run's counters (`CYBERPUN-17-8` PR 3): kills recorded by
     /// every raccoon `raccoonSpawnDirector` spawns, infections recorded by
     /// every bite that rolls a success. One instance for the scene's whole
@@ -247,10 +280,27 @@ final class GameScene: SKScene {
             }
         )
 
+        // Built before `raccoonSpawnDirector` so that instance can be handed
+        // a reference to this one. The obstructions closure mirrors
+        // `raccoonSpawnDirector`'s own per-frame `groundPlane
+        // ?.residentObstructions` argument, but reads the raw
+        // `[BuildingPlacementRecord]` list `PickupManager`'s init wants
+        // (`CollisionResolver.FootprintBounds` -- what `residentObstructions`
+        // returns -- is already a lossy projection of that data) directly
+        // off `GroundPlaneStreamer.streaming.residentChunks`, the same
+        // source `BuildingSceneIntegrationTests` reads.
+        pickupManager = PickupManager(
+            worldSeed: worldSeed,
+            obstructionsProvider: { [weak self] in
+                self?.groundPlane?.streaming.residentChunks.values.flatMap(\.buildingPlacements) ?? []
+            }
+        )
+
         raccoonSpawnDirector = RaccoonSpawnDirector(
             worldLayer: worldLayer,
             deviceScale: { [weak self] in self?.deviceScale ?? 1 },
-            stats: runStats
+            stats: runStats,
+            pickupManager: pickupManager
         )
 
         stateMachine.onChange = { [weak self] state in
@@ -533,6 +583,17 @@ final class GameScene: SKScene {
         // "time since the last `.gameplay` entry, including time parked on
         // the death screen".
         if stateMachine.currentState == .gameplay {
+            // Independent of the camera-lock/chunk-streaming code paths
+            // above -- and of `raccoonSpawnDirector` below -- other than
+            // sharing this same `.gameplay` gate for the reason
+            // `raccoonSpawnDirector`'s own call documents (nothing may keep
+            // spawning or ageing pickups behind an opaque death/high-scores/
+            // menu backdrop). Runs *before* the swarm update so a raccoon's
+            // garbage-can diversion query (`raccoonSpawnDirector` was handed
+            // `pickupManager` at construction) sees this frame's freshly
+            // spawned/expired pickups rather than last frame's.
+            updatePickups(deltaTime: deltaTime, playerPosition: resolvedPosition)
+
             raccoonSpawnDirector.update(
                 deltaTime: deltaTime,
                 playerPosition: resolvedPosition,
@@ -544,6 +605,101 @@ final class GameScene: SKScene {
                 player: player,
                 obstructions: groundPlane?.residentObstructions ?? []
             )
+        }
+    }
+
+    // MARK: - Pickups (`CYBERPUN-17-11` PR 3)
+
+    /// Advances `pickupManager` by one frame, mounts/unmounts `PickupNode`s
+    /// for whatever spawned or expired/was-consumed, and resolves the
+    /// player's own med-kit collection on contact.
+    ///
+    /// The raccoon side of collection (garbage-can diversion/consumption)
+    /// is *not* driven from here: `raccoonSpawnDirector` already holds a
+    /// reference to `pickupManager` (handed to it at construction in
+    /// `commonInit()`) and queries/consumes a garbage can itself, once per
+    /// wounded raccoon, from its own per-frame loop -- there is no single
+    /// "the player's position" equivalent for a whole swarm, so that query
+    /// has to happen per-raccoon, where the raccoon's own position is
+    /// already in scope.
+    private func updatePickups(deltaTime: TimeInterval, playerPosition: TilePoint) {
+        pickupManager.update(deltaTime: deltaTime, visibleRect: pickupVisibleTileRect())
+        syncPickupNodes()
+
+        if let healedAmount = pickupManager.attemptCollectMedKit(
+            at: playerPosition,
+            radius: Self.medKitCollectionRadiusTiles
+        ) {
+            player?.heal(healedAmount)
+            // The manager marks the med kit consumed immediately but only
+            // prunes it from `activePickups` on its *next* `update` call
+            // (see that type's own doc comment) -- sync again right away so
+            // the collected icon disappears on the very frame it was
+            // collected rather than lingering one extra frame.
+            syncPickupNodes()
+        }
+    }
+
+    /// The tile-space rectangle `pickupManager.update(deltaTime:visibleRect:)`
+    /// may place a new spawn within this frame: an axis-aligned square in
+    /// tile space, centred on `cameraWorldPosition`, sized so its
+    /// screen-space image (a diamond, under `IsometricProjection`'s linear
+    /// transform) fully covers the current `size`-sized viewport.
+    ///
+    /// Derived algebraically, not assumed: `IsometricProjection`'s forward
+    /// transform has no translation term, so the *inverse* image of an
+    /// axis-aligned screen rectangle's four corners is itself an
+    /// axis-aligned rectangle in tile space -- and working through the
+    /// corners (`screenToTile(screenX:screenY:)`) shows both tile axes come
+    /// out to the identical half-extent `width/(4 * tileHalfWidth) +
+    /// height/(4 * tileHalfHeight)`, i.e. a square. This is the same
+    /// arithmetic `ChunkStreamingManager.coversViewport(widthPoints:
+    /// heightPoints:radius:)` runs in the opposite direction (solved for the
+    /// covering tile *radius* instead of the covered screen *rectangle*).
+    ///
+    /// Keyed off `cameraWorldPosition` (derived from the live
+    /// `worldLayer`/`cameraNode` offset) rather than `playerWorldPosition`
+    /// directly, per this PR's own wiring note: the two agree once
+    /// `cameraController` has caught up, but this stays correct regardless
+    /// of any camera-lock offset or lag between the two.
+    private func pickupVisibleTileRect() -> CGRect {
+        let halfExtent = Double(size.width) / (4 * IsometricProjection.tileHalfWidth)
+            + Double(size.height) / (4 * IsometricProjection.tileHalfHeight)
+        let camera = cameraWorldPosition
+        return CGRect(
+            x: CGFloat(camera.x - halfExtent),
+            y: CGFloat(camera.y - halfExtent),
+            width: CGFloat(halfExtent * 2),
+            height: CGFloat(halfExtent * 2)
+        )
+    }
+
+    /// Mounts a `PickupNode` for every active, not-yet-consumed pickup
+    /// `pickupManager` reports that has no mounted node yet, and unmounts
+    /// every mounted node whose pickup is no longer active (expired by age,
+    /// or just consumed) -- a diff against `pickupNodes`, not a rebuild.
+    private func syncPickupNodes() {
+        let active = pickupManager.activePickups.filter { !$0.isConsumed }
+        let activeIDs = Set(active.map(\.id))
+
+        for pickup in active where pickupNodes[pickup.id] == nil {
+            let node = PickupNode(kind: pickup.kind)
+            // A pickup never moves once spawned (`Pickup.position`'s own
+            // doc comment), so position/depth are resolved once here at
+            // mount time rather than re-derived every frame.
+            node.updateScreenPosition(atTilePosition: pickup.position, deviceScale: deviceScale)
+            // Mounted directly under `worldLayer`, the same convention
+            // `PlayerNode`/`RaccoonNode` follow and the one
+            // `PickupNode.updateDepth(atTilePosition:)` itself documents --
+            // this is what makes a pickup participate in the same
+            // depth-sort pass as buildings/actors.
+            worldLayer.addChild(node)
+            pickupNodes[pickup.id] = node
+        }
+
+        for id in Array(pickupNodes.keys) where !activeIDs.contains(id) {
+            pickupNodes[id]?.removeFromParent()
+            pickupNodes[id] = nil
         }
     }
 
