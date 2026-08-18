@@ -152,6 +152,19 @@ final class GameScene: SKScene {
     /// implicitly-unwrapped rather than given a stored-property initializer.
     private var cameraController: CameraController!
 
+    /// Off-screen spawn selection and per-frame seek/avoidance for the
+    /// raccoon swarm (`CYBERPUN-17-8` PR 2). Built in `commonInit()`, once
+    /// `worldLayer` exists, so it is implicitly-unwrapped like
+    /// `cameraController`. `updateWorldContent(for:)` resets it on every
+    /// fresh entry to `.gameplay`, and `advanceMovementAndCamera(currentTime:)`
+    /// drives its single `update(deltaTime:playerPosition:obstructions:)`
+    /// call site on every frame **of a run** -- that call is gated on
+    /// `stateMachine.currentState == .gameplay`, so the swarm neither
+    /// spawns nor steers while the death/high-scores/menu screens are up
+    /// (see the gate's own comment for why the `player`/`playerWorldPosition`
+    /// guard above it is not enough on its own).
+    private var raccoonSpawnDirector: RaccoonSpawnDirector!
+
     /// The touch currently engaging `thumbstick`, if any -- tracked so
     /// `touchesMoved`/`touchesEnded`/`touchesCancelled` can tell the stick's
     /// own drag apart from any other concurrent touch (a button tap)
@@ -226,6 +239,11 @@ final class GameScene: SKScene {
             }
         )
 
+        raccoonSpawnDirector = RaccoonSpawnDirector(
+            worldLayer: worldLayer,
+            deviceScale: { [weak self] in self?.deviceScale ?? 1 }
+        )
+
         stateMachine.onChange = { [weak self] state in
             guard let self else { return }
             self.transitionScreens(to: state)
@@ -262,6 +280,12 @@ final class GameScene: SKScene {
             // already exists; ordering in `worldLayer` is decided by
             // `DepthModel`/`DepthBanding` zPositions, not by child order.
             startPlayer(at: spawn)
+            // A fresh swarm for a fresh run -- without this, a RUN AGAIN
+            // would inherit the previous run's raccoons instead of
+            // starting clean, the same reason `startGroundPlane()` /
+            // `startPlayer(at:)` exist rather than assuming nothing needs
+            // resetting.
+            raccoonSpawnDirector.reset()
             thumbstick.isRunActive = true
             cameraController.update(focus: spawn, viewportSize: size)
             #if DEBUG
@@ -466,6 +490,33 @@ final class GameScene: SKScene {
         player.update(deltaTime: deltaTime, movementVector: visualVector)
 
         cameraController.update(focus: resolvedPosition, viewportSize: size)
+
+        // The single integration call driving the raccoon swarm
+        // (`CYBERPUN-17-8` PR 2): off-screen spawn selection, cadence/ramp
+        // and per-raccoon seek-and-avoid steering all live inside
+        // `RaccoonSpawnDirector` itself.
+        //
+        // Gated on the run actually being in progress. `update(_:)` runs on
+        // every screen, and neither `player` nor `playerWorldPosition` is
+        // ever cleared when a run ends (the `.menu/.death/.highScores`
+        // branch of `updateWorldContent(for:)` only hides the thumbstick),
+        // so without this gate every frame spent on the death or
+        // high-scores screen would keep ramping the director's
+        // `elapsedRunTime`, spawning raccoons up to
+        // `RaccoonSpawnDirector.maxConcurrentSwarmSize`, allocating their
+        // nodes into `worldLayer` and steering the whole swarm behind an
+        // opaque backdrop. The player pipeline above is self-limiting out
+        // there (the stick reads zero once `isRunActive` is false); the
+        // director is not, and its "elapsed run time" would otherwise mean
+        // "time since the last `.gameplay` entry, including time parked on
+        // the death screen".
+        if stateMachine.currentState == .gameplay {
+            raccoonSpawnDirector.update(
+                deltaTime: deltaTime,
+                playerPosition: resolvedPosition,
+                obstructions: groundPlane?.residentObstructions ?? []
+            )
+        }
     }
 
     /// Drains `groundPlane`'s incremental-mount queue a few chunks at a time
