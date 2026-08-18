@@ -1,6 +1,7 @@
 import XCTest
 import SpriteKit
 import UIKit
+import QuartzCore
 @testable import CyberpunkMonsterCrawl
 
 /// The regression guard for the failure the runtime probe caught: "tapped
@@ -107,6 +108,22 @@ final class AccessibleSKViewTests: XCTestCase {
         view.isPaused = true
         view.presentScene(scene)
         view.isPaused = true
+
+        // Belt-and-braces against the exact class of race the comment above
+        // documents: `presentScene(_:)` (and the scene's own `didMove(to:)`,
+        // which SpriteKit calls synchronously from inside it) can still leave
+        // work queued on the main run loop - a `CATransaction` awaiting
+        // commit, or a block some SpriteKit-internal path deferred with
+        // `DispatchQueue.main.async` - that would otherwise only run once
+        // control returns to XCTest's own run loop *between* test methods,
+        // i.e. potentially interleaved with a *later* test's presentation
+        // under CI load rather than settled before this one reads geometry.
+        // Flushing the transaction and giving the run loop one non-blocking
+        // pass forces any such work to complete right here, synchronously,
+        // so every assertion below reads state that has actually settled
+        // instead of state that is still mid-flight.
+        CATransaction.flush()
+        RunLoop.current.run(until: Date())
 
         // The postcondition itself, asserted in the helper so it covers
         // every test in the file at once rather than one of them.
