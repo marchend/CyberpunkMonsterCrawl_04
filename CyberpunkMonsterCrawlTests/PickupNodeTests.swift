@@ -90,14 +90,75 @@ final class PickupNodeTests: XCTestCase {
 
     // MARK: - Pixel crispness
 
-    func test_iconAndPad_areNearestFilteredAndWholeIntegerScaled() {
+    /// Pixel-crispness of the icon and pad, restated so it measures what it
+    /// claims.
+    ///
+    /// This replaces `PixelCrispness.isIntegerScale(icon.xScale)`
+    /// assertions that were trivially true: all of the icon's magnification
+    /// lives in `SKSpriteNode.size` (`PickupNode.iconSize`), so
+    /// `xScale`/`yScale` are always exactly 1 and the assertion read as
+    /// coverage of a draw scale it never saw -- the same vacuity
+    /// `RaccoonNodeTests.test_body_isPixelCrisp_andCarriesNoMagnificationInItsScale`
+    /// was written to replace. The invariant actually worth pinning is that
+    /// no magnification ever reaches the scale properties (which is what
+    /// stops `PixelCrispness.apply(to:)` rounding it), with the effective
+    /// magnification pinned separately below.
+    func test_iconAndPad_arePixelCrisp_andCarryNoMagnificationInTheirScale() {
+        for kind in PickupKind.allCases {
+            let node = PickupNode(kind: kind)
+
+            XCTAssertEqual(node.icon.texture?.filteringMode, .nearest)
+            XCTAssertEqual(node.icon.texture?.usesMipmaps, false)
+
+            XCTAssertEqual(
+                abs(node.icon.xScale), 1, accuracy: 1e-6,
+                "\(kind): the icon's xScale must never carry magnification."
+            )
+            XCTAssertEqual(
+                abs(node.icon.yScale), 1, accuracy: 1e-6,
+                "\(kind): the icon's yScale must never carry magnification."
+            )
+            XCTAssertEqual(abs(node.pad.xScale), 1, accuracy: 1e-6, "\(kind): the pad's xScale must be unscaled.")
+            XCTAssertEqual(abs(node.pad.yScale), 1, accuracy: 1e-6, "\(kind): the pad's yScale must be unscaled.")
+        }
+    }
+
+    /// The story's 32pt icon stated as the *effective* magnification (the
+    /// measured source cell to the drawn size) rather than as an `xScale`
+    /// that never carries it.
+    ///
+    /// The icon is deliberately **outside** `PixelCrispness`'s
+    /// integer-scale rule: 32/24 is 1.333x, so the compositor resamples the
+    /// source pixels unevenly. That trade is the story's, documented on
+    /// `PickupNode.iconSize`, and pinned here so nobody reads the crispness
+    /// test above as a promise the magnification is integral.
+    func test_icon_effectiveMagnification_isTheStorys32ptIconOverTheMeasured24pxCell() throws {
+        let cellSize = try XCTUnwrap(
+            AtlasSheet.pickups.sheet.cellSize,
+            "sprite_pickups must declare a uniform cell size for this magnification to be meaningful"
+        )
         let node = PickupNode(kind: .medKit)
-        XCTAssertEqual(node.icon.texture?.filteringMode, .nearest)
-        XCTAssertEqual(node.icon.texture?.usesMipmaps, false)
-        XCTAssertTrue(PixelCrispness.isIntegerScale(node.icon.xScale))
-        XCTAssertTrue(PixelCrispness.isIntegerScale(node.icon.yScale))
-        XCTAssertTrue(PixelCrispness.isIntegerScale(node.pad.xScale))
-        XCTAssertTrue(PixelCrispness.isIntegerScale(node.pad.yScale))
+
+        let horizontal = node.icon.size.width / cellSize.width
+        let vertical = node.icon.size.height / cellSize.height
+
+        XCTAssertEqual(
+            horizontal, 32.0 / 24.0, accuracy: 1e-6,
+            "The icon's drawn width (\(node.icon.size.width)) is not the story's 32pt over the measured "
+                + "\(cellSize.width)px cell."
+        )
+        XCTAssertEqual(
+            vertical, 32.0 / 24.0, accuracy: 1e-6,
+            "The icon's drawn height (\(node.icon.size.height)) is not the story's 32pt over the measured "
+                + "\(cellSize.height)px cell."
+        )
+
+        XCTAssertFalse(
+            PixelCrispness.isIntegerScale(horizontal),
+            "The icon's \(horizontal)x magnification is non-integer by design (docs on PickupNode.iconSize). "
+                + "If it has become integral, the opt-out documented there is stale and should be removed "
+                + "rather than this assertion."
+        )
     }
 
     // MARK: - Depth-sort conformance

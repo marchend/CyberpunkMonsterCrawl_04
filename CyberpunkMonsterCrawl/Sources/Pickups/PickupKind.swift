@@ -42,6 +42,28 @@ enum PickupKind: CaseIterable, Equatable, Hashable {
         /// running (after the first spawn, and after every subsequent one).
         let spawnCadence: TimeInterval
         /// Hard cap on concurrently-alive, uncollected pickups of this kind.
+        ///
+        /// **Unreachable at the frozen numbers below -- the effective
+        /// ceiling is 1, not 2.** `spawnCadence` (25s) is longer than
+        /// `lifetime` (20s), and a kind's cadence only re-arms *after* a
+        /// successful spawn, so a pickup always expires (spawn + 20s)
+        /// before its kind's next spawn attempt (spawn + 25s); a failed
+        /// placement search holds the timer at `0` but still only ever
+        /// produces one pickup at a time. `PickupManager.update`'s
+        /// `aliveCount < maxAlive` branch therefore never fires under these
+        /// values, and this cap stands as a safety net rather than an
+        /// exercised path.
+        ///
+        /// Recorded here rather than left for a reader to infer, because
+        /// `PickupManagerTests.test_maxAlivePerKind_isNeverExceeded` would
+        /// otherwise read as coverage of a cap it never reaches. That test
+        /// carries an anti-vacuity guard (the shape
+        /// `ChunkStreamingManagerTests`' viewport coverage uses) pinning the
+        /// observed ceiling at exactly 1, so a future retune that makes the
+        /// cap reachable turns the suite red and whoever retunes adds a test
+        /// that exercises the cap branch itself. Whether "max 2 alive per
+        /// kind" was *meant* to be reachable is a question for whoever
+        /// tuned these values; this PR does not change frozen numbers.
         let maxAlive: Int
         /// Seconds an uncollected pickup of this kind survives on the
         /// ground before `PickupManager` expires it, aged strictly by real

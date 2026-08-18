@@ -44,6 +44,19 @@ final class PickupManagerTests: XCTestCase {
         )
     }
 
+    /// A tile-space `visibleRect` covering the whole 3x3 crossing area
+    /// around `tile` -- every one of those 9 tiles is street (see
+    /// `knownGoodStreetTile`), so both kinds can find a legal tile on the
+    /// same tick without stacking on each other.
+    ///
+    /// Needed wherever a test wants two pickups alive at once: since
+    /// `PickupManager.isLegalPlacement` now rejects a tile an active pickup
+    /// already occupies, `narrowVisibleRect`'s single candidate tile can
+    /// hold exactly one pickup at a time by construction.
+    private func crossingVisibleRect(around tile: TileCoordinate) -> CGRect {
+        narrowVisibleRect(around: tile, halfExtent: 1.4)
+    }
+
     private func makeBuildingRecord(at tile: TileCoordinate) -> BuildingPlacementRecord {
         BuildingPlacementRecord(
             lotTile: tile,
@@ -81,7 +94,11 @@ final class PickupManagerTests: XCTestCase {
 
     func test_cadence_isTwentyFiveSecondsBetweenSuccessiveSpawnsOfTheSameKind() {
         let manager = makeManager()
-        let rect = narrowVisibleRect(around: knownGoodStreetTile)
+        // The 3x3 crossing, not the single-tile rect: with the
+        // one-pickup-per-tile rule a single candidate tile serializes the
+        // two kinds behind each other, which would measure tile contention
+        // rather than the med kit's own cadence.
+        let rect = crossingVisibleRect(around: knownGoodStreetTile)
         let step: TimeInterval = 0.25
 
         var elapsed: TimeInterval = 0
@@ -116,12 +133,24 @@ final class PickupManagerTests: XCTestCase {
 
     // MARK: - Max alive per kind
 
-    func test_maxAlivePerKind_isNeverExceeded() {
+    /// The cap invariant, **plus an anti-vacuity guard on it.**
+    ///
+    /// `aliveCount <= maxAlive` alone is vacuous at the frozen tuning: with
+    /// `spawnCadence` 25s longer than `lifetime` 20s, and the cadence only
+    /// re-arming after a successful spawn, a pickup always expires before
+    /// its kind's next spawn attempt -- the observed ceiling is 1, so the
+    /// `maxAlive: 2` cap (and `PickupManager.update`'s hold-at-0 "no room"
+    /// branch) is never reached. `PickupKind.Tuning.maxAlive` records that;
+    /// the peak assertion below pins it, so a retune that makes the cap
+    /// reachable turns this red instead of quietly shipping an unexercised
+    /// branch under a green suite.
+    func test_maxAlivePerKind_isNeverExceeded_andTheObservedCeilingIsPinned() {
         let manager = makeManager()
-        let rect = narrowVisibleRect(around: knownGoodStreetTile)
+        let rect = crossingVisibleRect(around: knownGoodStreetTile)
         let step: TimeInterval = 1.0
 
         var elapsed: TimeInterval = 0
+        var peakAlive: [PickupKind: Int] = [:]
         while elapsed < 300 {
             manager.update(deltaTime: step, visibleRect: rect)
             elapsed += step
@@ -132,7 +161,21 @@ final class PickupManagerTests: XCTestCase {
                     aliveCount, kind.tuning.maxAlive,
                     "\(kind) exceeded its max-alive cap of \(kind.tuning.maxAlive) at t=\(elapsed)s"
                 )
+                peakAlive[kind] = max(peakAlive[kind] ?? 0, aliveCount)
             }
+        }
+
+        for kind in PickupKind.allCases {
+            XCTAssertEqual(
+                peakAlive[kind], 1,
+                "\(kind) peaked at \(peakAlive[kind] ?? 0) alive over 300s. The assertion above is only "
+                    + "meaningful if this ceiling is 1: at the frozen tuning (cadence "
+                    + "\(kind.tuning.spawnCadence)s > lifetime \(kind.tuning.lifetime)s) the "
+                    + "maxAlive cap of \(kind.tuning.maxAlive) is unreachable, as "
+                    + "PickupKind.Tuning.maxAlive documents. If the tuning changed so the cap is now "
+                    + "reachable, add a test that exercises the cap branch and update that doc rather "
+                    + "than relaxing this guard."
+            )
         }
     }
 
@@ -140,7 +183,12 @@ final class PickupManagerTests: XCTestCase {
 
     func test_pickup_expiresExactlyAtTwentySecondsOfAge() {
         let manager = makeManager()
-        let rect = narrowVisibleRect(around: knownGoodStreetTile)
+        // The 3x3 crossing, so both kinds spawn (and therefore both expire)
+        // on the same schedule. On the single-tile rect the second kind's
+        // spawn is deferred by the one-pickup-per-tile rule and would land
+        // the instant the first expires, leaving `activePickups` non-empty
+        // for a reason this test is not about.
+        let rect = crossingVisibleRect(around: knownGoodStreetTile)
 
         manager.update(deltaTime: 8, visibleRect: rect) // spawns at age 0
         XCTAssertFalse(manager.activePickups.isEmpty)
@@ -158,7 +206,7 @@ final class PickupManagerTests: XCTestCase {
     /// pickup's remaining lifetime.
     func test_largeVisibleRectJumpBetweenUpdates_doesNotAffectPickupAging() {
         let manager = makeManager()
-        let nearbyRect = narrowVisibleRect(around: knownGoodStreetTile)
+        let nearbyRect = crossingVisibleRect(around: knownGoodStreetTile)
 
         manager.update(deltaTime: 8, visibleRect: nearbyRect) // spawns at age 0
         XCTAssertFalse(manager.activePickups.isEmpty)
@@ -232,10 +280,37 @@ final class PickupManagerTests: XCTestCase {
         )
     }
 
-    /// The same configuration as the obstructed case above, but without the
-    /// obstruction -- proving the previous test's silence is really caused
-    /// by the injected building, not by some unrelated reason spawning
-    /// never happens at that tile.
+    /// The story's rule is "the chosen tile **and** all 8 neighbours must be
+    /// building-free", so an obstruction on the candidate tile *itself* --
+    /// not merely beside it -- must also block the spawn. The injected
+    /// record deliberately sits on a tile `CityLatticeGenerator.classify`
+    /// still calls street, which is exactly the disagreement the street-kind
+    /// check alone could not catch.
+    func test_obstructionOnTheCandidateTileItself_preventsSpawning() {
+        let tile = knownGoodStreetTile
+        let obstruction = makeBuildingRecord(at: tile)
+
+        let manager = makeManager(rngSeed: 99, obstructionsProvider: { [obstruction] })
+        let rect = narrowVisibleRect(around: tile)
+
+        let step: TimeInterval = 1.0
+        var elapsed: TimeInterval = 0
+        while elapsed < 60 {
+            manager.update(deltaTime: step, visibleRect: rect)
+            elapsed += step
+        }
+
+        XCTAssertTrue(
+            manager.activePickups.isEmpty,
+            "no pickup should ever spawn on a tile a building footprint occupies, however the lattice "
+                + "happens to classify that tile"
+        )
+    }
+
+    /// The same configuration as the two obstructed cases above, but with no
+    /// obstruction at all -- proving their silence is really caused by the
+    /// injected building, not by some unrelated reason spawning never
+    /// happens at that tile.
     func test_sameTileWithoutObstruction_doesSpawn() {
         let tile = knownGoodStreetTile
         let manager = makeManager(rngSeed: 99, obstructionsProvider: { [] })
@@ -244,6 +319,47 @@ final class PickupManagerTests: XCTestCase {
         manager.update(deltaTime: 8, visibleRect: rect)
 
         XCTAssertFalse(manager.activePickups.isEmpty, "expected a spawn once the obstruction is removed")
+    }
+
+    // MARK: - One pickup per tile
+
+    /// Both kinds share `firstSpawnDelay` and `spawnCadence`, so they draw
+    /// from the same visible rect on the same tick. With only one legal
+    /// tile available, the second kind must be turned away rather than
+    /// stacking a second 32pt icon on the first at an identical depth
+    /// offset.
+    func test_twoKinds_doNotStackOnTheOnlyLegalTile() {
+        let manager = makeManager()
+        let rect = narrowVisibleRect(around: knownGoodStreetTile) // exactly one candidate tile
+
+        manager.update(deltaTime: 8, visibleRect: rect)
+
+        XCTAssertEqual(
+            manager.activePickups.count, 1,
+            "a single legal tile can hold one pickup; a second pickup here would draw on top of the first"
+        )
+    }
+
+    /// The same rule across a long run and a rect with room to spread out:
+    /// no two active pickups may ever share a tile.
+    func test_noTwoActivePickups_everShareATile() {
+        let manager = makeManager()
+        let rect = crossingVisibleRect(around: knownGoodStreetTile)
+        let step: TimeInterval = 1.0
+
+        var elapsed: TimeInterval = 0
+        while elapsed < 300 {
+            manager.update(deltaTime: step, visibleRect: rect)
+            elapsed += step
+
+            let tiles = manager.activePickups.map { pickup in
+                "\(Int(pickup.position.x.rounded())),\(Int(pickup.position.y.rounded()))"
+            }
+            XCTAssertEqual(
+                Set(tiles).count, tiles.count,
+                "two pickups occupy the same tile at t=\(elapsed)s: \(manager.activePickups.map(\.position))"
+            )
+        }
     }
 
     // MARK: - Collection queries
@@ -275,7 +391,9 @@ final class PickupManagerTests: XCTestCase {
 
     func test_nearestGarbageCan_findsAnActiveGarbageCanWithoutConsumingIt() {
         let manager = makeManager(rngSeed: 5)
-        let rect = narrowVisibleRect(around: knownGoodStreetTile)
+        // The 3x3 crossing: a garbage can needs a tile of its own now that
+        // the med kit spawning on the same tick claims one.
+        let rect = crossingVisibleRect(around: knownGoodStreetTile)
         manager.update(deltaTime: 8, visibleRect: rect)
 
         let garbageCan = manager.activePickups.first { $0.kind == .garbageCan }

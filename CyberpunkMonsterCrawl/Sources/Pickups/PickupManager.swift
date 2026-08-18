@@ -6,7 +6,13 @@ import Foundation
 /// `ChunkStreamingManager` / `RaccoonSpawnDirector`'s own "logic first,
 /// rendering is a later PR" split. `PickupNode` (this same PR) is the
 /// SpriteKit half; nothing mounts one yet -- `CYBERPUN-17-11` PR 1's scope
-/// is explicitly "no scene wiring".
+/// is explicitly "no scene wiring". No invented ticket ID is given for that
+/// wiring here: the authoritative list of what is implemented versus still
+/// outstanding for this story (the scene mount, applying a med kit's 1d10
+/// heal, diverting a wounded raccoon to a garbage can) is the
+/// `CYBERPUN-17-11` entry in AGENT.md/CLAUDE.md -- read that rather than
+/// inferring the remaining scope from these doc comments, the same
+/// convention `RaccoonSpawnDirector` follows.
 ///
 /// **Per-kind spawn/cadence timers.** Each `PickupKind` counts down its own
 /// `PickupKind.Tuning.firstSpawnDelay` once, then re-arms at
@@ -30,15 +36,27 @@ import Foundation
 /// **Placement validation, at spawn-attempt time only.** A candidate tile
 /// must be (a) classified a *street* kind by `CityLatticeGenerator.classify`
 /// -- asphalt, junction stop-line or kerb-sidewalk, never a `.lot` or
-/// `.buildingFootprint` block-interior tile -- and (b) have all 8 of its
-/// neighbours free of any building footprint, checked via
+/// `.buildingFootprint` block-interior tile -- (b) unoccupied by any
+/// already-active pickup of *either* kind, and (c) have the tile itself and
+/// all 8 of its neighbours free of any building footprint, checked via
 /// `BuildingObstruction.isObstructed(_:byAnyOf:)` against whatever
 /// `obstructionsProvider()` currently reports (the same shape
 /// `GroundPlaneStreamer.residentObstructions` hands `RaccoonSpawnDirector`;
 /// defaults to an empty list so a caller with no buildings at all -- most
-/// unit tests -- needs no fixture). Both checks run only while searching
-/// for a *new* spawn location; an already-placed pickup is never
+/// unit tests -- needs no fixture). All three checks run only while
+/// searching for a *new* spawn location; an already-placed pickup is never
 /// re-validated or moved.
+///
+/// **One pickup per tile.** Both kinds share a `firstSpawnDelay` and a
+/// `spawnCadence`, so they attempt their spawns on the same tick and draw
+/// independently from the same `visibleRect`; without check (b) a med kit
+/// and a garbage can could land on the identical tile, where the depth
+/// model would resolve both to the same rounded tile and the same
+/// `DepthBanding.nonPlayerActorOffsetRange.lowerBound` offset -- two icons
+/// drawn over each other in undefined order, against the story's "legible
+/// at a glance" gate. Rejecting an occupied tile is the same "don't place
+/// on top of existing content" rule `Chunk.reserve(footprint:at:)` applies
+/// to buildings.
 final class PickupManager {
 
     /// Upper bound on how many candidate tiles a single spawn attempt tries
@@ -130,6 +148,12 @@ final class PickupManager {
                 // collection call) is spawned into on the very next tick,
                 // mirroring `RaccoonSpawnDirector.update`'s own "no room"
                 // branch.
+                //
+                // Unreachable at the frozen tuning (cadence 25s > lifetime
+                // 20s makes the effective ceiling 1 per kind, below
+                // `maxAlive: 2`) -- see `PickupKind.Tuning.maxAlive`, which
+                // records why this branch ships unexercised and what a
+                // retune owes it.
                 timeUntilNextSpawn[kind] = 0
                 continue
             }
@@ -232,25 +256,50 @@ final class PickupManager {
     /// (rounding a random draw to the nearest whole tile can only ever move
     /// it *toward* the sampled range's own bounds, but the check is made
     /// explicit rather than assumed), it classifies as a street kind
-    /// (`isStreetKind`), and every one of its 8 neighbours is free of any
-    /// building footprint.
+    /// (`isStreetKind`), no already-active pickup occupies it
+    /// (`isOccupiedByActivePickup`), and the tile itself plus every one of
+    /// its 8 neighbours is free of any building footprint.
+    ///
+    /// The candidate tile is checked for obstruction alongside its
+    /// neighbours rather than skipped: the story's rule is "the chosen tile
+    /// **and** all 8 neighbours must be building-free", and leaving the
+    /// tile itself to `isStreetKind` alone would rest on
+    /// `CityLatticeGenerator.classify` and the `BuildingPlacementRecord` set
+    /// never disagreeing about which tiles a building occupies -- a
+    /// cross-system invariant this type does not own. `obstructions` is
+    /// already in hand, so asking directly costs nothing and also covers a
+    /// future placement pass reserving a tile the lattice calls street.
     private func isLegalPlacement(_ tile: TileCoordinate, visibleRect: CGRect) -> Bool {
         guard visibleRect.contains(CGPoint(x: CGFloat(tile.tileX), y: CGFloat(tile.tileY))) else { return false }
 
         let info = CityLatticeGenerator.classify(tileX: tile.tileX, tileY: tile.tileY, seed: worldSeed)
         guard Self.isStreetKind(info.kind) else { return false }
 
+        guard !isOccupiedByActivePickup(tile) else { return false }
+
         let obstructions = obstructionsProvider()
         for dx in -1...1 {
             for dy in -1...1 {
-                guard dx != 0 || dy != 0 else { continue } // the 8 neighbours, not the tile itself
-                let neighbour = TileCoordinate(tileX: tile.tileX + dx, tileY: tile.tileY + dy)
-                if BuildingObstruction.isObstructed(neighbour, byAnyOf: obstructions) {
+                // The candidate tile itself (dx == 0, dy == 0) *and* all 8
+                // neighbours -- see this method's doc comment.
+                let subject = TileCoordinate(tileX: tile.tileX + dx, tileY: tile.tileY + dy)
+                if BuildingObstruction.isObstructed(subject, byAnyOf: obstructions) {
                     return false
                 }
             }
         }
         return true
+    }
+
+    /// Whether any currently-active pickup -- of either kind -- already
+    /// stands on `tile`. Every spawned pickup sits at a whole tile centre
+    /// (`selectSpawnPosition` rounds its draw), so comparing the rounded
+    /// tile-space position is exact rather than a distance tolerance.
+    private func isOccupiedByActivePickup(_ tile: TileCoordinate) -> Bool {
+        activePickups.contains { pickup in
+            Int(pickup.position.x.rounded()) == tile.tileX
+                && Int(pickup.position.y.rounded()) == tile.tileY
+        }
     }
 
     /// Whether `kind` is one of the three street sub-kinds
