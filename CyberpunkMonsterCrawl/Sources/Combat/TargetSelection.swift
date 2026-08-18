@@ -10,9 +10,10 @@ import Foundation
 /// belongs to the raccoon-swarm story. This file's job is the pure
 /// selection rule alone, so it takes any list of raccoon-with-position
 /// pairs (`Candidate`) rather than reaching into that director's
-/// internals. The end-to-end wiring PR named in this story's own plan (PR
-/// 3) is expected to build a `[TargetSelection.Candidate]` from the spawn
-/// director's live swarm each frame.
+/// internals. The story's later end-to-end wiring PR is expected to build
+/// a `[TargetSelection.Candidate]` from the spawn director's live swarm
+/// each frame (see `WeaponFiringController`'s type doc for why that caller
+/// is deferred rather than landed here).
 enum TargetSelection {
 
     /// One live (or recently-live) raccoon paired with its current
@@ -36,6 +37,15 @@ enum TargetSelection {
     /// The nearest **living** raccoon among `raccoons` within `maxRange`
     /// tiles of `origin`, or `nil` if none qualifies.
     ///
+    /// Returns the winning `Candidate` \u2014 node *and* tile-space position \u2014
+    /// rather than the bare `RaccoonNode`, because `RaccoonNode` carries no
+    /// tile-space position of its own (see `Candidate`). A consumer that
+    /// needs the shot vector or the muzzle placement (bullets are authored
+    /// pointing screen-right and must be drawn rotated to the shot vector)
+    /// would otherwise have to re-scan `raccoons` by `===` to recover the
+    /// position this function had just computed \u2014 an O(n) re-lookup that
+    /// also picks the wrong entry if the same node ever appears twice.
+    ///
     /// A dead raccoon (`RaccoonNode.isDead`) is filtered out **before**
     /// any distance comparison \u2014 the story's re-target-on-death
     /// requirement \u2014 so a caller can never select an already-dead target,
@@ -51,8 +61,8 @@ enum TargetSelection {
         from origin: TilePoint,
         raccoons: [Candidate],
         maxRange: Double
-    ) -> RaccoonNode? {
-        var best: (raccoon: RaccoonNode, distance: Double)?
+    ) -> Candidate? {
+        var best: (candidate: Candidate, distance: Double)?
 
         for candidate in raccoons {
             guard !candidate.raccoon.isDead else { continue }
@@ -61,11 +71,11 @@ enum TargetSelection {
             guard distance <= maxRange else { continue }
 
             if best == nil || distance < best!.distance {
-                best = (candidate.raccoon, distance)
+                best = (candidate, distance)
             }
         }
 
-        return best?.raccoon
+        return best?.candidate
     }
 
     /// Plain tile-space Euclidean distance, kept in `Double` throughout

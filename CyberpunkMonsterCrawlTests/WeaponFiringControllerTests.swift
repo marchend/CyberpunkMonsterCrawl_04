@@ -56,8 +56,10 @@ final class WeaponFiringControllerTests: XCTestCase {
 
     func test_fires_onlyAtOrAfterCooldownExpiry_thenWithholdsUntilItElapsesAgain() {
         let controller = WeaponFiringController(tier: .handgun)
-        var fireEvents: [(target: RaccoonNode, tier: WeaponTier)] = []
-        controller.onFire = { target, _, tier in fireEvents.append((target, tier)) }
+        var fireEvents: [(target: RaccoonNode, targetPosition: TilePoint, origin: TilePoint, tier: WeaponTier)] = []
+        controller.onFire = { target, origin, tier in
+            fireEvents.append((target.raccoon, target.position, origin, tier))
+        }
         let origin = TilePoint(x: 0, y: 0)
         let raccoon = RaccoonNode(tier: .base)
         let raccoons = [TargetSelection.Candidate(raccoon: raccoon, position: TilePoint(x: 2, y: 0))]
@@ -67,6 +69,13 @@ final class WeaponFiringControllerTests: XCTestCase {
         XCTAssertEqual(fireEvents.count, 1)
         XCTAssertTrue(fireEvents[0].target === raccoon)
         XCTAssertEqual(fireEvents[0].tier, .handgun)
+
+        // Both ends of the shot must reach the consumer: a bullet/muzzle
+        // spawn needs the target's tile position, not just its identity.
+        XCTAssertEqual(fireEvents[0].targetPosition.x, 2)
+        XCTAssertEqual(fireEvents[0].targetPosition.y, 0)
+        XCTAssertEqual(fireEvents[0].origin.x, origin.x)
+        XCTAssertEqual(fireEvents[0].origin.y, origin.y)
 
         // Well inside the newly-armed cooldown (0.6s): no second shot.
         controller.update(

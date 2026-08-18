@@ -8,11 +8,35 @@ import Foundation
 /// spawning anything itself.
 ///
 /// **Scope of this PR.** Decision only \u2014 no rendering, no bullet
-/// spawning, no SpriteKit dependency. `onFire` is the seam the story's own
-/// PR 3 (the end-to-end wiring PR named in this story's plan) hooks up to
-/// an actual bullet/hit-puff spawn; a caller that never sets it (every
-/// test predating that PR) simply never observes a fire decision anywhere
-/// beyond this type's own state.
+/// spawning, no SpriteKit dependency. `onFire` is the seam the story's
+/// later end-to-end wiring PR hooks up to an actual bullet/hit-puff spawn;
+/// a caller that never sets it (every test predating that PR) simply never
+/// observes a fire decision anywhere beyond this type's own state.
+///
+/// **Why this slice lands with no production caller \u2014 and what that
+/// costs.** Nothing in this PR constructs a `WeaponFiringController`:
+/// `GameScene` is untouched, so on a device build no shot is decided and
+/// no `WeaponTier` constant is read. That is the same shape PR #34 review
+/// rejected for `BiteComponent` ("nothing in a device build could bite,
+/// which is the shape of feature that never gets switched on") and that
+/// `GroundTileRenderer`'s doc states as a repo rule. The difference here is
+/// what a caller would need: this type's `raccoons` argument is a
+/// per-frame `[TargetSelection.Candidate]` built from
+/// `RaccoonSpawnDirector`'s live swarm, whose `ActiveRaccoon` bookkeeping
+/// is still `private` to that type and still owned by the raccoon-swarm
+/// story \u2014 so wiring a real caller now means either widening that type's
+/// API or duplicating its swarm tracking, both of which the swarm story
+/// would immediately have to undo. Mounting the shot itself additionally
+/// needs the held-weapon overlay (`sprite_player_weapons`) that no PR has
+/// mounted yet.
+///
+/// The consequence is recorded rather than hidden: until that wiring PR
+/// lands, auto-fire is dead code in a real run \u2014 the swarm cannot be shot,
+/// `RaccoonNode.onDeath` stays unset, and the suite stays green only
+/// because every test injects its own `onFire`. The follow-up is tracked
+/// under this story (`CYBERPUN-17-9`); no separate ticket ID is cited here
+/// because none has been filed, and this codebase does not reference
+/// invented ticket IDs.
 final class WeaponFiringController {
 
     /// This controller's current weapon tier \u2014 set at construction,
@@ -38,12 +62,21 @@ final class WeaponFiringController {
     /// cooldown, and a valid in-range target all hold on the same frame.
     /// `nil` by default, so a controller built for a test that only cares
     /// about gating/cooldown behaviour needs no closure at all.
-    var onFire: ((_ target: RaccoonNode, _ origin: TilePoint, _ tier: WeaponTier) -> Void)?
+    ///
+    /// The target arrives as the whole `TargetSelection.Candidate` \u2014 node
+    /// *and* its tile-space position \u2014 not the bare `RaccoonNode`, since
+    /// `RaccoonNode` carries no position of its own. A consumer needs both
+    /// ends of the shot to compute the shot vector (bullets are authored
+    /// pointing screen-right and are drawn rotated to it) and to place the
+    /// muzzle flash, so the target position travels with the decision
+    /// rather than forcing the consumer to re-scan its candidate array by
+    /// `===` to recover a position this type had already computed.
+    var onFire: ((_ target: TargetSelection.Candidate, _ origin: TilePoint, _ tier: WeaponTier) -> Void)?
 
     /// - Parameters:
     ///   - tier: the initial weapon tier.
     ///   - onFire: see `onFire`'s own doc comment. Defaults to `nil`.
-    init(tier: WeaponTier, onFire: ((RaccoonNode, TilePoint, WeaponTier) -> Void)? = nil) {
+    init(tier: WeaponTier, onFire: ((TargetSelection.Candidate, TilePoint, WeaponTier) -> Void)? = nil) {
         self.tier = tier
         self.onFire = onFire
     }

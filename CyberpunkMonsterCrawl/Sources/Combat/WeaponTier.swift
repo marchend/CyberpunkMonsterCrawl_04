@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 
 /// The three auto-fire weapon tiers the player's gun auto-progresses
@@ -8,12 +7,29 @@ import Foundation
 /// **Scope of this PR (`CYBERPUN-17-9` PR 1).** This type only carries the
 /// per-tier tunable constants \u2014 fire rate, range, damage \u2014 plus the two
 /// atlas-index seams (`weaponSheetRow`, `bulletSheetColumn`) a later
-/// rendering/bullet-spawning PR reads from, and the per-direction
-/// barrel-tip offset table. Nothing here fires a shot, spawns a bullet, or
-/// renders anything: that is `WeaponFiringController` (the decision layer,
-/// this same PR) and later PRs (the actual spawn/rendering), matching the
-/// convention `RaccoonTier` set for the raccoon swarm's own per-tier
-/// constants.
+/// rendering/bullet-spawning PR reads from. Nothing here fires a shot,
+/// spawns a bullet, or renders anything: that is `WeaponFiringController`
+/// (the decision layer, this same PR) and later PRs (the actual
+/// spawn/rendering), matching the convention `RaccoonTier` set for the
+/// raccoon swarm's own per-tier constants.
+///
+/// **No barrel-tip/muzzle offset table here, deliberately.** An earlier
+/// revision of this file carried a per-direction `barrelTipOffset` table
+/// whose values were derived from the 36x40 cell's *centre*
+/// (half-dimensions 18x20), but the anchor every actor in this codebase
+/// actually draws against is bottom-centre \u2014 the feet
+/// (`PlayerSpriteSheet.anchorPixel` is `(18, 40)`, so
+/// `anchorPointNormalized == (0.5, 0.0)`; `RaccoonAnimationController`
+/// follows the same convention). Against the real anchor those numbers put
+/// the south/south-diagonal barrel tips *below* the ground plane, which
+/// would have spawned bullet origins and `sprite_hit_puff` frame-0 muzzle
+/// flashes at the player's shoes. Rather than re-guess the table in the
+/// right coordinate frame, it is deferred to the PR that actually mounts
+/// `sprite_player_weapons` on screen and can measure the muzzle pixel off
+/// the shipped art \u2014 the same way `RaccoonNode.shadowWidth(forTier:)` was
+/// measured rather than guessed. Shipping unmeasured art constants that
+/// read as authoritative is precisely what `AtlasContractConventionTests`
+/// and `RaccoonSpriteSheetPixelTests` exist to prevent.
 enum WeaponTier: Equatable, CaseIterable {
     case handgun
     case smg
@@ -81,38 +97,6 @@ enum WeaponTier: Equatable, CaseIterable {
         case .handgun: return 0
         case .smg: return 1
         case .assaultRifle: return 2
-        }
-    }
-
-    /// The on-screen (SpriteKit y-up) offset from an actor's anchor to the
-    /// weapon's barrel tip while facing `direction` \u2014 the point a later
-    /// bullet-spawning PR should originate a shot from, rather than the
-    /// player's bare center.
-    ///
-    /// **Deliberately uniform across tiers, for now.** No PR yet mounts
-    /// `sprite_player_weapons` on screen, so there is no measured
-    /// per-weapon muzzle pixel to differ against \u2014 inventing tier-specific
-    /// numbers here would be exactly the "art fact guessed instead of
-    /// measured" this codebase's atlas-contract tests exist to catch (see
-    /// `AtlasContractConventionTests`, `RaccoonSpriteSheetPixelTests`). A
-    /// later PR that actually mounts the held-weapon sprite should
-    /// re-derive these per tier from the shipped art, the same way
-    /// `RaccoonNode.shadowWidth(forTier:)` was measured off the raccoon art
-    /// rather than guessed.
-    ///
-    /// Named/tunable initial values: a held-at-chest-height offset, scaled
-    /// to `AtlasSheet.playerWeapons`'s own measured 36x40 cell
-    /// half-dimensions (18x20).
-    static func barrelTipOffset(forDirection direction: Direction8) -> CGVector {
-        switch direction {
-        case .south: return CGVector(dx: 0, dy: -12)
-        case .southeast: return CGVector(dx: 10, dy: -8)
-        case .east: return CGVector(dx: 14, dy: 2)
-        case .northeast: return CGVector(dx: 10, dy: 10)
-        case .north: return CGVector(dx: 0, dy: 14)
-        case .northwest: return CGVector(dx: -10, dy: 10)
-        case .west: return CGVector(dx: -14, dy: 2)
-        case .southwest: return CGVector(dx: -10, dy: -8)
         }
     }
 }

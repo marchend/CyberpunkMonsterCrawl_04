@@ -24,7 +24,9 @@ final class TargetSelectionTests: XCTestCase {
             maxRange: 10
         )
 
-        XCTAssertTrue(selected === near.raccoon, "must select the candidate at the smallest tile-space distance")
+        XCTAssertTrue(selected?.raccoon === near.raccoon, "must select the candidate at the smallest tile-space distance")
+        XCTAssertEqual(selected?.position.x, near.position.x, "the winning candidate's tile position must travel with the selection")
+        XCTAssertEqual(selected?.position.y, near.position.y)
     }
 
     // MARK: - Out-of-range candidates excluded
@@ -40,7 +42,69 @@ final class TargetSelectionTests: XCTestCase {
             maxRange: 5
         )
 
-        XCTAssertTrue(selected === inRange.raccoon)
+        XCTAssertTrue(selected?.raccoon === inRange.raccoon)
+    }
+
+    // MARK: - The range boundary is inclusive
+
+    func test_candidateAtExactlyMaxRange_isInRange() {
+        let origin = TilePoint(x: 0, y: 0)
+        let atBoundary = candidate(atTileX: 5)
+
+        let selected = TargetSelection.nearestLivingTarget(
+            from: origin,
+            raccoons: [atBoundary],
+            maxRange: 5
+        )
+
+        XCTAssertTrue(
+            selected?.raccoon === atBoundary.raccoon,
+            "the documented range rule is inclusive (distance <= maxRange): a candidate at exactly maxRange must be selectable"
+        )
+    }
+
+    func test_candidateJustBeyondMaxRange_isExcluded() {
+        let origin = TilePoint(x: 0, y: 0)
+        let justOutside = candidate(atTileX: 5.0001)
+
+        let selected = TargetSelection.nearestLivingTarget(
+            from: origin,
+            raccoons: [justOutside],
+            maxRange: 5
+        )
+
+        XCTAssertNil(selected, "a candidate beyond maxRange must be excluded, pinning the boundary from the other side")
+    }
+
+    // MARK: - Ties resolve to the first candidate in the array
+
+    func test_twoCandidatesAtEqualDistance_selectsWhicheverAppearsFirstInTheArray() {
+        let origin = TilePoint(x: 0, y: 0)
+        let first = candidate(atTileX: 3)
+        let second = candidate(atTileX: -3)
+
+        let selected = TargetSelection.nearestLivingTarget(
+            from: origin,
+            raccoons: [first, second],
+            maxRange: 10
+        )
+
+        XCTAssertTrue(
+            selected?.raccoon === first.raccoon,
+            "an equal distance must never replace the current best: the documented tie-break is array order"
+        )
+
+        // Same pair, reversed: the rule is array order, not position sign.
+        let reversed = TargetSelection.nearestLivingTarget(
+            from: origin,
+            raccoons: [second, first],
+            maxRange: 10
+        )
+
+        XCTAssertTrue(
+            reversed?.raccoon === second.raccoon,
+            "reversing the array must reverse the winner -- otherwise the tie-break is not array order"
+        )
     }
 
     func test_allCandidatesOutOfRange_returnsNil() {
@@ -80,7 +144,7 @@ final class TargetSelectionTests: XCTestCase {
             maxRange: 10
         )
 
-        XCTAssertTrue(selected === alive.raccoon)
+        XCTAssertTrue(selected?.raccoon === alive.raccoon)
     }
 
     func test_onlyDeadCandidatesInRange_returnsNil() {
@@ -105,13 +169,13 @@ final class TargetSelectionTests: XCTestCase {
         let pool = [nearest, nextNearest]
 
         let firstSelection = TargetSelection.nearestLivingTarget(from: origin, raccoons: pool, maxRange: 10)
-        XCTAssertTrue(firstSelection === nearest.raccoon)
+        XCTAssertTrue(firstSelection?.raccoon === nearest.raccoon)
 
         // Kill the previously-selected nearest raccoon, mid-tick.
         nearest.raccoon.takeDamage(nearest.raccoon.hp)
         XCTAssertTrue(nearest.raccoon.isDead)
 
         let secondSelection = TargetSelection.nearestLivingTarget(from: origin, raccoons: pool, maxRange: 10)
-        XCTAssertTrue(secondSelection === nextNearest.raccoon, "must re-target to the next nearest living raccoon once the previous target has died")
+        XCTAssertTrue(secondSelection?.raccoon === nextNearest.raccoon, "must re-target to the next nearest living raccoon once the previous target has died")
     }
 }
