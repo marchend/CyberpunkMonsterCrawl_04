@@ -6,7 +6,7 @@
     {"action": "wait", "seconds": 4},
     {"action": "assert_running"},
     {"action": "screenshot", "label": "menu"},
-    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)"},
+    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)", "expect": "the running game -- a playable isometric city scene with a ground lattice, buildings and a player actor, not a menu or title screen"},
     {"action": "wait", "seconds": 5},
     {"action": "screenshot", "label": "gameplay-city"},
     {"action": "assert_running"}
