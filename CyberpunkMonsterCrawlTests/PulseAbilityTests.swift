@@ -148,14 +148,73 @@ final class PulseAbilityTests: XCTestCase {
         XCTAssertLessThan(hit.newPosition.x, 3.5, "must never enter the footprint")
     }
 
+    /// The narrow half of the crush criterion: `CollisionResolver` is a
+    /// per-axis *slide*, so a footprint can deflect one axis while the
+    /// other completes and still leave the raccoon shoved clear of the
+    /// radius. That raccoon was *not* crushed -- the story's rule is
+    /// "cannot be pushed clear of the radius" -- so it must take one die,
+    /// not two, even though its resolved position differs from the full
+    /// push target.
+    func test_trigger_pushDeflectedButStillClearOfTheRadius_isNotACrush() {
+        let ability = PulseAbility()
+        let player = TilePoint(x: 0, y: 0)
+        let raccoonPosition = TilePoint(x: 2, y: 0.4)
+        let candidates = [TargetSelection.Candidate(raccoon: makeRaccoon(), position: raccoonPosition)]
+        // A 1x1 footprint at tile (3, 1): bounds x [2.5, 3.5] x y [0.5, 1.5].
+        // The push target (~2.991, ~0.598) lands inside it, but only the
+        // Y axis is blocked -- X completes freely, because at y = 0.4 the
+        // swept X path never enters the rectangle.
+        let obstructions = [CollisionResolver.footprintBounds(for: makeRecord(atIndex: 3, tileX: 3, tileY: 1))]
+
+        var rng = CountingRandomNumberGenerator([2, 2])
+
+        guard let result = ability.trigger(
+            playerPosition: player,
+            level: 1,
+            raccoons: candidates,
+            obstructions: obstructions,
+            rng: &rng
+        ), let hit = result.hits.first else {
+            return XCTFail("expected exactly one hit")
+        }
+
+        // Anti-vacuity: this case is only interesting if the resolver
+        // really did clamp the raccoon short of its full push target.
+        let fullTarget = PulseAbility.pushTarget(
+            playerPosition: player,
+            raccoonPosition: raccoonPosition,
+            radius: result.radius,
+            epsilon: PulseAbility.pushOvershootEpsilon
+        )
+        XCTAssertEqual(hit.newPosition.y, 0.5, accuracy: 1e-9, "Y clamps to the footprint's near edge")
+        XCTAssertLessThan(hit.newPosition.y, fullTarget.y, "sanity: the push really was deflected")
+
+        // ...and yet it ended up outside the radius, so it was pushed clear.
+        let resolvedDistance = hypot(hit.newPosition.x - player.x, hit.newPosition.y - player.y)
+        XCTAssertGreaterThan(
+            resolvedDistance, result.radius,
+            "a deflected-but-cleared raccoon (~3.03 tiles out) is outside the 3.0 radius"
+        )
+        XCTAssertFalse(hit.wasCrushed, "being outside the radius is exactly 'pushed clear' -- not a crush")
+        XCTAssertEqual(rng.callCount, 1, "a raccoon pushed clear of the radius must consume exactly one roll")
+        XCTAssertEqual(hit.damage, 3, "1d6, not 2d6")
+    }
+
     func test_trigger_pushBlockedByFootprint_atLevel6_uses2d8() {
         let ability = PulseAbility()
         let raccoon = makeRaccoon()
         let candidates = [TargetSelection.Candidate(raccoon: raccoon, position: TilePoint(x: 2, y: 0))]
         let obstructions = [CollisionResolver.footprintBounds(for: makeRecord(atIndex: 3, tileX: 3, tileY: 0))]
 
-        // rawValue 2 -> 2 % 8 + 1 == 3, applied twice, for the level-6 1d8 die.
-        var rng = CountingRandomNumberGenerator([2, 2])
+        // rawValue 7 is deliberately a value that *separates* the two
+        // dice: `DiceSpec.roll` computes `next() % sides + 1`, so
+        // 7 % 8 + 1 == 8 under the level-6 1d8 die but 7 % 6 + 1 == 2
+        // under the 1d6 one. The expected total is therefore 16 here and
+        // would be 4 if `trigger` never consulted
+        // `LevelScaling.pulseDamageDie(forLevel:)` -- unlike a rawValue of
+        // 2, which yields 3 under both dice and leaves this test green
+        // even with the level-6 branch deleted.
+        var rng = CountingRandomNumberGenerator([7, 7])
 
         let result = ability.trigger(
             playerPosition: TilePoint(x: 0, y: 0),
@@ -168,8 +227,80 @@ final class PulseAbilityTests: XCTestCase {
         guard let result, let hit = result.hits.first else {
             return XCTFail("expected exactly one hit")
         }
-        XCTAssertEqual(hit.damage, 6, "2d8 total: 3 (push) + 3 (crush)")
+        XCTAssertEqual(hit.damage, 16, "2d8 total: 8 (push) + 8 (crush); 2d6 on the same rolls would be 4")
         XCTAssertTrue(hit.wasCrushed)
+    }
+
+    // MARK: - Level scaling reaches `trigger`: radius multiplier
+
+    /// The radius counterpart of the d6/d8 test above: a raccoon placed
+    /// between the level-1 radius (3.0) and the level-3 one (3.0 * 1.25
+    /// == 3.75) is *missed* at level 1 and *hit* at level 3, so dropping
+    /// `LevelScaling.pulseRadiusMultiplier(forLevel:)` from `trigger`
+    /// turns this red rather than shipping "green suite, feature absent".
+    func test_trigger_radiusMultiplier_missesAtLevel1_andHitsAtLevel3() {
+        let player = TilePoint(x: 0, y: 0)
+        let raccoonPosition = TilePoint(x: 3.5, y: 0) // between 3.0 and 3.75
+
+        let atLevel1 = PulseAbility()
+        var rng1 = CountingRandomNumberGenerator([2])
+        guard let level1Result = atLevel1.trigger(
+            playerPosition: player,
+            level: 1,
+            raccoons: [TargetSelection.Candidate(raccoon: makeRaccoon(), position: raccoonPosition)],
+            obstructions: [],
+            rng: &rng1
+        ) else {
+            return XCTFail("expected the pulse to fire even with nobody in range")
+        }
+
+        XCTAssertEqual(level1Result.radius, 3.0, accuracy: 1e-9, "level 1 must fire at the unscaled base radius")
+        XCTAssertTrue(level1Result.hits.isEmpty, "a raccoon at 3.5 tiles is outside the level-1 radius of 3.0")
+        XCTAssertEqual(rng1.callCount, 0)
+
+        let atLevel3 = PulseAbility()
+        var rng3 = CountingRandomNumberGenerator([2])
+        guard let level3Result = atLevel3.trigger(
+            playerPosition: player,
+            level: 3,
+            raccoons: [TargetSelection.Candidate(raccoon: makeRaccoon(), position: raccoonPosition)],
+            obstructions: [],
+            rng: &rng3
+        ), let level3Hit = level3Result.hits.first else {
+            return XCTFail("a raccoon at 3.5 tiles must be inside the level-3 radius of 3.75")
+        }
+
+        XCTAssertEqual(level3Result.radius, 3.75, accuracy: 1e-9, "level 3 applies the +25% multiplier")
+        XCTAssertEqual(
+            level3Hit.newPosition.x, 3.8, accuracy: 1e-9,
+            "the clear push must land at the *scaled* radius plus the overshoot epsilon (3.75 + 0.05)"
+        )
+        XCTAssertEqual(level3Hit.newPosition.y, 0, accuracy: 1e-9)
+        XCTAssertFalse(level3Hit.wasCrushed)
+    }
+
+    /// Level 6 compounds the two +25% steps rather than stacking them
+    /// additively, and `trigger` must fire at that compounded radius --
+    /// `3.0 * 1.25 * 1.25 == 4.6875`, not `4.5`.
+    func test_trigger_radiusMultiplier_compoundsAtLevel6() {
+        let ability = PulseAbility()
+        var rng = CountingRandomNumberGenerator([2])
+
+        // 4.6 tiles: inside the compounded level-6 radius (4.6875) but
+        // outside the additive reading (4.5), so this case also pins
+        // *which* of the two readings ships.
+        guard let result = ability.trigger(
+            playerPosition: TilePoint(x: 0, y: 0),
+            level: 6,
+            raccoons: [TargetSelection.Candidate(raccoon: makeRaccoon(), position: TilePoint(x: 4.6, y: 0))],
+            obstructions: [],
+            rng: &rng
+        ), let hit = result.hits.first else {
+            return XCTFail("a raccoon at 4.6 tiles must be inside the compounded level-6 radius of 4.6875")
+        }
+
+        XCTAssertEqual(result.radius, 4.6875, accuracy: 1e-9, "1.25 * 1.25, not 1.5")
+        XCTAssertEqual(hit.newPosition.x, 4.7375, accuracy: 1e-9, "4.6875 + 0.05")
     }
 
     // MARK: - Footprint-height irrelevance: equal footprints pin identically

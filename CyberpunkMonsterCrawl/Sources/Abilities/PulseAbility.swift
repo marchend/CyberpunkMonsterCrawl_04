@@ -51,9 +51,31 @@ import Foundation
 /// blocking footprint's edge (never inside it), and identical behaviour
 /// for two placements that share a footprint no matter which of the 12
 /// catalog sprites -- and therefore which height class -- either one is.
-/// This type adds nothing to that contract beyond noticing when the
-/// resolved position fell short of the intended push target (a "crush")
-/// and rolling a second damage die when it does.
+/// This type adds nothing to that contract beyond scoring the *resolved*
+/// position against the pulse radius and rolling a second damage die for
+/// a raccoon still inside it.
+///
+/// **"Crushed" means still inside the radius, not "short of the push
+/// target".** `CollisionResolver.resolve` is deliberately a per-axis
+/// slide ("The slide, not a stop"): it clamps one axis and lets the
+/// other complete, so a raccoon deflected along a footprint's edge ends
+/// up somewhere other than its full push target while *still being
+/// shoved clear of the blast*. Scoring that raccoon as crushed would
+/// hand it a second die it did not earn, so the flag is derived from the
+/// story's own wording -- "cannot be pushed clear of the radius because
+/// a building footprint blocks its path" -- as a plain distance check on
+/// the resolved position.
+///
+/// **Known consequence: a raccoon that starts *inside* a footprint is
+/// pushed straight through it.** `CollisionResolver` deliberately skips
+/// any obstruction that already contains the starting point ("An illegal
+/// starting position ejects forwards, never backwards"), so a raccoon
+/// streamed in on top of a building is not clamped by that building: it
+/// completes the full push and takes a single die. That is the
+/// resolver's contract working as designed rather than a gap here --
+/// deciding where such an actor belongs is spawn-safety policy, owned by
+/// the wiring PR that places actors -- but it is recorded here so the
+/// behaviour reads as known rather than accidental.
 final class PulseAbility {
 
     /// Seconds a fresh `PulseAbility` must wait after a trigger before its
@@ -97,18 +119,22 @@ final class PulseAbility {
         /// This raccoon's tile-space position after the push: at
         /// (radius + `pushOvershootEpsilon`) tile units from the player
         /// along the ray from the player through the raccoon's *original*
-        /// position, or the footprint-clamped position on the same ray if
-        /// a building blocked the full push.
+        /// position, or the position `CollisionResolver` clamped it to if
+        /// a building stood in the way. A clamped position need not sit on
+        /// that ray: the resolver slides per axis, so a deflected raccoon
+        /// can come to rest off the original bearing.
         let newPosition: TilePoint
         /// Total damage this raccoon took: one roll of the level-scaled
         /// damage die for a clear push, two rolls (summed) if the push was
         /// crushed against a footprint.
         let damage: Int
-        /// Whether this raccoon's push was blocked by a building footprint
-        /// before reaching the full radius -- exactly the raccoons that
-        /// took the second damage roll. Exposed so a later rendering PR
-        /// can choose a distinct hit-effect for a crush without
-        /// recomputing the footprint check itself.
+        /// Whether this raccoon ended the push *still inside the pulse
+        /// radius* because a building footprint blocked its path --
+        /// exactly the raccoons that took the second damage roll. A
+        /// raccoon merely deflected along a footprint's edge but still
+        /// shoved clear of the radius reads `false`. Exposed so a later
+        /// rendering PR can choose a distinct hit-effect for a crush
+        /// without recomputing the check itself.
         let wasCrushed: Bool
     }
 
@@ -199,7 +225,20 @@ final class PulseAbility {
                 obstructions: obstructions
             )
 
-            let wasCrushed = !Self.isApproximatelyEqual(resolved, target)
+            // "Crushed" is the story's own criterion -- the raccoon
+            // *could not be pushed clear of the radius* -- not the much
+            // broader "the resolver landed it somewhere other than the
+            // full push target". `CollisionResolver.resolve` is a
+            // per-axis *slide*: it routinely clamps one axis while the
+            // other completes, which leaves a raccoon short of `target`
+            // yet still outside the radius (a glancing deflection off a
+            // footprint corner). Measuring the *resolved* position
+            // against the radius scores exactly the raccoons a building
+            // actually pinned inside the blast, and needs no
+            // floating-point tolerance: a push that completes lands at
+            // `radius + pushOvershootEpsilon`, a whole epsilon clear of
+            // this comparison.
+            let wasCrushed = Self.tileDistance(playerPosition, resolved) < radius
             var damage = damageDie.roll(using: &rng)
             if wasCrushed {
                 damage += damageDie.roll(using: &rng)
@@ -252,14 +291,4 @@ final class PulseAbility {
         hypot(a.x - b.x, a.y - b.y)
     }
 
-    /// Whether `a` and `b` are equal within floating-point noise --
-    /// `CollisionResolver.resolve` and this type's own `pushTarget` both
-    /// round-trip `Double` through `CGFloat` (a lossless no-op on the
-    /// 64-bit Apple platforms this project targets, but not guaranteed by
-    /// the type system), so an exact `==` would be fragile where "did the
-    /// resolver actually clamp this" is the real question.
-    private static func isApproximatelyEqual(_ a: TilePoint, _ b: TilePoint) -> Bool {
-        let tolerance = 1e-9
-        return abs(a.x - b.x) < tolerance && abs(a.y - b.y) < tolerance
-    }
 }

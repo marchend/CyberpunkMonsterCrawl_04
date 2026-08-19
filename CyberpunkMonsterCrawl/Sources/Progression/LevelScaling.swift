@@ -12,9 +12,12 @@ import Foundation
 /// second discrete choice with different level thresholds (the damage
 /// die). Folding both shapes into `XPLevelSystem` would mix "what tier is
 /// equipped" with "how strong is an unrelated ability", so this lives as
-/// its own small table instead -- named `Game`, not `Progression` or
-/// `Abilities`, because it is meant to hold whichever future ability's
-/// level-scaling table needs one next, not just the pulse's.
+/// its own small table instead -- but in `Sources/Progression/`,
+/// alongside the `XPLevelSystem` whose level counter it keys off, rather
+/// than under a new directory of its own. It is meant to hold whichever
+/// future ability's level-scaling table needs one next, not just the
+/// pulse's, and "power derived from the player's level" is exactly what
+/// `Progression` already means in this codebase.
 ///
 /// **Compounding, not additive.** The story's own wording is "radius
 /// +25%" at level 3 and "a further +25%" at level 6 -- i.e. the second
