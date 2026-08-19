@@ -782,8 +782,24 @@ final class SceneAccessibilityContainerView: UIView {
             live.append(mirror)
         }
 
-        let liveKeys = Set(live.map(\.nodeKey))
-        for mirror in mirrorViews where !liveKeys.contains(mirror.nodeKey) {
+        // Retire by **object identity**, and over every mirror subview rather
+        // than only the ones `mirrorViews` still tracks.
+        //
+        // Retiring by `nodeKey` (what this did before) had two holes, both of
+        // which leave a live, interactive mirror in the hierarchy that no
+        // assertion here can see: a mirror that shares a key with a *live*
+        // mirror was matched by `liveKeys` and so never removed, yet dropped
+        // out of `mirrorViews` when it was replaced below - and a mirror added
+        // as a subview by an earlier refresh but absent from `mirrorViews`
+        // was never considered at all. An untracked subview still answers
+        // UIKit's point lookup, so it can silently take a button's own frame
+        // centre - which is `isHittable == false` for that button. Identity
+        // over the real subview list closes both.
+        let liveIdentities = Set(live.map(ObjectIdentifier.init))
+        let retired = subviews
+            .compactMap { $0 as? SceneAccessibilityMirrorView }
+            .filter { !liveIdentities.contains(ObjectIdentifier($0)) }
+        for mirror in retired {
             mirror.removeFromSuperview()
         }
 
@@ -806,5 +822,24 @@ final class SceneAccessibilityContainerView: UIView {
     private func removeAllMirrors() {
         for mirror in mirrorViews { mirror.removeFromSuperview() }
         mirrorViews = []
+    }
+
+    // MARK: - Test seam
+
+    /// Tears every mirror down immediately, bypassing the lifecycle refresh
+    /// points `hitTest(_:with:)` deliberately does not call into.
+    ///
+    /// This container holds no `static`/global state of its own - every
+    /// mirror lives in `mirrorViews`, an instance property - but
+    /// `AccessibleSKViewTests` still calls this from `tearDown()`
+    /// (CYBERPUN-17-17): the identity assertions in that file compare
+    /// published elements with `===`, and a container left to be deallocated
+    /// implicitly, mid-way between two test methods sharing the same process,
+    /// is exactly the kind of residue that a hermetic-fixture bug hides
+    /// behind. Calling this explicitly makes "nothing of this container's is
+    /// still reachable" a fact the next test can rely on rather than an
+    /// accident of ARC timing.
+    func resetForTesting() {
+        removeAllMirrors()
     }
 }
