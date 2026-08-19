@@ -21,7 +21,7 @@ with the runtime probe and commit the three *distinct* frames it produces:
 | --- | --- | --- |
 | `00-menu.jpg` | `screenshot` label `menu` | title screen, PLAY located |
 | `01-pickup-spawned.jpg` | `screenshot` label `pickup-spawned`, ~PLAY+12s | a bobbing med-kit / garbage-can icon over an accent-tinted pad on a street tile, depth-sorted against nearby buildings |
-| `02-pickup-lifecycle.jpg` | `screenshot` label `pickup-lifecycle`, ~PLAY+18s | the mechanic still operating (pickup aging/present, replaced, or freshly collected) |
+| `02-pickup-lifecycle.jpg` | `screenshot` label `pickup-lifecycle`, ~PLAY+18s | the same pickup still present and still bobbing ~6s later (or a cleared pad if it was collected in between). NOT recurrence/replacement -- no second spawn is possible before ~PLAY+33s |
 
 Verify the three files differ from one another before committing them.
 
