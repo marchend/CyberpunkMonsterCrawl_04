@@ -211,6 +211,37 @@ final class JourneyManifestTests: XCTestCase {
 
     // MARK: - Coverage
 
+    /// The earliest moment after entering `.gameplay` at which a raccoon can
+    /// be on screen at all, derived end-to-end from the production constants
+    /// rather than from `initialSpawnInterval` alone.
+    ///
+    /// `RaccoonSpawnDirector` does not even *attempt* its first spawn until
+    /// `initialSpawnInterval` (3s), and that spawn then lands off-screen and
+    /// has to walk in. `farAxisMinimumTiles`' own doc comment derives the
+    /// guaranteed gap: the lane-snapped near axis contributes at most its own
+    /// bound plus `CityLatticeGenerator.period / 2` tiles, so
+    /// `|dx - dy| >= farAxisMinimumTiles - (nearAxisRange bound + 3)` tiles,
+    /// which `IsometricProjection` puts on screen at `tileHalfWidth` points
+    /// per tile of that difference (`screenX = (dx - dy) * 48`) --
+    /// `22 * 48 = 1_056` points at today's values. The swarm closes that at
+    /// `RaccoonSeekBehavior.pointsPerSecond` (~121 pts/s), i.e. ~8.7s of walk
+    /// on top of the 3s spawn delay, for a floor of ~11.7s.
+    ///
+    /// Every term is read from the type that owns it, so a retune of the
+    /// spawn cadence, the spawn radius, the projection or the seek speed
+    /// moves this floor with it instead of leaving a stale literal behind.
+    /// This is deliberately the *floor* (the earliest a raccoon can appear),
+    /// not the journey's chosen wait: the journeys budget margin on top of it
+    /// for spawn jitter and the approach not being purely along screen-x.
+    private static var secondsBeforeARaccoonCanBeOnScreen: TimeInterval {
+        let nearAxisWorstCaseTiles = RaccoonSpawnDirector.nearAxisRange.upperBound
+            + Double(CityLatticeGenerator.period) / 2
+        let offScreenGapTiles = RaccoonSpawnDirector.farAxisMinimumTiles - nearAxisWorstCaseTiles
+        let offScreenGapPoints = offScreenGapTiles * IsometricProjection.tileHalfWidth
+        let walkInSeconds = offScreenGapPoints / RaccoonSeekBehavior.pointsPerSecond
+        return RaccoonSpawnDirector.initialSpawnInterval + walkInSeconds
+    }
+
     /// `CYBERPUN-17-9`'s own journey. This story's visible work (the weapon
     /// overlay composited on the player, the swarm closing into weapon range)
     /// is only reachable well after PLAY -- `RaccoonSpawnDirector` does not
@@ -219,6 +250,20 @@ final class JourneyManifestTests: XCTestCase {
     /// A journey that screenshots a few seconds after PLAY therefore captures
     /// an empty rooftop and reads as "feature missing", which is what
     /// happened before this file existed.
+    ///
+    /// Two things this gate is careful to bind on, because the obvious
+    /// cheaper versions of it do not (PR #45 review):
+    ///
+    /// 1. **The waits counted are the ones before the FIRST capture that
+    ///    follows `navigate`**, not every wait after `navigate`. A total
+    ///    would let `navigate -> screenshot -> wait 30` pass while
+    ///    screenshotting the frame immediately after PLAY -- exactly the
+    ///    empty-rooftop failure described above.
+    /// 2. **The threshold is `secondsBeforeARaccoonCanBeOnScreen`**, not
+    ///    `initialSpawnInterval`. 3s only gets the swarm *spawned*, ~1,056
+    ///    points off-screen; it is nowhere near enough for one to be in
+    ///    frame. Gating on 3s would leave a CI-speedup trim of the journey's
+    ///    30s wait down to 4s green.
     func test_aJourneyExistsForThisStorysCombatWork_andDrivesIntoGameplayBeforeCapturing() {
         let journeys = loadJourneys()
 
@@ -242,27 +287,56 @@ final class JourneyManifestTests: XCTestCase {
                 continue
             }
 
-            let waitSecondsAfterNavigate = journey.steps
-                .dropFirst(navigateIndex + 1)
+            let stepsAfterNavigate = Array(journey.steps.dropFirst(navigateIndex + 1))
+
+            guard let firstCaptureIndex = stepsAfterNavigate.firstIndex(
+                where: { ($0["action"] as? String) == "screenshot" }
+            ) else {
+                XCTFail("\(file): must screenshot after entering gameplay.")
+                continue
+            }
+
+            // Only the waits that precede the FIRST post-navigate capture can
+            // put a raccoon in that frame. Summing every wait after
+            // `navigate` -- including the ones between later screenshots --
+            // would pass a journey reordered to
+            // `navigate -> screenshot -> wait 30`, which captures the frame
+            // immediately after PLAY.
+            let waitSecondsBeforeFirstCapture = stepsAfterNavigate
+                .prefix(firstCaptureIndex)
                 .filter { ($0["action"] as? String) == "wait" }
                 .compactMap { ($0["seconds"] as? NSNumber)?.doubleValue }
                 .reduce(0, +)
 
             XCTAssertGreaterThanOrEqual(
-                waitSecondsAfterNavigate,
-                RaccoonSpawnDirector.initialSpawnInterval,
-                "\(file): must wait past RaccoonSpawnDirector.initialSpawnInterval "
-                    + "(\(RaccoonSpawnDirector.initialSpawnInterval)s) after entering gameplay, or it "
-                    + "screenshots a rooftop no raccoon can have reached yet."
-            )
-
-            let screenshotsAfterNavigate = journey.steps
-                .dropFirst(navigateIndex + 1)
-                .filter { ($0["action"] as? String) == "screenshot" }
-            XCTAssertGreaterThan(
-                screenshotsAfterNavigate.count, 0,
-                "\(file): must screenshot after entering gameplay."
+                waitSecondsBeforeFirstCapture,
+                Self.secondsBeforeARaccoonCanBeOnScreen,
+                "\(file): waits only \(waitSecondsBeforeFirstCapture)s between navigate and its "
+                    + "first screenshot, but no raccoon can be on screen before "
+                    + "\(Self.secondsBeforeARaccoonCanBeOnScreen)s "
+                    + "(RaccoonSpawnDirector.initialSpawnInterval "
+                    + "\(RaccoonSpawnDirector.initialSpawnInterval)s, then the guaranteed "
+                    + "off-screen spawn gap walked in at RaccoonSeekBehavior.pointsPerSecond "
+                    + "\(RaccoonSeekBehavior.pointsPerSecond) pts/s). That frame is an empty "
+                    + "rooftop, and an empty rooftop reads as \"feature missing\"."
             )
         }
+    }
+
+    /// Anti-vacuity for the gate above: the derived floor must actually be
+    /// stronger than the `initialSpawnInterval` it replaced. If a retune ever
+    /// collapses the spawn radius or inflates the seek speed to the point
+    /// where the walk-in term vanishes, the assertion above would silently
+    /// weaken back to "waited past the spawn attempt" -- the exact gate that
+    /// let a 4s wait through.
+    func test_theOnScreenFloor_isStrictlyStrongerThanTheSpawnIntervalAlone() {
+        XCTAssertGreaterThan(
+            Self.secondsBeforeARaccoonCanBeOnScreen,
+            RaccoonSpawnDirector.initialSpawnInterval,
+            "The derived on-screen floor (\(Self.secondsBeforeARaccoonCanBeOnScreen)s) has "
+                + "collapsed onto RaccoonSpawnDirector.initialSpawnInterval "
+                + "(\(RaccoonSpawnDirector.initialSpawnInterval)s), so the journey timing gate no "
+                + "longer binds on the walk-in time the journeys actually depend on."
+        )
     }
 }
