@@ -10,7 +10,8 @@ import SpriteKit
 /// counters. Nothing upstream of this PR wired any of these five types to
 /// one another -- each says so in its own doc comment ("nothing in this PR
 /// constructs a caller") -- so this is where the loop first becomes one
-/// working whole.
+/// working whole, and those upstream deferrals are closed by the production
+/// mount described below rather than by a later ticket.
 ///
 /// **Not a replacement for `PlayerNode`.** `PlayerNode` (an `SKNode`) owns
 /// the player's body/shadow sprite, HP/rabies and walk-cycle state; `Player`
@@ -27,6 +28,52 @@ import SpriteKit
 /// released back to `bulletPool` at that same instant -- or immediately,
 /// un-damaging, the moment the target is found to have left the scene graph
 /// first (see "Bullet-leak safety" below).
+///
+/// The *visual* bullet is moved every frame while that timer runs:
+/// `advanceInFlightBullets(deltaTime:)` interpolates the node from the
+/// muzzle to the target's **current** world position by
+/// `elapsed / travelDuration`, so a bullet is drawn crossing the gap rather
+/// than parked at the muzzle for its whole flight. Its `zRotation` is set
+/// once, at fire time, from the shot vector (`BulletNode.configure`) and is
+/// deliberately not re-derived per frame: AC5's "drawn rotated to the shot
+/// vector" is about the shot that was taken, and a target that strafes
+/// mid-flight must not make the sprite spin.
+///
+/// **Coordinate space (why every point goes through
+/// `effectsSpacePoint(fromWorldSpace:)`).** `IsometricProjection
+/// .tileToScreen` points are in **world space** -- the space
+/// `GameScene.worldLayer`'s children live in, and the only space
+/// `CameraController` ever offsets (`container.position = viewportCentre -
+/// projected(focus)`). Bullets and transient effects are parented under
+/// `GameScene.effectsLayer`, which nothing repositions, so writing a raw
+/// world point into an `effectsLayer` child draws it `worldLayer.position`
+/// away from where the world actually is -- a large offset from the very
+/// first frame (the spawn junction is far from tile 0,0) that drifts
+/// further as the player walks. Every point this type hands to
+/// `bulletPool`/`HitEffects` is therefore converted out of world space
+/// first, through the same `convert(_:from:)` seam
+/// `GameScene.accessibilityFrameInScene(for:)` uses to keep two spaces in
+/// agreement by construction, and in-flight bullets are re-converted every
+/// frame so a scrolling camera cannot leave them behind.
+/// `PlayerCombatSceneWiringTests` pins a fired bullet's *scene-space*
+/// position onto the shooter, which is the assertion that keeps this
+/// honest -- a child count or an `activeCount` cannot see this class of
+/// bug.
+///
+/// **Known gap: the muzzle flash is at the actor anchor, not the barrel
+/// tip (AC6).** `handleFire(target:origin:tier:)` spawns the flash at the
+/// player's projected tile position, which is this codebase's
+/// bottom-centre actor anchor -- his feet -- and not the barrel tip AC6
+/// asks for. Closing it needs a *measured* per-direction muzzle pixel read
+/// off the shipped `sprite_player_weapons.png` (24 cells: 8 directions x 3
+/// tiers); an earlier revision inferred that table from the weapon cell's
+/// centre, which was wrong against the bottom-centre anchor, and
+/// `WeaponTier`/`HitEffects` record why it was removed rather than shipped
+/// wrong. No pixel measurement of the shipped art was made in this PR, so
+/// no offset table is invented here either: the gap is recorded at the
+/// spawn site and on this story's task record (`CYBERPUN-17-9-t3`) instead,
+/// and `HitEffects`' own note now points here rather than at "the PR that
+/// mounts `sprite_player_weapons`", which is this one.
 ///
 /// **Progression wiring (AC7).** `XPLevelSystem.onLevelChange` is
 /// subscribed once, at construction: the instant a kill's `awardXP(_:)`
@@ -53,8 +100,10 @@ import SpriteKit
 ///
 /// **Production mount.** `GameScene.startPlayer(at:)` constructs one of
 /// these, lazily, the first time a run mounts `PlayerNode` -- handing it
-/// that node's own `body` sprite and `effectsLayer` as the parent for
-/// pooled bullets and transient effects -- and reuses (never rebuilds) it
+/// that node's own `body` sprite, `effectsLayer` as the parent for pooled
+/// bullets and transient effects, and `worldLayer` as the world-space
+/// reference every projected point is converted out of (see "Coordinate
+/// space" above) -- and reuses (never rebuilds) it
 /// across a RUN AGAIN, calling `reset()` instead (the same "reuse the
 /// node, reset its state" convention `startPlayer(at:)` already follows
 /// for `PlayerNode` itself). `GameScene.advanceMovementAndCamera(
@@ -92,6 +141,23 @@ final class Player {
     /// into, and the node `bulletPool`'s pre-mounted bullets live under.
     private let effectsParent: SKNode
 
+    /// The node raw `IsometricProjection.tileToScreen` points resolve in --
+    /// `GameScene.worldLayer` in the live game, the one container
+    /// `CameraController` offsets. Every world point is converted out of
+    /// this node's space and into `effectsParent`'s before it is written to
+    /// a node (see the type's "Coordinate space" note).
+    ///
+    /// Weak for the reason `CameraController.container` documents: the
+    /// scene (or a test) owns this node's lifetime, and this type must
+    /// never keep a torn-down subtree alive.
+    ///
+    /// `nil` -- or a reference not yet in the same scene as `effectsParent`
+    /// -- means there is no camera-offset container to convert out of, as
+    /// in the headless unit tests that drive `update(...)` against loose
+    /// nodes; world points are then used unconverted, which is exactly
+    /// right when both spaces are the identity.
+    private weak var worldSpaceReference: SKNode?
+
     /// The tier/overlay `reset()` restores on a fresh run -- the tier this
     /// instance was originally constructed with, so RUN AGAIN does not
     /// inherit whatever tier the previous run's progression had reached.
@@ -109,7 +175,20 @@ final class Player {
         let bulletNode: BulletNode
         let target: RaccoonNode
         let tier: WeaponTier
-        let targetScreenPositionAtFireTime: CGPoint
+
+        /// The muzzle, in **world** space -- the fixed end of the flight
+        /// the node is interpolated from every frame.
+        let originWorldPosition: CGPoint
+
+        /// Where the target was, in **world** space, when the shot was
+        /// fired. Only the fallback destination: a target still mounted in
+        /// `worldSpaceReference` is chased at its *current* position
+        /// instead (`currentTargetWorldPosition(of:)`), since raccoons are
+        /// re-steered every frame by `RaccoonSpawnDirector` and a
+        /// 0.05-0.5s flight would otherwise land the bullet and its hit
+        /// puff where the target no longer is.
+        let targetWorldPositionAtFireTime: CGPoint
+
         var elapsed: TimeInterval
         let travelDuration: TimeInterval
     }
@@ -121,17 +200,24 @@ final class Player {
     ///     onto -- the same node `PlayerNode.body` exposes.
     ///   - effectsParent: node muzzle flashes/hit puffs and `bulletPool`'s
     ///     pre-mounted bullets are added to.
+    ///   - worldSpaceReference: the camera-offset world container raw
+    ///     `IsometricProjection.tileToScreen` points resolve in
+    ///     (`GameScene.worldLayer`); see the property of the same name.
+    ///     Defaults to `nil` for headless callers whose effects parent is
+    ///     itself the world space.
     ///   - initialTier: the weapon tier shown/fired at construction.
     ///   - initialDirection: the facing shown at construction.
     ///   - bulletPoolCapacity: see `defaultBulletPoolCapacity`.
     init(
         body: SKSpriteNode,
         effectsParent: SKNode,
+        worldSpaceReference: SKNode? = nil,
         initialTier: WeaponTier = .handgun,
         initialDirection: Direction8 = .south,
         bulletPoolCapacity: Int = Player.defaultBulletPoolCapacity
     ) {
         self.effectsParent = effectsParent
+        self.worldSpaceReference = worldSpaceReference
         self.currentDirection = initialDirection
         self.initialTier = initialTier
 
@@ -219,22 +305,40 @@ final class Player {
     // MARK: - Firing
 
     private func handleFire(target: TargetSelection.Candidate, origin: TilePoint, tier: WeaponTier) {
-        let originScreen = IsometricProjection.tileToScreen(origin)
-        let targetScreen = IsometricProjection.tileToScreen(target.position)
-        let shotVector = CGVector(dx: targetScreen.x - originScreen.x, dy: targetScreen.y - originScreen.y)
+        let originWorld = IsometricProjection.tileToScreen(origin)
+        let targetWorld = IsometricProjection.tileToScreen(target.position)
 
-        guard let bullet = bulletPool.acquire(origin: originScreen, spriteKitShotVector: shotVector, tier: tier) else {
+        // The shot vector is a *delta*, so it needs no space conversion:
+        // the world -> effects transform this type applies is a pure
+        // translation (the camera offset), which leaves deltas -- and so
+        // the rotation `BulletNode` derives from them -- unchanged.
+        let shotVector = CGVector(dx: targetWorld.x - originWorld.x, dy: targetWorld.y - originWorld.y)
+
+        let muzzleInEffectsSpace = effectsSpacePoint(fromWorldSpace: originWorld)
+
+        guard let bullet = bulletPool.acquire(
+            origin: muzzleInEffectsSpace,
+            spriteKitShotVector: shotVector,
+            tier: tier
+        ) else {
             // Pool exhausted: drop this shot's visual bullet, the same
             // accepted rare case `BulletPool.acquire`'s own doc comment
             // describes.
             return
         }
 
-        let flash = HitEffects.spawnMuzzleFlash(at: originScreen)
+        // Placed at the player's actor anchor (his feet), *not* the barrel
+        // tip AC6 asks for -- see the type doc's "Known gap". Closing it
+        // needs a measured per-direction muzzle pixel off the shipped
+        // `sprite_player_weapons.png`; none was measured in this PR, and
+        // this codebase already rejected one inferred offset table
+        // (`WeaponTier`/`HitEffects`), so the flash stays at the anchor
+        // rather than at an invented offset.
+        let flash = HitEffects.spawnMuzzleFlash(at: muzzleInEffectsSpace)
         effectsParent.addChild(flash)
         flash.run(SKAction.sequence([SKAction.wait(forDuration: HitEffects.hitPuffFrameDuration), SKAction.removeFromParent()]))
 
-        let distance = hypot(targetScreen.x - originScreen.x, targetScreen.y - originScreen.y)
+        let distance = hypot(targetWorld.x - originWorld.x, targetWorld.y - originWorld.y)
         let travelDuration = TimeInterval(distance) / Self.bulletSpeedPointsPerSecond
 
         inFlightBullets.append(
@@ -242,11 +346,35 @@ final class Player {
                 bulletNode: bullet,
                 target: target.raccoon,
                 tier: tier,
-                targetScreenPositionAtFireTime: targetScreen,
+                originWorldPosition: originWorld,
+                targetWorldPositionAtFireTime: targetWorld,
                 elapsed: 0,
                 travelDuration: travelDuration
             )
         )
+    }
+
+    // MARK: - Coordinate spaces
+
+    /// Converts a world-space point (any `IsometricProjection.tileToScreen`
+    /// result, or the position of a node parented in `worldSpaceReference`)
+    /// into `effectsParent`'s own space, so a node written with it draws
+    /// where the world actually is rather than `worldLayer.position` away
+    /// from it. See the type's "Coordinate space" note for the failure this
+    /// prevents.
+    ///
+    /// Falls back to the point unchanged when there is no world container
+    /// to convert out of, or when the two nodes are not yet in the same
+    /// scene -- `SKNode.convert(_:from:)` is only defined for nodes sharing
+    /// a scene, and the two spaces are the identity in that case anyway.
+    private func effectsSpacePoint(fromWorldSpace point: CGPoint) -> CGPoint {
+        guard let worldSpaceReference,
+              let worldScene = worldSpaceReference.scene,
+              effectsParent.scene === worldScene
+        else {
+            return point
+        }
+        return effectsParent.convert(point, from: worldSpaceReference)
     }
 
     // MARK: - Bullet flight / hit resolution
@@ -269,6 +397,13 @@ final class Player {
 
             bullet.elapsed += deltaTime
             guard bullet.elapsed >= bullet.travelDuration else {
+                // The visual half of "bullets travel": the node is moved
+                // along its flight every frame, and re-converted out of
+                // world space every frame so a scrolling camera cannot
+                // leave it behind.
+                bullet.bulletNode.position = effectsSpacePoint(
+                    fromWorldSpace: inFlightWorldPosition(of: bullet)
+                )
                 stillFlying.append(bullet)
                 continue
             }
@@ -280,10 +415,51 @@ final class Player {
         inFlightBullets = stillFlying
     }
 
+    /// Where `bullet` has got to along its flight, in world space:
+    /// a straight interpolation from the muzzle to the target's current
+    /// position by `elapsed / travelDuration`, clamped to that segment. A
+    /// zero-length flight (a target on the player's own tile) resolves
+    /// straight to the destination rather than dividing by zero.
+    private func inFlightWorldPosition(of bullet: InFlightBullet) -> CGPoint {
+        let destination = currentTargetWorldPosition(of: bullet)
+        guard bullet.travelDuration > 0 else { return destination }
+
+        let progress = CGFloat(min(1, max(0, bullet.elapsed / bullet.travelDuration)))
+        return CGPoint(
+            x: bullet.originWorldPosition.x + (destination.x - bullet.originWorldPosition.x) * progress,
+            y: bullet.originWorldPosition.y + (destination.y - bullet.originWorldPosition.y) * progress
+        )
+    }
+
+    /// The target's **current** world-space position -- its node position,
+    /// which `RaccoonSpawnDirector` rewrites every frame as it re-steers
+    /// the swarm, so a bullet and its hit puff resolve against where the
+    /// raccoon is now rather than where it stood at fire time.
+    ///
+    /// Only trusted while the node is a direct child of the same world
+    /// container this type converts out of: that is exactly how
+    /// `RaccoonSpawnDirector` mounts a raccoon (`worldLayer.addChild`).
+    /// Any other arrangement (a headless test's loose parent node, a
+    /// re-parented raccoon) falls back to the fire-time position rather
+    /// than mixing two spaces.
+    private func currentTargetWorldPosition(of bullet: InFlightBullet) -> CGPoint {
+        guard let worldSpaceReference, bullet.target.parent === worldSpaceReference else {
+            return bullet.targetWorldPositionAtFireTime
+        }
+        return bullet.target.position
+    }
+
     private func resolveHit(bullet: InFlightBullet) {
         // An already-dead target (killed by something else between firing
         // and arrival) takes no further damage and awards nothing.
         guard !bullet.target.isDead else { return }
+
+        // Resolved *before* `takeDamage(_:)` below: a killing blow runs
+        // `RaccoonNode.die()`, which removes the node from the scene graph,
+        // and an unparented node can no longer be converted out of world
+        // space -- the puff would then land at the raw world point, i.e.
+        // the very bug the "Coordinate space" note describes.
+        let impactPoint = effectsSpacePoint(fromWorldSpace: currentTargetWorldPosition(of: bullet))
 
         // `onDeath` is the kill-award seam `RaccoonNode`'s own doc comment
         // names for this exact story; set once, lazily, rather than
@@ -299,7 +475,7 @@ final class Player {
         bullet.target.takeDamage(bullet.tier.damage)
         runStats.recordDamage(bullet.tier.damage)
 
-        let puff = HitEffects.spawnHitPuff(at: bullet.targetScreenPositionAtFireTime)
+        let puff = HitEffects.spawnHitPuff(at: impactPoint)
         effectsParent.addChild(puff)
     }
 }

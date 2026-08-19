@@ -514,7 +514,19 @@ final class GameScene: SKScene {
         if let playerCombat {
             playerCombat.reset()
         } else {
-            playerCombat = Player(body: mounted.body, effectsParent: effectsLayer)
+            // `worldSpaceReference: worldLayer` is load-bearing, not
+            // decoration: bullets/flashes/puffs are positioned from
+            // `IsometricProjection.tileToScreen` points, which live in
+            // `worldLayer`'s space, but are parented under `effectsLayer`,
+            // which nothing camera-offsets. Without the world container to
+            // convert out of, every combat effect would draw
+            // `worldLayer.position` away from the world and drift as the
+            // player walks (see `Player`'s "Coordinate space" note).
+            playerCombat = Player(
+                body: mounted.body,
+                effectsParent: effectsLayer,
+                worldSpaceReference: worldLayer
+            )
         }
 
         #if DEBUG

@@ -8,8 +8,14 @@ import XCTest
 /// auto-fire loop, bullets never leak), AC7 (XP/level curve; overlay row
 /// swap in the same frame as the level-up) and AC8 (cumulative damage
 /// dealt and kill count) all proven through the same live `Player`
-/// instance a later integration task (`CYBERPUN-17-16`) mounts onto the
-/// game, per `Player`'s own doc comment.
+/// instance `GameScene.startPlayer(at:)` mounts and
+/// `advanceMovementAndCamera(currentTime:)` drives -- this same PR, per
+/// `Player`'s own "Production mount" doc section. (An earlier revision of
+/// this header cited a later integration task `CYBERPUN-17-16`; no such
+/// ticket has been filed, and this codebase does not reference invented
+/// ticket IDs -- `BulletPool` and `WeaponFiringController` state the same
+/// rule.) `PlayerCombatSceneWiringTests` covers the scene-side wiring and
+/// the render-space geometry; this file drives the composition directly.
 final class WeaponFiringControllerIntegrationTests: XCTestCase {
 
     private func makeBody() -> SKSpriteNode {
@@ -97,6 +103,66 @@ final class WeaponFiringControllerIntegrationTests: XCTestCase {
             "the kill must award exactly one kill's worth of XP."
         )
         XCTAssertEqual(player.bulletPool.activeCount, 0, "no bullet may be left on loan once the target is dead.")
+    }
+
+    // MARK: - AC1 visual: the fired bullet actually crosses the gap
+
+    /// PR #44 review caught that the pooled node was configured once at the
+    /// muzzle and never moved again -- on screen a bullet popped into
+    /// existence, sat still for its whole `travelDuration`, then vanished.
+    /// This pins the position moving toward the target on every frame of
+    /// the flight, which no counter-based assertion can see.
+    func test_firedBullet_movesFromTheMuzzleTowardsItsTarget_everyFrameOfItsFlight() throws {
+        let world = SKNode()
+        let effects = SKNode()
+        let player = Player(body: makeBody(), effectsParent: effects)
+
+        let raccoon = RaccoonNode(tier: .base)
+        world.addChild(raccoon)
+
+        let origin = TilePoint(x: 0, y: 0)
+        // ~215pt away, i.e. ~0.24s of flight at 900pt/s, so every frame
+        // measured below lands mid-flight.
+        let targetPosition = TilePoint(x: 4, y: 0)
+        let originScreen = IsometricProjection.tileToScreen(origin)
+        let targetScreen = IsometricProjection.tileToScreen(targetPosition)
+        let candidate = TargetSelection.Candidate(raccoon: raccoon, position: targetPosition)
+
+        func distanceToTarget(from point: CGPoint) -> CGFloat {
+            hypot(targetScreen.x - point.x, targetScreen.y - point.y)
+        }
+
+        // Fires on the first qualifying frame (cooldown starts at 0); the
+        // tiny delta leaves it measurably still on the muzzle.
+        player.update(deltaTime: 1e-6, isMoving: true, origin: origin, direction: .east, raccoons: [candidate])
+
+        let bullet = try XCTUnwrap(
+            effects.children.compactMap { $0 as? BulletNode }.first { !$0.isHidden },
+            "the shot must have unhidden a pooled bullet."
+        )
+        XCTAssertEqual(
+            hypot(bullet.position.x - originScreen.x, bullet.position.y - originScreen.y), 0, accuracy: 1,
+            "a just-fired bullet starts on the muzzle."
+        )
+
+        var previousDistance = distanceToTarget(from: bullet.position)
+        for frame in 0..<5 {
+            // Fire gate closed so no second shot can claim another bullet.
+            player.update(deltaTime: 1.0 / 60.0, isMoving: false, origin: origin, direction: .east, raccoons: [candidate])
+
+            let distance = distanceToTarget(from: bullet.position)
+            XCTAssertLessThan(
+                distance, previousDistance,
+                "frame \(frame): the bullet must have moved closer to its target, not sat at the muzzle."
+            )
+            previousDistance = distance
+        }
+
+        XCTAssertEqual(
+            player.bulletPool.activeCount, 1,
+            "the bullet must still be in flight -- otherwise the frames above measured an arrival, not travel."
+        )
+        XCTAssertEqual(raccoon.hp, RaccoonNode.baseMaxHP, "no damage may apply before the flight timer elapses.")
     }
 
     // MARK: - AC7: reaching level 3 / level 6 swaps both the decision layer's

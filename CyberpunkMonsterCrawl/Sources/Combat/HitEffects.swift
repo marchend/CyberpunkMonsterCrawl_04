@@ -18,12 +18,21 @@ import SpriteKit
 /// comment explains why: an earlier revision carried a per-direction
 /// `barrelTipOffset` table derived from the weapon cell's *centre*, which
 /// is wrong against this codebase's bottom-centre actor anchor, and was
-/// removed rather than shipped wrong -- deferred to the PR that mounts
-/// `sprite_player_weapons` for real and can measure the muzzle pixel off
-/// the shipped art. `spawnMuzzleFlash(at:)` therefore takes the
-/// already-resolved muzzle **position** directly rather than re-deriving
-/// one from a still-nonexistent offset table, so this file does not itself
-/// invent the missing numbers.
+/// removed rather than shipped wrong. `spawnMuzzleFlash(at:)` therefore
+/// takes the already-resolved muzzle **position** directly rather than
+/// re-deriving one from a still-nonexistent offset table, so this file does
+/// not itself invent the missing numbers.
+///
+/// **Where that deferral now stands.** It used to point at "the PR that
+/// mounts `sprite_player_weapons` for real"; that PR
+/// (`CYBERPUN-17-9` PR 3, `Player`) has landed and composites the overlay
+/// onto `PlayerNode.body`, but it did **not** measure the muzzle pixel off
+/// the shipped art, so the one production caller
+/// (`Player.handleFire(target:origin:tier:)`) passes the player's
+/// bottom-centre actor anchor -- his feet -- as the flash position. That
+/// open AC6 gap is recorded at that call site and in `Player`'s own
+/// "Known gap" doc section rather than left as a forward reference here to
+/// a PR that already merged.
 enum HitEffects {
 
     /// One full play-through of the animation, in seconds -- 4 frames at a
