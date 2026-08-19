@@ -37,7 +37,20 @@ final class AccessibleSKViewTests: XCTestCase {
     /// `AccessibleSKView`, "part 3").
     private var containerView: SceneAccessibilityContainerView!
 
+    /// Torn down explicitly rather than left to ARC (CYBERPUN-17-17): the
+    /// identity assertions in this file compare published elements with
+    /// `===`, so a container/host pair left to be deallocated implicitly -
+    /// possibly after the next test method has already started building its
+    /// own fixture in the same process - is exactly the kind of residue a
+    /// hermetic-fixture bug hides behind. `resetForTesting()` tears every
+    /// mirror down immediately and unconditionally (not just on the lifecycle
+    /// refresh points production code uses), and removing the views from
+    /// their host severs the last strong reference this test held before the
+    /// instance itself goes away.
     override func tearDown() {
+        containerView?.resetForTesting()
+        containerView?.removeFromSuperview()
+        hostView?.subviews.forEach { $0.removeFromSuperview() }
         hostView = nil
         containerView = nil
         super.tearDown()
@@ -142,6 +155,28 @@ final class AccessibleSKViewTests: XCTestCase {
         )
     }
 
+    /// Every published mirror rendered for a failure message - **including
+    /// the ones no assertion in this file can otherwise see**.
+    ///
+    /// CYBERPUN-17-17: every lookup here matches on an identifier
+    /// (`first { $0.accessibilityIdentifier == ... }`,
+    /// `Set(...compactMap(\.accessibilityIdentifier))`), and both silently
+    /// skip a mirror whose identifier is `nil`. That is how a mirror for a
+    /// child of an already-accessible node sat above both menu buttons,
+    /// stealing their activation points, while the only symptom was two
+    /// `===` identity failures with nothing in the report to explain them.
+    /// Naming every mirror - nil identifier included - is what makes such a
+    /// mirror visible the moment it reappears.
+    private func describeMirrors(_ mirrors: [SceneAccessibilityMirrorView]) -> String {
+        mirrors
+            .map {
+                "\($0.accessibilityIdentifier ?? "<nil identifier>")"
+                    + "(label: \($0.accessibilityLabel ?? "<nil>"), frame: \($0.frame), "
+                    + "marker: \($0.isMarker))"
+            }
+            .joined(separator: " | ")
+    }
+
     /// The centre of `element`'s published frame, in container coordinates -
     /// the point a driver resolves from the frame the app publishes.
     private func publishedCentre(of element: SceneAccessibilityMirrorView) -> CGPoint {
@@ -207,6 +242,46 @@ final class AccessibleSKViewTests: XCTestCase {
             ["menu.playButton", "menu.highScoresButton", "menu.container"],
             "every accessible node under uiLayer must be published, and nothing else"
         )
+    }
+
+    /// CYBERPUN-17-17, and the defect this file went red on: an accessibility
+    /// element is a **leaf**, so the walk must not descend into one.
+    ///
+    /// `ButtonNode` opts in on *itself* while owning a plate sprite and a
+    /// centred `SKLabelNode`, and SpriteKit marks some node classes as
+    /// accessibility elements implicitly. While the walk descended, such a
+    /// child was appended *after* its own button, so its mirror was inserted
+    /// **above** the button's and UIKit's topmost-sibling point lookup
+    /// answered the child at the button's own frame centre: the button stayed
+    /// findable and stopped owning its activation point, which is exactly
+    /// `isHittable == false`. Nothing in this file could see it, because such
+    /// a child carries no `accessibilityIdentifier` and every lookup here
+    /// matches on one.
+    func test_accessibleUINodes_doesNotPublishTheChildrenOfAnAccessibleNode() throws {
+        let scene = makeMenuScene()
+        let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
+
+        func descendants(of node: SKNode) -> [SKNode] {
+            node.children.flatMap { [$0] + descendants(of: $0) }
+        }
+
+        let nodes = scene.accessibleUINodes()
+
+        for button in [menu.playButton, menu.highScoresButton] {
+            XCTAssertTrue(
+                nodes.contains { $0 === button },
+                "the button itself must still be published - it is the node the scene routes touches to"
+            )
+            for descendant in descendants(of: button) {
+                XCTAssertFalse(
+                    nodes.contains { $0 === descendant },
+                    "\(descendant.name ?? String(describing: type(of: descendant))) is inside "
+                        + "\(button.title), which is already an accessibility element - publishing it "
+                        + "separately lays a mirror over the button's own centre and steals its "
+                        + "activation point"
+                )
+            }
+        }
     }
 
     func test_accessibleUINodes_skipsNonAccessibleDecoration() {
@@ -558,10 +633,52 @@ final class AccessibleSKViewTests: XCTestCase {
             // being invisible to it, so the point lookup `isHittable` performs
             // cannot disagree with the frame this same view published.
             let centre = publishedCentre(of: element)
+            let resolved = containerView.hitTest(centre, with: UIEvent())
+            let resolvedMirror = resolved as? SceneAccessibilityMirrorView
             XCTAssertTrue(
-                containerView.hitTest(centre, with: UIEvent()) === element,
-                "an event-carrying hit test at \(element.accessibilityIdentifier ?? "?") must resolve "
-                    + "to that very mirror, exactly as an event-less lookup does"
+                resolved === element,
+                "an event-carrying hit test at \(element.accessibilityIdentifier ?? "<nil identifier>") "
+                    + "must resolve to that very mirror, exactly as an event-less lookup does - it "
+                    + "resolved to "
+                    + "\(resolvedMirror?.accessibilityIdentifier ?? String(describing: resolved)) "
+                    + "instead. Published mirrors, bottom of the z-order first: "
+                    + describeMirrors(elements)
+            )
+        }
+    }
+
+    /// The retirement half of CYBERPUN-17-17: after a swap, every mirror
+    /// subview must still be one the container tracks.
+    ///
+    /// `refreshAccessibilityMirrors()` used to retire mirrors by `nodeKey`,
+    /// so a mirror object sharing a key with a live one was matched as
+    /// "still live" and left in `subviews` while being replaced in
+    /// `mirrorViews` - an untracked subview that no count assertion in this
+    /// file could see, and one that still answers UIKit's point lookup and so
+    /// can take a button's own activation point.
+    func test_screenSwapRoundTrip_leavesNoUntrackedMirrorSubviewBehind() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+        _ = publishedMirrors()
+
+        XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
+        _ = publishedMirrors()
+        XCTAssertTrue(scene.stateMachine.transition(to: .menu))
+
+        let subviewMirrors = publishedMirrors()
+        XCTAssertFalse(subviewMirrors.isEmpty, "this test is only meaningful while something is published")
+        XCTAssertEqual(
+            subviewMirrors.count,
+            containerView.mirrorViews.count,
+            "every mirror subview must be tracked: \(describeMirrors(subviewMirrors)) in the hierarchy "
+                + "against \(describeMirrors(containerView.mirrorViews)) tracked"
+        )
+        for mirror in subviewMirrors {
+            XCTAssertTrue(
+                containerView.mirrorViews.contains { $0 === mirror },
+                "\(mirror.accessibilityIdentifier ?? "<nil identifier>") is in the container's subviews "
+                    + "but not in mirrorViews - it answers the point lookup while being invisible to "
+                    + "every assertion about what is published"
             )
         }
     }
@@ -909,6 +1026,45 @@ final class AccessibleSKViewTests: XCTestCase {
         scene.dispatchTouch(atScenePoint: scenePoint)
 
         XCTAssertEqual(scene.stateMachine.currentState, .gameplay)
+    }
+
+    /// Regression guard for CYBERPUN-17-17: the same six identity assertions
+    /// in this file broke on two independent, unrelated branches (combat-only
+    /// and pickups-only diffs, neither touching an AX file) purely because
+    /// *other* test classes elsewhere in the suite had constructed their own
+    /// `SKView`/`SKScene` pairs before this family ran - a suite-composition
+    /// hazard, not a defect in either shipped diff.
+    ///
+    /// Rather than depend on file/class execution order (which this suite
+    /// does not control and which is exactly what made the failure look
+    /// unrelated-branch-dependent), this test manufactures that hazard
+    /// directly: it builds and presents an unrelated `SKView`/`SKScene` pair
+    /// - deliberately never touching `AccessibleSKView`,
+    /// `SceneAccessibilityContainerView` or `GameScene` - and lets it be
+    /// deallocated, *before* building this test's own fixture and repeating
+    /// one of the six identity assertions. If suite growth elsewhere can ever
+    /// again leak into this family, it goes red here regardless of where in
+    /// the suite the offending class happens to sit.
+    func test_accessibilityHitTest_survivesAnUnrelatedSKViewAndSceneBuiltFirst() throws {
+        do {
+            let unrelatedScene = SKScene(size: CGSize(width: 123, height: 456))
+            let unrelatedView = SKView(frame: CGRect(x: 0, y: 0, width: 123, height: 456))
+            unrelatedView.presentScene(unrelatedScene)
+            unrelatedView.isPaused = true
+        }
+
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+
+        let play = try publishedElement("menu.playButton")
+        let hit = try elementResolved(atContainerPoint: publishedCentre(of: play))
+
+        XCTAssertTrue(
+            hit === play,
+            "an unrelated SKView/SKScene built earlier in the process must not affect this "
+                + "container's own published identity - suite growth elsewhere breaking this "
+                + "family is exactly CYBERPUN-17-17"
+        )
     }
 
     /// The other identity-map assumption: a view frame equal to the scene

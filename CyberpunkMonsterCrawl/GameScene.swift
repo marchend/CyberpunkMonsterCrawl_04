@@ -900,7 +900,10 @@ final class GameScene: SKScene {
 
     /// Every *visible* node in the `uiLayer` subtree that presents itself to
     /// UIAccessibility (`isAccessibilityElement == true`), in scene-graph
-    /// order.
+    /// order - each of them a **leaf**: a node that opts in collapses its own
+    /// subtree, exactly as UIKit's `isAccessibilityElement` does, so a
+    /// button's plate and label are never published alongside the button they
+    /// belong to (see `collectAccessibleNodes(under:into:)`).
     ///
     /// `AccessibleSKView` publishes one `UIAccessibilityElement` per entry.
     /// The walk lives here rather than inside the view so it is testable
@@ -933,7 +936,30 @@ final class GameScene: SKScene {
             // are equally unreachable by `atPoint(_:)`.
             guard isVisibleToTouchRouting(child) else { continue }
             if child.isAccessibilityElement {
+                // An accessibility element is a **leaf**, so its subtree is
+                // not walked. That is UIKit's own rule
+                // (`isAccessibilityElement == true` collapses everything
+                // underneath into the one element), and here it is
+                // load-bearing rather than a nicety: `ButtonNode` opts in on
+                // *itself* while owning a plate sprite and a centred
+                // `SKLabelNode` child, and SpriteKit gives some node classes
+                // an implicit `isAccessibilityElement` of its own. Descending
+                // therefore appended a child of the button *after* the
+                // button, so `refreshAccessibilityMirrors()` laid that child's
+                // mirror **above** the button's - and UIKit's
+                // topmost-sibling point lookup answered the child at the
+                // button's own frame centre. The button stayed findable and
+                // stopped owning its centre, which is `isHittable == false`
+                // for PLAY, and it was invisible to every identifier-based
+                // assertion because such a child carries no
+                // `accessibilityIdentifier` at all.
+                //
+                // The button also *is* the `TouchResponder` the scene routes
+                // to, so the element and the tappable node are the same node
+                // by construction - exactly the agreement this whole feature
+                // exists to keep.
                 accessible.append(child)
+                continue
             }
             collectAccessibleNodes(under: child, into: &accessible)
         }
