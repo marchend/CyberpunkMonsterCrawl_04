@@ -3,13 +3,35 @@ import SpriteKit
 import UIKit
 
 /// The HUD button for the player-triggered pulse ability (`CYBERPUN-17-10`
-/// PR 2): a self-contained, presentation-only `TouchResponder` node with no
-/// dependency on `PulseAbility` or `GameScene`. A later PR mounts this node
-/// at `FloatingThumbstickNode.reservedPulseButtonSlot(forSize:safeAreaInsets:)`
+/// `-t2`): a self-contained, presentation-only `TouchResponder` node with no
+/// dependency on `PulseAbility` or `GameScene`. `CYBERPUN-17-10-t3` -- the
+/// scene-wiring task, now filed (see "Deferred work" in `AGENT.md`) --
+/// mounts this node at
+/// `FloatingThumbstickNode.reservedPulseButtonSlot(forSize:safeAreaInsets:)`
 /// (the slot that node already reserves directly above the movement stick),
 /// drives `setCooldownProgress(_:)` from `PulseAbility.cooldownRemaining` /
 /// `PulseAbility.cooldownSeconds` every frame, and triggers the real ability
-/// from the `onPress` closure this type is initialized with.
+/// from the `onPress` closure this type is initialized with. Until `-t3`
+/// lands, this node is mounted nowhere and product gate 8 is not
+/// demonstrable on a running simulator.
+///
+/// **Mount instructions for `CYBERPUN-17-10-t3`.**
+///
+/// - *Position from the slot's centre, not its origin.*
+///   `reservedPulseButtonSlot(forSize:safeAreaInsets:)` returns an
+///   origin-based `CGRect`, while this node draws `plate` as a circle
+///   centred on its *own* origin. The mount must therefore set
+///   `position = CGPoint(x: slot.midX, y: slot.midY)` -- using
+///   `slot.origin` lands the button half a width off the reserved slot,
+///   and outside the region `FloatingThumbstickNode.canBeginTouch(at:)`
+///   excludes for the stick.
+/// - *Hide it outside `.gameplay`.* Unlike `FloatingThumbstickNode`, this
+///   node has no `isRunActive`-style gate of its own, and it **is** an
+///   accessibility element. `accessibleUINodes()` publishes visible
+///   accessible nodes, so whoever mounts it must hide it for
+///   `.menu`/`.death`/`.highScores` -- otherwise a live
+///   `AccessibleSKView` mirror sits over the menu's bottom-left quadrant
+///   and forwards touches into `dispatchTouch`.
 ///
 /// **Product gate 1 -- "must respond to every press."** `handleTouch()`
 /// unconditionally invokes `onPress`, on cooldown or not: this node never
@@ -37,12 +59,13 @@ final class PulseButton: SKNode, TouchResponder {
 
     // MARK: - Tunables
 
-    /// Matches `FloatingThumbstickNode.pulseButtonSlotSize` exactly, so a
-    /// future wiring PR that mounts this node in that reserved slot needs no
-    /// extra scaling math. Not read from that type directly (`Sources/UI`
-    /// has no import-order dependency between the two files) -- kept in sync
-    /// by convention and by `PulseButtonTests` pinning the literal.
-    static let size = CGSize(width: 72, height: 72)
+    /// *Is* `FloatingThumbstickNode.pulseButtonSlotSize` -- read from that
+    /// type directly rather than re-declared, so the two cannot drift apart
+    /// at all (both types live in the same module; no import is involved).
+    /// That is what `pulseButtonSlotSize`'s own doc comment asks of
+    /// `CYBERPUN-17-10`: consume the reserved-slot API instead of
+    /// re-deriving placement. `PulseButtonTests` still pins the equality.
+    static let size = FloatingThumbstickNode.pulseButtonSlotSize
 
     /// Alpha while the ability is ready to fire.
     static let readyAlpha: CGFloat = 1.0
@@ -165,13 +188,35 @@ final class PulseButton: SKNode, TouchResponder {
 
     /// A pie-wedge path (centered at the node's own origin, matching
     /// `plate`'s own circle) covering `remainingFraction` of the circle's
-    /// area, swept clockwise from straight up. `remainingFraction == 0`
-    /// yields a degenerate (empty) wedge; `updateVisual()` never calls this
-    /// with `remainingFraction == 1` reaching an ambiguous full-circle arc,
-    /// since it hides the overlay outright once ready.
+    /// area, swept clockwise from straight up.
+    ///
+    /// Both ends are special-cased, and it is the *upper* one that ships:
+    ///
+    /// - `remainingFraction == 0` is the unreachable end -- it means
+    ///   `cooldownProgress == 1`, where `updateVisual()` hides the overlay
+    ///   outright rather than calling this. It still returns an empty path
+    ///   defensively.
+    /// - `remainingFraction >= 1` is reached on **every** pulse fire: it is
+    ///   exactly `setCooldownProgress(0)` / `setOnCooldown(true)`, the frame
+    ///   right after the button is used. Swept as an arc that case would be
+    ///   `endAngle == startAngle - 2*pi`, i.e. start and end are the same
+    ///   angle mod 2*pi -- an ambiguous full turn whose behaviour we should
+    ///   not rely on (a CoreGraphics that normalises the delta to `0` would
+    ///   draw *no* wedge at all on a just-fired button). It is drawn as an
+    ///   explicit full circle instead, so the geometry is unambiguous.
     private static func radialOverlayPath(remainingFraction: CGFloat, radius: CGFloat) -> CGPath {
         let path = CGMutablePath()
         guard remainingFraction > 0 else { return path }
+
+        guard remainingFraction < 1 else {
+            path.addEllipse(in: CGRect(
+                x: -radius,
+                y: -radius,
+                width: radius * 2,
+                height: radius * 2
+            ))
+            return path
+        }
 
         let startAngle = CGFloat.pi / 2
         let endAngle = startAngle - remainingFraction * 2 * .pi
