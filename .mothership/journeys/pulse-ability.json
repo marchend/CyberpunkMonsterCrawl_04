@@ -1,0 +1,16 @@
+{
+  "name": "pulse-ability",
+  "demonstrates": "CYBERPUN-17-10-t3's scene wiring as it is reachable from a running build: the HUD pulse button (PulseButton, mounted at FloatingThumbstickNode.reservedPulseButtonSlot's centre, directly above the movement thumbstick in the bottom-left corner) is visible and tappable from the very first gameplay frame, and pressing it drives PulseAbility.trigger(...) -> pushes/damages any in-radius raccoon -> spawns/replays PulseRingNode's sprite_pulse shockwave, all in GameScene.applyPulseTrigger(raccoons:). WHAT THIS JOURNEY CAN AND CANNOT SHOW: the ring's full play-through is 8 frames * PulseRingNode.frameDuration (0.03s) = 0.24s -- far shorter than the round-trip latency of a screenshot step (which screenshots the CURRENT frame only after the navigate/tap step's own vision-driven confirmation has already completed), the same timing gap auto-fire-weapons.json documents for bullets/muzzle flashes. A screenshot taken after tapping the button is therefore expected to usually land AFTER the ring has already finished and re-hidden itself, showing the ordinary gameplay screen rather than a mid-shockwave frame -- that is this probe vocabulary's limitation, not evidence the ring failed to play. What this journey DOES reliably prove on a device: the button renders in the correct HUD slot from the first gameplay frame (product gate 8's visibility half) and a press is accepted without the app crashing or hanging (no raccoon needs to be in range for PulseAbility.trigger(...) to fire and return a Result -- see that method's own 'Result.hits is empty, not nil, when nothing was in range' contract). The push/damage/ring-spawn pipeline itself, and the same-update-tick timing the acceptance criteria call for, are pinned end-to-end (not merely screenshot-reviewed) by PulseSceneWiringTests, which drives GameScene.applyPulseTrigger(raccoons:) directly against a hand-built raccoon and asserts on its resulting position/hp and on PulseRingNode's action/visibility state -- exactly the class of behaviour a probe screenshot cannot reliably catch given the animation's own short duration. Gate is human/vision review of the two screenshots below (mainly: is the pulse button visibly present and does the app stay foregrounded after the tap); assert_running steps only confirm the app process is still alive.",
+  "stories": ["CYBERPUN-17-10"],
+  "steps": [
+    {"action": "wait", "seconds": 2},
+    {"action": "assert_running"},
+    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)", "expect": "the running game -- a playable isometric city scene with a ground lattice, buildings and a player actor, not a menu or title screen"},
+    {"action": "wait", "seconds": 2},
+    {"action": "screenshot", "label": "pulse-button-visible-in-hud"},
+    {"action": "assert_running"},
+    {"action": "navigate", "target": "the round pulse-ability button in the bottom-left corner of the screen, directly above the round movement thumbstick", "expect": "the same running gameplay screen, still showing the isometric city and player, with the app still foregrounded after the tap"},
+    {"action": "screenshot", "label": "after-pulse-button-press"},
+    {"action": "assert_running"}
+  ]
+}
