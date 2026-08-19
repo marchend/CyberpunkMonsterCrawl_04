@@ -89,6 +89,47 @@ final class PulseSceneWiringTests: XCTestCase {
         )
     }
 
+    // MARK: - Product gate 1's routing half: the touch reaches the button
+
+    /// The half `handleTouch()` alone cannot prove (PR #48 review): that a
+    /// touch landing on the button's own slot actually *resolves* to
+    /// `pulseButton` rather than being swallowed by another `uiLayer` node
+    /// or handed to `thumbstick` -- the slot sits inside
+    /// `FloatingThumbstickNode.leftRegion`, and only
+    /// `canBeginTouch(at:)`'s reserved-slot exclusion keeps the stick off
+    /// it. `dispatchTouch(atScenePoint:)` is the documented seam for this
+    /// (`UITouch` cannot be constructed with a location in a unit test),
+    /// and is also what `SceneAccessibilityContainerView.forwardTouch`
+    /// funnels the journey's vision-driven tap into.
+    func test_aTouchAtThePulseButtonsSlot_routesToTheButton_andFiresTheAbility() {
+        let scene = makeGameplayScene()
+        XCTAssertFalse(scene.pulseAbility.isOnCooldown, "precondition: a fresh ability is ready.")
+
+        let responder = scene.dispatchTouch(atScenePoint: scene.pulseButton.position)
+
+        XCTAssertTrue(
+            responder === scene.pulseButton,
+            "a touch on the reserved slot must resolve to PulseButton, not to another uiLayer node."
+        )
+        XCTAssertTrue(
+            scene.pulseAbility.isOnCooldown,
+            "the routed touch must reach PulseAbility.trigger(...), not merely hit-test the button."
+        )
+        XCTAssertFalse(scene.pulseRing.isHidden, "a routed press must play the ring.")
+    }
+
+    /// The other side of the same seam: the movement stick must refuse the
+    /// button's slot, so a press can never be stolen mid-routing by the
+    /// thumbstick that surrounds it.
+    func test_theThumbstick_refusesATouchOnThePulseButtonsSlot() {
+        let scene = makeGameplayScene()
+
+        XCTAssertFalse(
+            scene.thumbstick.canBeginTouch(at: scene.uiLayer.convert(scene.pulseButton.position, from: scene)),
+            "the stick must exclude the reserved pulse-button slot, or a press would start a drag instead."
+        )
+    }
+
     // MARK: - Off cooldown: push + damage + ring, all in the same tick
 
     func test_applyPulseTrigger_whenOffCooldown_pushesAndDamagesRaccoons_andSpawnsTheRing_inOneCall() throws {

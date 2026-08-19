@@ -26,17 +26,38 @@ import SpriteKit
 /// animation from frame 0 -- rather than allocating a fresh node (or a
 /// pool of them) per press.
 ///
-/// **Scale-to-radius, whole-integer-friendly.** `scale(forRadiusTiles:)`
-/// converts a tile-space radius into a screen-space *diameter*, in points,
-/// using `IsometricProjection.tileHalfWidth` (48pt per tile-radius on the
-/// screen-x axis -- the same constant every other world-to-screen
-/// conversion in this codebase is built on), divides by the ring's fixed
-/// 32px cell width, and rounds the result to the nearest whole integer
-/// (floored at `1`). That is the same magnitude-preserving rounding rule
+/// **Scale-to-radius: an ellipse on the 2:1 plane, not a square.**
+/// `PulseAbility` measures its radius as a plain Euclidean distance in
+/// *tile* space (`hypot(dx, dy)` on `TilePoint`), and
+/// `IsometricProjection.tileToScreen` maps a tile delta to
+/// `((dx - dy) * 48, (dx + dy) * 24)`. A tile-space circle of radius `R`
+/// therefore projects to a screen-space **ellipse** with semi-axes
+/// `sqrt(2) * tileHalfWidth * R` (~67.9R) horizontally and
+/// `sqrt(2) * tileHalfHeight * R` (~33.9R) vertically -- not a circle of
+/// radius `48R`. Scaling this node uniformly (as the first cut of this
+/// type did) draws a `96R x 96R` square: ~29% too narrow on screen-x and
+/// ~41% too tall on screen-y relative to the region the pulse actually
+/// pushes, so a raccoon shoved along the screen-x diagonal comes to rest
+/// *outside* the drawn ring while one directly above the player sits
+/// inside a ring that never touched it (PR #48 review). `xScale(
+/// forRadiusTiles:)` and `yScale(forRadiusTiles:)` are therefore derived
+/// separately, from `tileHalfWidth` and `tileHalfHeight` respectively, so
+/// the ring sits on the same 2:1 plane everything else in `worldLayer` is
+/// drawn on.
+///
+/// Each axis divides by the ring's own **measured** extent inside its cell
+/// (`AtlasPulseRingContent.widestFrameContentSize`, alpha-scanned off the
+/// shipped `sprite_pulse.png` and re-measured by
+/// `PulseRingArtMeasurementTests`) rather than by the 32px cell width:
+/// scaling an `SKSpriteNode` scales the whole cell, so sizing against the
+/// cell would draw the ring `cellSize / ringSize` times off, and nothing
+/// in `AtlasSheet.pulse` pins where the opaque pixels sit inside a cell.
+/// Both results are rounded to the nearest whole integer (floored at `1`)
+/// -- the same magnitude-preserving rounding rule
 /// `PixelCrispness.apply(to:)` enforces on every other actor/effect sprite
 /// in this repo (`docs/bootstrap.md` section 1's "1x art only, integer
-/// scaling"), restated here as a pure, directly-testable `static` function
-/// so `PulseRingNodeTests` can pin the scale-to-radius transform
+/// scaling") -- and both are restated as pure, directly-testable `static`
+/// functions so `PulseRingNodeTests` can pin the scale-to-radius transform
 /// independent of constructing (and animating) a live node.
 /// `play(radiusTiles:at:)` still finishes with `PixelCrispness.apply(to:)`
 /// for the texture-filtering and whole-point-position half of that same
@@ -149,23 +170,51 @@ final class PulseRingNode: SKSpriteNode {
 
     // MARK: - Scale-to-radius
 
-    /// The whole-integer-friendly `xScale`/`yScale` magnitude this node
-    /// must carry for its fixed 32pt-wide texture to visually span
-    /// `radiusTiles` tile-units from its center in every direction: the
-    /// screen-space diameter (`2 * radiusTiles *
-    /// IsometricProjection.tileHalfWidth`) divided by the cell's own
-    /// width, rounded to the nearest whole integer and floored at `1` --
-    /// see the type's own doc comment for why this mirrors
-    /// `PixelCrispness.apply(to:)`'s rounding rule rather than leaving a
-    /// fractional scale that would resample the nearest-filtered art.
+    /// The screen-space **full width**, in points, of the ellipse a
+    /// tile-space circle of radius `radiusTiles` projects to: twice the
+    /// horizontal semi-axis `sqrt(2) * IsometricProjection.tileHalfWidth *
+    /// radiusTiles` -- see the type's own doc comment for the derivation.
+    static func projectedWidthPoints(forRadiusTiles radiusTiles: Double) -> CGFloat {
+        CGFloat(2 * 2.0.squareRoot() * IsometricProjection.tileHalfWidth * max(0, radiusTiles))
+    }
+
+    /// The screen-space **full height**, in points, of that same ellipse:
+    /// twice the vertical semi-axis `sqrt(2) *
+    /// IsometricProjection.tileHalfHeight * radiusTiles`, i.e. exactly half
+    /// `projectedWidthPoints(forRadiusTiles:)` -- the 2:1 plane.
+    static func projectedHeightPoints(forRadiusTiles radiusTiles: Double) -> CGFloat {
+        CGFloat(2 * 2.0.squareRoot() * IsometricProjection.tileHalfHeight * max(0, radiusTiles))
+    }
+
+    /// The whole-integer-friendly `xScale` this node must carry for its
+    /// drawn ring to span the projected ellipse's full width:
+    /// `projectedWidthPoints(forRadiusTiles:)` divided by the ring's own
+    /// measured pixel width inside its cell
+    /// (`AtlasPulseRingContent.widestFrameContentSize.width`), rounded to
+    /// the nearest whole integer and floored at `1` -- see the type's own
+    /// doc comment for why the measured ring, not the 32px cell, is the
+    /// divisor, and for why this mirrors `PixelCrispness.apply(to:)`'s
+    /// rounding rule rather than leaving a fractional scale that would
+    /// resample the nearest-filtered art.
     ///
     /// A non-positive `radiusTiles` (never produced by
     /// `PulseAbility.trigger(...)`, but this is a pure function total over
     /// its input) floors to the same `1` a real but tiny radius would.
-    static func scale(forRadiusTiles radiusTiles: Double) -> CGFloat {
-        let diameterPoints = CGFloat(max(0, radiusTiles) * 2 * IsometricProjection.tileHalfWidth)
-        let rawScale = diameterPoints / cellSize.width
-        return max(1, rawScale.rounded())
+    static func xScale(forRadiusTiles radiusTiles: Double) -> CGFloat {
+        let ringWidth = AtlasPulseRingContent.widestFrameContentSize.width
+        guard ringWidth > 0 else { return 1 }
+        return max(1, (projectedWidthPoints(forRadiusTiles: radiusTiles) / ringWidth).rounded())
+    }
+
+    /// The `yScale` sibling of `xScale(forRadiusTiles:)`, derived from
+    /// `IsometricProjection.tileHalfHeight` and the ring's measured pixel
+    /// *height* -- half the horizontal extent before rounding, so the ring
+    /// lands on the same 2:1 isometric plane as everything else in
+    /// `worldLayer`.
+    static func yScale(forRadiusTiles radiusTiles: Double) -> CGFloat {
+        let ringHeight = AtlasPulseRingContent.widestFrameContentSize.height
+        guard ringHeight > 0 else { return 1 }
+        return max(1, (projectedHeightPoints(forRadiusTiles: radiusTiles) / ringHeight).rounded())
     }
 
     // MARK: - Play
@@ -174,9 +223,10 @@ final class PulseRingNode: SKSpriteNode {
     /// coordinate space -- `GameScene` converts the player's world-space
     /// point into `effectsLayer`'s space before calling this, the same
     /// "Coordinate space" convention `Player` documents for its own
-    /// bullets/flashes/puffs), scales it to `radiusTiles`
-    /// (`scale(forRadiusTiles:)`), and (re)plays the 8-frame shockwave
-    /// animation from frame 0.
+    /// bullets/flashes/puffs), scales it to `radiusTiles` per axis
+    /// (`xScale(forRadiusTiles:)` / `yScale(forRadiusTiles:)` -- never one
+    /// uniform scale, see the type's own "Scale-to-radius" doc note), and
+    /// (re)plays the 8-frame shockwave animation from frame 0.
     ///
     /// Unhides the node for the animation's duration and hides it again on
     /// completion, rather than removing it from the scene graph -- this is
@@ -188,9 +238,11 @@ final class PulseRingNode: SKSpriteNode {
 
         self.position = position
         texture = Self.texture(forColumn: 0)
-        let scale = Self.scale(forRadiusTiles: radiusTiles)
-        xScale = scale
-        yScale = scale
+        // Per-axis, never a single uniform scale: the pushed region is a
+        // tile-space circle, which projects to a 2:1 ellipse on screen
+        // (see the type's own "Scale-to-radius" doc note).
+        xScale = Self.xScale(forRadiusTiles: radiusTiles)
+        yScale = Self.yScale(forRadiusTiles: radiusTiles)
         PixelCrispness.apply(to: self)
         isHidden = false
 

@@ -171,6 +171,24 @@ final class PulseAbility {
         cooldownRemaining = max(0, cooldownRemaining - deltaTime)
     }
 
+    /// Clears the cooldown so the next `trigger(...)` is accepted
+    /// immediately -- the "ready immediately" state a freshly constructed
+    /// instance starts in, restored.
+    ///
+    /// `GameScene.updateWorldContent(for:)` calls this on every fresh entry
+    /// to `.gameplay`, alongside `raccoonSpawnDirector.reset()` /
+    /// `startPickups()` / `runStats.reset()` / `startPlayer(at:)`. Without
+    /// it a run that ended mid-cooldown starts the *next* run with up to
+    /// `cooldownSeconds` already burned, and the player's first RUN AGAIN
+    /// press does nothing -- indistinguishable from a dropped input, which
+    /// is the precise failure this ability's "must respond to every press"
+    /// product gate is about (PR #48 review). The auto-fire weapon can
+    /// carry its cooldown across a run invisibly because nobody presses
+    /// anything for it; a button cannot.
+    func reset() {
+        cooldownRemaining = 0
+    }
+
     /// Fires the pulse from `playerPosition` at `level`'s scaled
     /// radius/damage die, against every candidate in `raccoons`, with
     /// `obstructions` as the only footprint data consulted (flat

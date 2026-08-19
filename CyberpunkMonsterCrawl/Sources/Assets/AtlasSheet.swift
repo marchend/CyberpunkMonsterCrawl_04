@@ -235,3 +235,62 @@ enum AtlasGroundDiamond: Int, CaseIterable {
         }
     }
 }
+
+/// Where the shockwave's opaque pixels actually sit *inside* each 32×32
+/// `sprite_pulse` cell, measured off the shipped PNG's alpha channel rather
+/// than inferred from the cell size.
+///
+/// **Why this exists.** `AtlasSheet.pulse` pins the *sheet* geometry
+/// (256×32px, 8 × 32×32 cells) and `SpriteSheet.init` measures that against
+/// the shipped art — but neither says anything about where the opaque pixels
+/// sit *within* a cell, and that is exactly what
+/// `PulseRingNode.xScale(forRadiusTiles:)`/`yScale(forRadiusTiles:)` depend
+/// on: they convert a tile-space radius into the node scale whose **drawn
+/// ring** spans the pulse's real screen-space extent, and scaling an
+/// `SKSpriteNode` scales the whole cell, not just the ring inside it. Sizing
+/// against the 32px cell instead of the measured ring draws the ring
+/// `cellSize / ringSize` times off, silently (PR #48 review).
+///
+/// Measuring **per axis** also makes the transform indifferent to how the
+/// art is authored: a ring drawn as a screen-space circle and a ring already
+/// squashed onto the 2:1 isometric plane have different measured heights, so
+/// dividing each axis by its own measured extent lands the drawn ring on the
+/// projected ellipse either way, with no "the art is a circle" assumption
+/// left unstated.
+///
+/// **What is measured.** `widestFrameColumn` is the frame at the shockwave's
+/// full extent — the one the scale-to-radius transform calibrates against,
+/// since that is the frame whose ring should coincide with the pulse's
+/// radius — and `widestFrameContentSize` is that cell's opaque-content
+/// bounding box, in cell-local pixels.
+///
+/// **How that stays honest.** These are not left as prose:
+/// `PulseRingArtMeasurementTests` re-runs the alpha scan at test time and
+/// asserts both the declared widest column and its declared content size
+/// equal the measured ones, for the shipped `sprite_pulse.png`. Re-authored
+/// art (a ring cut smaller inside its cell, an already-squashed re-export, a
+/// reordered animation) turns the suite red here rather than silently
+/// un-tuning `PulseRingNode`'s scale-to-radius math.
+enum AtlasPulseRingContent {
+
+    /// The `sprite_pulse` column whose ring is at its widest, as measured
+    /// off the shipped PNG: the alpha scan reads per-frame content widths
+    /// of `[7, 7, 12, 12, 20, 20, 27, 27]`, i.e. the shockwave grows in
+    /// four steps, each **held for two frames**. Frames 6 and 7 therefore
+    /// tie at the peak, and this declares the *first* of them — matching
+    /// `PulseRingArtMeasurementTests`' own first-strict-max scan, so the
+    /// pin stays deterministic instead of depending on a tie-break nobody
+    /// wrote down.
+    static let widestFrameColumn: Int = 6
+
+    /// Measured opaque-content bounding box of `widestFrameColumn`'s cell,
+    /// in cell-local pixels (top-left origin, the same convention
+    /// `AtlasGroundDiamond.pixelRect` uses).
+    ///
+    /// **Measured, not assumed.** This deliberately is *not* the 32×32 cell
+    /// size: the ring is inset within its cell, and an earlier cut of this
+    /// PR declared the cell size here on the unstated "the art fills its
+    /// cell" assumption the review called out — which would have drawn
+    /// every pulse ring ~18% undersized on x and ~14% on y.
+    static let widestFrameContentSize = CGSize(width: 27, height: 28)
+}

@@ -456,8 +456,19 @@ final class GameScene: SKScene {
             // bottom-left quadrant and forward touches into
             // `dispatchTouch`. Its cooldown-derived visual is refreshed
             // every `.gameplay` frame from `advanceMovementAndCamera(
-            // currentTime:)`, not here.
+            // currentTime:)` -- but not before the *first* such frame runs,
+            // so the button is snapped to "ready" here too rather than
+            // opening RUN AGAIN still wearing last run's dimmed wedge.
             pulseButton.isHidden = false
+            // ... and a fresh ability for a fresh run, the same reason
+            // `raccoonSpawnDirector.reset()` / `startPickups()` /
+            // `runStats.reset()` above exist: without this, a run that
+            // ended mid-cooldown burns up to `PulseAbility.cooldownSeconds`
+            // of the next one, and the player's first press does nothing --
+            // a dropped input, which is exactly what this ability's "must
+            // respond to every press" product gate forbids.
+            pulseAbility.reset()
+            pulseButton.setCooldownProgress(pulseCooldownProgress())
             cameraController.update(focus: spawn, viewportSize: size)
             #if DEBUG
             assertSceneInvariants()
