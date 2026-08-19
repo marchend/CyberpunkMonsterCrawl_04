@@ -206,6 +206,20 @@ final class GameScene: SKScene {
     /// death-screen summary (`CYBERPUN-17-13`) can hold this reference.
     let runStats = RunSummaryStats()
 
+    /// The player's targeting/firing/bullets/effects/progression
+    /// composition (`CYBERPUN-17-9` PR 3): constructed once, lazily, in
+    /// `startPlayer(at:)` the first time a run mounts `PlayerNode` (its
+    /// `body` sprite must already exist), and reused thereafter --
+    /// `reset()`, never rebuilt, across a RUN AGAIN, the same convention
+    /// `startPlayer(at:)` already follows for `PlayerNode` itself. Driven
+    /// once per frame of an active run from
+    /// `advanceMovementAndCamera(currentTime:)`, fed
+    /// `raccoonSpawnDirector.targetCandidates` for this frame's live
+    /// targets. `private(set)` (not `private`) so scene-wiring tests can
+    /// assert on it directly, the same way `groundPlane`/`runStats` are
+    /// exposed for theirs.
+    private(set) var playerCombat: Player?
+
     /// The touch currently engaging `thumbstick`, if any -- tracked so
     /// `touchesMoved`/`touchesEnded`/`touchesCancelled` can tell the stick's
     /// own drag apart from any other concurrent touch (a button tap)
@@ -491,6 +505,30 @@ final class GameScene: SKScene {
         // `raccoonSpawnDirector.reset()`.
         mounted.resetCombatState()
 
+        // `CYBERPUN-17-9` PR 3: the auto-fire combat composition needs
+        // `mounted.body` to exist, so it is built here (lazily, on first
+        // mount) rather than in `commonInit()`. A restart reuses it and
+        // resets its own state instead, the same "reuse the node, reset
+        // its state" shape as `mounted.resetCombatState()` immediately
+        // above.
+        if let playerCombat {
+            playerCombat.reset()
+        } else {
+            // `worldSpaceReference: worldLayer` is load-bearing, not
+            // decoration: bullets/flashes/puffs are positioned from
+            // `IsometricProjection.tileToScreen` points, which live in
+            // `worldLayer`'s space, but are parented under `effectsLayer`,
+            // which nothing camera-offsets. Without the world container to
+            // convert out of, every combat effect would draw
+            // `worldLayer.position` away from the world and drift as the
+            // player walks (see `Player`'s "Coordinate space" note).
+            playerCombat = Player(
+                body: mounted.body,
+                effectsParent: effectsLayer,
+                worldSpaceReference: worldLayer
+            )
+        }
+
         #if DEBUG
         // The player is the first non-ground world content in the graph, and
         // its depth comes from a different part of the model than the ground
@@ -626,6 +664,22 @@ final class GameScene: SKScene {
                 // gives this story its primary action on a device.
                 player: player,
                 obstructions: groundPlane?.residentObstructions ?? []
+            )
+
+            // `CYBERPUN-17-9` PR 3: the auto-fire combat loop -- targeting,
+            // firing, bullets, effects and XP/level progression -- driven
+            // from the same per-frame pipeline as the swarm above, using
+            // this frame's just-steered raccoon positions
+            // (`raccoonSpawnDirector.targetCandidates`) as targets. Gated on
+            // the same `.gameplay` check for the same reason the swarm/
+            // pickups updates are: nothing may keep firing or tracking
+            // targets behind an opaque death/high-scores/menu backdrop.
+            playerCombat?.update(
+                deltaTime: deltaTime,
+                isMoving: movementController.isMoving,
+                origin: resolvedPosition,
+                direction: player.facing,
+                raccoons: raccoonSpawnDirector.targetCandidates
             )
         }
     }

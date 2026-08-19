@@ -181,6 +181,22 @@ final class RaccoonSpawnDirector {
     /// Live raccoon count, exposed for tests and for a future HUD.
     var swarmCount: Int { activeRaccoons.count }
 
+    /// This frame's live target candidates for the auto-fire weapon system
+    /// (`CYBERPUN-17-9` PR 3): every currently-active raccoon paired with
+    /// its current tile-space position, in exactly the shape
+    /// `TargetSelection.nearestLivingTarget` consumes.
+    ///
+    /// `WeaponFiringController`'s own doc comment named this precise gap --
+    /// `ActiveRaccoon` is `private` to this type, so a caller could not
+    /// previously build a `[TargetSelection.Candidate]` from the live
+    /// swarm without either widening `ActiveRaccoon` or duplicating this
+    /// type's own swarm-tracking. This computed property is the seam that
+    /// closes it instead: `GameScene` reads it once per frame to drive
+    /// `Player.update(...)`.
+    var targetCandidates: [TargetSelection.Candidate] {
+        activeRaccoons.map { TargetSelection.Candidate(raccoon: $0.node, position: $0.position) }
+    }
+
     /// - Parameters:
     ///   - worldLayer: the node raccoon nodes are parented into, mirroring
     ///     `GroundPlaneStreamer`/`PlayerNode`'s own direct-child convention

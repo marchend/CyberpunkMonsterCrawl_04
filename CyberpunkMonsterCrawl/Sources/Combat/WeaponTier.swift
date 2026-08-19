@@ -24,10 +24,14 @@ import Foundation
 /// the south/south-diagonal barrel tips *below* the ground plane, which
 /// would have spawned bullet origins and `sprite_hit_puff` frame-0 muzzle
 /// flashes at the player's shoes. Rather than re-guess the table in the
-/// right coordinate frame, it is deferred to the PR that actually mounts
-/// `sprite_player_weapons` on screen and can measure the muzzle pixel off
-/// the shipped art \u2014 the same way `RaccoonNode.shadowWidth(forTier:)` was
-/// measured rather than guessed. Shipping unmeasured art constants that
+/// right coordinate frame, it was left unwritten until someone measures the
+/// muzzle pixel off the shipped art \u2014 the same way
+/// `RaccoonNode.shadowWidth(forTier:)` was measured rather than guessed.
+/// `CYBERPUN-17-9` PR 3 (`Player`) mounted `sprite_player_weapons` on
+/// screen but made no such measurement, so the table still does not exist
+/// and the muzzle flash is spawned at the actor anchor; that open AC6 gap
+/// is recorded in `Player`'s "Known gap" doc section and at its
+/// `handleFire(target:origin:tier:)` call site. Shipping unmeasured art constants that
 /// read as authoritative is precisely what `AtlasContractConventionTests`
 /// and `RaccoonSpriteSheetPixelTests` exist to prevent.
 enum WeaponTier: Equatable, CaseIterable {
@@ -62,9 +66,10 @@ enum WeaponTier: Equatable, CaseIterable {
 
     /// Direct HP damage one shot at this tier deals \u2014 a plain `Int`
     /// applied via `Damageable.takeDamage(_:)`, mirroring
-    /// `BiteComponent.biteDamage`'s shape. Whichever later PR spawns the
-    /// actual bullet/hit is what calls `takeDamage(_:)` with this value;
-    /// nothing does yet. An initial tuning constant.
+    /// `BiteComponent.biteDamage`'s shape. `Player`'s bullet-hit
+    /// resolution (`CYBERPUN-17-9` PR 3) is what calls `takeDamage(_:)`
+    /// with this value, once a shot's flight timer elapses. An initial
+    /// tuning constant.
     var damage: Int {
         switch self {
         case .handgun: return 8
