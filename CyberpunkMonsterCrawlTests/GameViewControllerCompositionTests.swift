@@ -121,11 +121,24 @@ final class GameViewControllerCompositionTests: XCTestCase {
         XCTAssertTrue(scene.activeScreen is HighScoresScreenNode)
     }
 
+    /// Pins the *production* RUN AGAIN call site, not just the resulting
+    /// state: `makeGameScene`'s `DeathScreenNode.onRunAgain` must call
+    /// `GameScene.startNewRun()` (`CYBERPUN-17-13` PR 3), never a plain
+    /// `stateMachine.transition(to: .gameplay)`. Asserting only
+    /// `currentState == .gameplay` is equally true of the old closure, so
+    /// this test would stay green through a silent revert of the one line
+    /// this story changes in production and product gate 6 ("every run
+    /// differs") would regress unseen -- the same "the wiring is the bug,
+    /// not the unit" reason `PlayerCombatSceneWiringTests` asserts a
+    /// bullet's *scene*-space position rather than a child count.
+    /// `worldSeed` changing across the tap is what tells the two closures
+    /// apart.
     func test_compositionRoot_deathScreenButtons_areWiredToTheStateMachine() throws {
         let scene = makeScene()
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
         let death = try XCTUnwrap(scene.activeScreen as? DeathScreenNode)
+        let seedBefore = scene.worldSeed
 
         scene.dispatchTouch(atScenePoint: death.runAgainButton.position)
 
@@ -133,6 +146,12 @@ final class GameViewControllerCompositionTests: XCTestCase {
             scene.stateMachine.currentState,
             .gameplay,
             "RUN AGAIN in the composed scene must start a new run"
+        )
+        XCTAssertNotEqual(
+            scene.worldSeed,
+            seedBefore,
+            "the composed RUN AGAIN button must call startNewRun() (fresh worldSeed -> fresh starting "
+                + "junction), not a plain stateMachine.transition(to: .gameplay)"
         )
     }
 

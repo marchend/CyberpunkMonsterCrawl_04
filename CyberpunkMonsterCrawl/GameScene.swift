@@ -461,13 +461,23 @@ final class GameScene: SKScene {
     ///
     /// Returns `false` -- the same contract `transition(to:)` has -- and
     /// leaves `worldSeed` untouched when `.gameplay` is not a legal next
-    /// state from wherever the machine currently is (RUN AGAIN is only
-    /// legal from `.death`): an illegal call must not silently draw and
-    /// discard a seed nobody will ever see used.
+    /// state from wherever the machine currently is: an illegal call must
+    /// not silently draw and discard a seed nobody will ever see used. The
+    /// guard returns that `false` directly rather than re-issuing the
+    /// transition it has just established is illegal purely to borrow its
+    /// return value.
+    ///
+    /// Note the guard is `canTransition(to: .gameplay)`, which is also true
+    /// from `.menu` -- it is deliberately the *seed-draw* precondition, not
+    /// a RUN AGAIN authorisation check. That RUN AGAIN is only ever pressed
+    /// from `.death` holds by call-site convention (`GameViewController`'s
+    /// `DeathScreenNode.onRunAgain` is the sole production caller), not by
+    /// this line; a hypothetical future `.menu` caller would get a fresh
+    /// seed rather than a rejection.
     @discardableResult
     func startNewRun() -> Bool {
         guard stateMachine.canTransition(to: .gameplay) else {
-            return stateMachine.transition(to: .gameplay)
+            return false
         }
         worldSeed = Self.randomWorldSeed()
         return stateMachine.transition(to: .gameplay)

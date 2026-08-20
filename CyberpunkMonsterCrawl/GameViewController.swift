@@ -176,6 +176,25 @@ final class GameViewController: UIViewController {
             },
             highScoreStore: scene.highScoreStore
         )
+        // NOTE (`CYBERPUN-17-13-t3`, raised on PR #51): **nothing in any
+        // build transitions to `.death` yet.** `-t3` deleted the DEBUG-only
+        // `LaunchGotoState` launch bridge (a `SCAFFOLDING(CYBERPUN-17-13)`
+        // hook, removed together with its tests), and that hook was the last
+        // non-test caller of `transition(to: .death)`; the HP-reaches-zero ->
+        // `.death` trigger itself is still outstanding and still has NO
+        // TICKET ID -- see AGENT.md/CLAUDE.md's `CYBERPUN-17-8` entry, which
+        // carries the open human call on where that trigger belongs
+        // (inside `advanceMovementAndCamera`, or behind a narrower gate).
+        //
+        // So until it lands, this screen and everything behind it --
+        // `RunScoreCalculator`, `HighScoreStore.recordRun`,
+        // `HighScoresScreenNode`'s just-finished-run highlight, and the
+        // `startNewRun()` RUN AGAIN entry point above -- is reachable only
+        // from a test's direct `stateMachine.transition(to: .death)` call,
+        // never by a player. Recorded at the composition site rather than
+        // only in the docs, and deliberately *not* re-scaffolded: a surface
+        // that is unreachable in a real build should be visible as such
+        // where it is wired up.
         scene.register(deathScreen, for: .death)
 
         scene.register(
