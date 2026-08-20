@@ -453,6 +453,26 @@ final class GameScene: SKScene {
     private func updateWorldContent(for state: GameState) {
         switch state {
         case .gameplay:
+            // `CYBERPUN-17-10-t4`: re-derive thumbstick/pulseButton layout
+            // from whatever safe-area insets the hosting view reports
+            // *right now*, rather than trusting whichever `didMove(to:)`/
+            // `didChangeSize(_:)` last computed. `didMove(to:)` can fire
+            // before the host view's first real layout pass has settled
+            // its true safe area (`currentSafeAreaInsets` falls back to
+            // `.zero` until then), and nothing except an actual *size*
+            // change re-lays either control out afterward -- a safe-area
+            // value that only settles later never gets picked up on its
+            // own. Entering `.gameplay` is the one moment both controls
+            // become visible/interactive, so it must not be allowed to run
+            // on stale, pre-settle geometry for the whole session.
+            // `PulseAbilityLiveCompositionTests` is the regression guard,
+            // since every prior test either drove `.gameplay` on a
+            // headless (view-less) scene, where `currentSafeAreaInsets`
+            // is always `.zero` anyway, or never changed the hosting
+            // view's safe area after `didMove(to:)` ran.
+            thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+            layoutPulseButton()
+
             let spawn = spawnTilePosition()
             playerWorldPosition = spawn
             startGroundPlane()
