@@ -453,25 +453,44 @@ final class GameScene: SKScene {
     private func updateWorldContent(for state: GameState) {
         switch state {
         case .gameplay:
-            // `CYBERPUN-17-10-t4`: re-derive thumbstick/pulseButton layout
-            // from whatever safe-area insets the hosting view reports
-            // *right now*, rather than trusting whichever `didMove(to:)`/
-            // `didChangeSize(_:)` last computed. `didMove(to:)` can fire
-            // before the host view's first real layout pass has settled
-            // its true safe area (`currentSafeAreaInsets` falls back to
-            // `.zero` until then), and nothing except an actual *size*
-            // change re-lays either control out afterward -- a safe-area
-            // value that only settles later never gets picked up on its
-            // own. Entering `.gameplay` is the one moment both controls
-            // become visible/interactive, so it must not be allowed to run
-            // on stale, pre-settle geometry for the whole session.
-            // `PulseAbilityLiveCompositionTests` is the regression guard,
-            // since every prior test either drove `.gameplay` on a
-            // headless (view-less) scene, where `currentSafeAreaInsets`
-            // is always `.zero` anyway, or never changed the hosting
-            // view's safe area after `didMove(to:)` ran.
-            thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
-            layoutPulseButton()
+            // `CYBERPUN-17-10-t4`: entering `.gameplay` is the one moment
+            // both HUD controls become visible/interactive, so it must not
+            // start a run on stale, pre-settle geometry.
+            //
+            // The *cause-level* fix for a safe area that settles after
+            // `didMove(to:)` is not here: it is `GameViewController`
+            // forwarding `viewSafeAreaInsetsDidChange()` (and its existing
+            // `viewDidLayoutSubviews()`) into
+            // `refreshLayoutForCurrentSafeArea()`, which re-lays out every
+            // consumer of `currentSafeAreaInsets` -- the `.menu` screen
+            // included -- from the one place UIKit says the value moved.
+            // This call remains as a second line of defence at the moment
+            // it matters most: UIKit does not promise the hosted `SKView`'s
+            // own `safeAreaInsets` have propagated by the time the
+            // controller-level callback runs, and a host that is not
+            // `GameViewController` (any test fixture presenting the scene
+            // directly) gets no callback at all. It is a no-op when the
+            // insets have not moved since the last layout pass.
+            //
+            // Scope note -- what this does and does not fix. The recorded
+            // symptom on the `pulse-ability` probe journey is a *crash*
+            // ("process gone"); everything this changes is *geometry*. No
+            // reachable assert or precondition on this path can be tripped
+            // by stale insets: `assertSceneInvariants()` checks cumulative
+            // zPosition bands and `isUserInteractionEnabled` (both
+            // position-independent), `FloatingThumbstickNode`'s only
+            // `assert` is `currentSize != .zero` (already satisfied by
+            // `commonInit()`), and `layoutPulseButton()` /
+            // `reservedPulseButtonSlot(...)` are pure arithmetic with no
+            // force-unwraps. So **the crash cause is still unidentified**
+            // -- this is the mis-placement fix, and
+            // `PulseAbilityLiveCompositionTests` guards placement plus the
+            // scene invariants, not survival of whatever was actually
+            // tearing the process down. A journey that now goes green may
+            // be doing so only because the probe's tap finally lands on
+            // the button; "crash fixed" needs a symbolicated log naming
+            // the frame, not this diff.
+            refreshLayoutForCurrentSafeArea()
 
             let spawn = spawnTilePosition()
             playerWorldPosition = spawn
@@ -1177,9 +1196,7 @@ final class GameScene: SKScene {
         // (future PRs) lines up with the scene's 0..width / 0..height
         // coordinate space instead of showing its bottom-left quadrant.
         centreCameraOnScene()
-        activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
-        thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
-        layoutPulseButton()
+        layoutSafeAreaDependentContent()
         #if DEBUG
         assertSceneInvariants()
         #endif
@@ -1188,9 +1205,52 @@ final class GameScene: SKScene {
     override func didChangeSize(_ oldSize: CGSize) {
         super.didChangeSize(oldSize)
         centreCameraOnScene()
-        activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
-        thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+        layoutSafeAreaDependentContent()
+    }
+
+    /// The insets `layoutSafeAreaDependentContent()` last laid everything
+    /// out for, so `refreshLayoutForCurrentSafeArea()` can tell a genuine
+    /// safe-area move from the many layout passes that change nothing.
+    private var lastLaidOutSafeAreaInsets: UIEdgeInsets = .zero
+
+    /// Every consumer of `currentSafeAreaInsets` in this scene, re-laid out
+    /// from the value the hosting view reports *now*.
+    ///
+    /// One method rather than the three call sites that used to repeat this
+    /// trio, because the active screen is exactly as exposed to a
+    /// late-settling safe area as the two gameplay controls are: `.menu` is
+    /// registered from `GameViewController.viewDidLoad()` *before*
+    /// `presentScene(_:)`, so `transitionScreens(to:)` lays it out with
+    /// `view == nil` -> `.zero`.
+    private func layoutSafeAreaDependentContent() {
+        let insets = currentSafeAreaInsets
+        lastLaidOutSafeAreaInsets = insets
+        activeScreen?.layout(for: size, safeAreaInsets: insets)
+        thumbstick.layout(for: size, safeAreaInsets: insets)
         layoutPulseButton()
+    }
+
+    /// `CYBERPUN-17-10-t4`: re-runs the safe-area-dependent layout pass when
+    /// (and only when) the hosting view's insets have actually moved since
+    /// the last one.
+    ///
+    /// A safe area can settle *after* `didMove(to:)` with no size change
+    /// following it -- a real cold launch on a notched device, or a
+    /// background/foreground round trip mid-run -- and before this method
+    /// nothing re-derived layout from it: `didMove(to:)`/`didChangeSize(_:)`
+    /// were the only refresh points, so the whole session kept whichever
+    /// insets the first layout pass happened to see (`.zero` until the
+    /// hosting view's first real pass settles).
+    ///
+    /// `GameViewController` drives this from the two places UIKit tells us
+    /// the value moved (`viewSafeAreaInsetsDidChange()` and the existing
+    /// `viewDidLayoutSubviews()`), so the fix covers *every* consumer --
+    /// menu screen included -- rather than one state transition. The
+    /// no-move guard is what makes it safe to call from a per-layout-pass
+    /// hook.
+    func refreshLayoutForCurrentSafeArea() {
+        guard currentSafeAreaInsets != lastLaidOutSafeAreaInsets else { return }
+        layoutSafeAreaDependentContent()
     }
 
     /// Positions `pulseButton` at `FloatingThumbstickNode

@@ -201,16 +201,19 @@ final class PulseRingNodeTests: XCTestCase {
         // test's whole point (see
         // `test_scale_isAWholeInteger_onBothAxes_forEveryRealRadius`) is that
         // the scale is a *whole integer*, which a tolerance is exactly the
-        // thing that would let a non-integer slip past.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
+        // thing that would let a non-integer slip past. This holds for the
+        // `-5` cases below for exactly the same reason -- `max(1, ...)`
+        // returns the literal `1.0` for every radius in this test -- so
+        // they are exact too, and nothing in this test is tolerant.
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
         XCTAssertEqual(
-            PulseRingNode.xScale(forRadiusTiles: -5), 1, accuracy: 1e-6,
+            PulseRingNode.xScale(forRadiusTiles: -5), 1,
             "a pure function must stay total, even off a real input."
         )
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1)
     }
 
     func test_play_appliesTheComputedPerAxisScale() {

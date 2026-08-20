@@ -4,9 +4,24 @@ import UIKit
 import XCTest
 @testable import CyberpunkMonsterCrawl
 
-/// `CYBERPUN-17-10-t4`: the regression guard for the `pulse-ability` runtime
-/// probe journey crashing (process gone) at the screenshot right after
-/// entering `.gameplay` and again after pressing the pulse button.
+/// `CYBERPUN-17-10-t4`: the regression guard for HUD controls being laid
+/// out from **stale safe-area insets** on the `pulse-ability` runtime probe
+/// journey -- the mis-placement bug found while investigating that
+/// journey's crash (process gone) at the screenshot right after entering
+/// `.gameplay` and again after pressing the pulse button.
+///
+/// **What this file does not prove.** These tests assert *placement* and
+/// the scene invariants; they are not a crash reproduction, and none of
+/// them would have crashed before the fix -- `test_enteringGameplay_...`
+/// failed as a placement bug. No reachable assert/precondition on the
+/// laid-out path is position-dependent (`assertSceneInvariants()` checks
+/// zPosition bands + `isUserInteractionEnabled`; `FloatingThumbstickNode`'s
+/// `currentSize != .zero` is satisfied by `commonInit()`;
+/// `layoutPulseButton()`/`reservedPulseButtonSlot(...)` are pure
+/// arithmetic), so **the crash cause remains unidentified**. A green run
+/// here -- or a green probe journey, which may simply be the probe's tap
+/// finally landing on a correctly placed button -- must not be recorded as
+/// "crash fixed"; that needs a symbolicated crash log naming the frame.
 ///
 /// Every existing pulse test drives the scene through one of two shortcuts
 /// that this journey does not get: `PulseButtonTests`/`FloatingThumbstickNodeTests`
@@ -177,6 +192,65 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         XCTAssertEqual(scene.thumbstick.restPosition.y, expectedRest.y, accuracy: 1e-6)
     }
 
+    // MARK: - The cause-level fix: insets settling with no state change
+
+    /// The staleness is a property of the whole scene, not of the two
+    /// gameplay controls, so the fix lives where UIKit says the value moved
+    /// (`GameViewController.viewSafeAreaInsetsDidChange()`/
+    /// `viewDidLayoutSubviews()` -> `GameScene
+    /// .refreshLayoutForCurrentSafeArea()`), not at one state transition.
+    ///
+    /// `.menu` is the case a `.gameplay`-only fix misses entirely: it is
+    /// registered from `GameViewController.viewDidLoad()` *before*
+    /// `presentScene(_:)`, so `transitionScreens(to:)` first lays it out
+    /// with `view == nil` -> `.zero` insets, and without this hook it keeps
+    /// that layout for the whole session -- no state change, no size
+    /// change, nothing else to refresh it.
+    func test_safeAreaSettlingWithNoStateChange_reLaysOutTheMenuScreenAndThumbstick() throws {
+        let scene = makeComposedScene()
+        let view = makeLiveView(scene, insets: .zero)
+        let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
+
+        XCTAssertEqual(menu.playButton.position.y, 0, accuracy: 1e-6, "precondition: laid out for .zero insets")
+
+        // The safe area settles while the app is still sitting on the menu.
+        view.injectedSafeAreaInsets = liveInsets
+        scene.refreshLayoutForCurrentSafeArea()
+
+        let expectedShift = (liveInsets.bottom - liveInsets.top) / 2
+        XCTAssertEqual(
+            menu.playButton.position.y, expectedShift, accuracy: 1e-6,
+            "the menu screen must follow a safe area that settles after didMove(to:), like every other consumer"
+        )
+
+        let expectedRest = FloatingThumbstickNode.restingPosition(forSize: scene.size, safeAreaInsets: liveInsets)
+        XCTAssertEqual(scene.thumbstick.restPosition.x, expectedRest.x, accuracy: 1e-6)
+        XCTAssertEqual(scene.thumbstick.restPosition.y, expectedRest.y, accuracy: 1e-6)
+
+        let expectedSlot = FloatingThumbstickNode.reservedPulseButtonSlot(
+            forSize: scene.size,
+            safeAreaInsets: liveInsets
+        )
+        XCTAssertEqual(scene.pulseButton.position.x, expectedSlot.midX, accuracy: 1e-6)
+        XCTAssertEqual(scene.pulseButton.position.y, expectedSlot.midY, accuracy: 1e-6)
+    }
+
+    /// The no-move guard that makes the refresh safe to call from a
+    /// per-layout-pass hook (`viewDidLayoutSubviews()`): with the insets
+    /// unchanged it must not disturb anything -- notably not re-centre a
+    /// thumbstick the player has dragged off its rest position.
+    func test_refreshLayoutForCurrentSafeArea_withUnchangedInsets_isANoOp() {
+        let scene = makeComposedScene()
+        makeLiveView(scene, insets: liveInsets)
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+
+        let positionBefore = scene.pulseButton.position
+        scene.refreshLayoutForCurrentSafeArea()
+
+        XCTAssertEqual(scene.pulseButton.position.x, positionBefore.x, accuracy: 1e-6)
+        XCTAssertEqual(scene.pulseButton.position.y, positionBefore.y, accuracy: 1e-6)
+    }
+
     // MARK: - The whole journey, end to end, with a real SKView + real insets
 
     /// Reproduces the `pulse-ability` journey itself as closely as an
@@ -256,8 +330,10 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         )
         XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
 
-        // Journey step 9: the app must still be foregrounded/responsive --
-        // the crash this file guards against tears down exactly this.
+        // Journey step 9: the app must still be foregrounded/responsive.
+        // This is a liveness check on the journey, not a crash repro -- see
+        // this file's header: nothing here reproduces the recorded
+        // "process gone", whose cause is still unidentified.
         XCTAssertNotNil(view.scene, "the scene must still be presented after the pulse-button press")
         XCTAssertEqual(
             scene.stateMachine.currentState, .gameplay,
