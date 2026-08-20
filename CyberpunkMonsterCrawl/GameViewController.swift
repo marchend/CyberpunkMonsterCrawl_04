@@ -93,8 +93,42 @@ final class GameViewController: UIViewController {
         // Presenting last, with the container already wired up, so the first
         // set of accessibility mirrors is built from the scene the app
         // actually launches into (`presentScene` refreshes them).
-        skView.presentScene(makeGameScene(size: view.bounds.size))
+        let scene = makeGameScene(size: view.bounds.size)
+        skView.presentScene(scene)
+
+        // `SCAFFOLDING(CYBERPUN-17-13)`: honour the DEBUG-only
+        // `LaunchGotoState` test hook, if present, so a `.mothership`
+        // journey can reach `.death`/`.highScores` before the
+        // HP-reaches-zero -> `.death` trigger exists. Compiled out of
+        // Release along with `LaunchGotoState` itself, so a shipped binary
+        // has no launch-time state override at all; in DEBUG a normal
+        // launch has neither the argument nor the environment variable
+        // set, so `resolve()` returns `nil` and this is a no-op.
+        #if DEBUG
+        applyLaunchGotoStateIfNeeded(on: scene)
+        #endif
     }
+
+    #if DEBUG
+    /// Drives whatever legal transition sequence reaches `LaunchGotoState
+    /// .resolve()`'s target from the scene's initial `.menu` state --
+    /// `.death` is only reachable *through* `.gameplay` (see
+    /// `GameStateMachine`'s transition table), so reaching it here takes
+    /// two calls, not one.
+    private func applyLaunchGotoStateIfNeeded(on scene: GameScene) {
+        switch LaunchGotoState.resolve() {
+        case .none, .menu:
+            break
+        case .gameplay:
+            scene.stateMachine.transition(to: .gameplay)
+        case .death:
+            scene.stateMachine.transition(to: .gameplay)
+            scene.stateMachine.transition(to: .death)
+        case .highScores:
+            scene.stateMachine.transition(to: .highScores)
+        }
+    }
+    #endif
 
     /// The container's mirrors are geometry, so they have to follow every
     /// layout pass - a rotation resizes the scene and moves every
@@ -125,21 +159,62 @@ final class GameViewController: UIViewController {
             for: .menu
         )
         scene.register(GameplayScreenNode(), for: .gameplay)
-        scene.register(
-            DeathScreenNode(
-                onRunAgain: { [weak scene] in
-                    scene?.stateMachine.transition(to: .gameplay)
-                },
-                onBackToMenu: { [weak scene] in
-                    scene?.stateMachine.transition(to: .menu)
+
+        // `deathScreen` is kept as a local so `HighScoresScreenNode` below
+        // can read its `lastRecordedRunID` after the fact (`CYBERPUN-17-13`
+        // PR 2's "thread the just-finished run's id from death into
+        // high-scores" requirement) -- weakly, the same way every other
+        // closure here captures `scene` weakly, so neither screen keeps the
+        // other alive.
+        let deathScreen = DeathScreenNode(
+            onRunAgain: { [weak scene] in
+                scene?.stateMachine.transition(to: .gameplay)
+            },
+            onBackToMenu: { [weak scene] in
+                scene?.stateMachine.transition(to: .menu)
+            },
+            runSummaryProvider: { [weak scene] in
+                // A `nil` scene/playerCombat means `.death` was entered
+                // without a run ever having mounted a player -- not
+                // reachable from real gameplay (`.death` is only a legal
+                // transition from `.gameplay`, which always mounts one
+                // first), but reachable from a direct
+                // `stateMachine.transition(to: .death)` call: a test, or
+                // the DEBUG `LaunchGotoState` hook above.
+                //
+                // Returning `nil` rather than an all-zero `RunSummary` is
+                // the difference between "no run to report" and "a run
+                // scoring 0": `DeathScreenNode.willEnter()` persists
+                // whatever it is handed, so a manufactured zero summary
+                // permanently appended a fake `score: 0` /
+                // `SURVIVED 00:00` row to the real high-score table on
+                // every `-goto death` launch -- after which that device's
+                // high-scores screen could never show its empty state
+                // again. `nil` still renders (as an all-zero, unrecorded
+                // placeholder), so the call site stays well-defined
+                // without the persistent side effect.
+                guard let scene, let playerCombat = scene.playerCombat else {
+                    return nil
                 }
-            ),
-            for: .death
+                return RunScoreCalculator.summarize(
+                    runSummaryStats: scene.runStats,
+                    runStats: playerCombat.runStats,
+                    xpLevelSystem: playerCombat.xpLevelSystem,
+                    elapsedSeconds: scene.runElapsedSeconds
+                )
+            },
+            highScoreStore: scene.highScoreStore
         )
+        scene.register(deathScreen, for: .death)
+
         scene.register(
             HighScoresScreenNode(
                 onBackToMenu: { [weak scene] in
                     scene?.stateMachine.transition(to: .menu)
+                },
+                highScoreStore: scene.highScoreStore,
+                highlightedRunIDProvider: { [weak deathScreen] in
+                    deathScreen?.lastRecordedRunID
                 }
             ),
             for: .highScores

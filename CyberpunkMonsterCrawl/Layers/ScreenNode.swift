@@ -36,6 +36,68 @@ protocol ScreenNode: AnyObject {
     func layout(for size: CGSize, safeAreaInsets: UIEdgeInsets)
 }
 
+/// The vertical stacking both content screens (`DeathScreenNode`,
+/// `HighScoresScreenNode`) lay themselves out with, shared rather than
+/// restated so the two cannot drift apart.
+///
+/// The naive "even-space every item across the available height" scheme it
+/// replaces ignored each item's own height, which is fine for a column of
+/// identically-short labels and wrong the moment a 64pt button joins them:
+/// on an 852x393 landscape, eleven evenly spaced items leave ~32.7pt
+/// between centres, so a 64pt-tall (72pt with its accent frame) RUN AGAIN
+/// and a 48pt BACK TO MENU overlapped by ~23pt -- and overlapping
+/// `ButtonNode`s also make `GameScene.routeTouch(at:)`'s `atPoint(_:)`
+/// result ambiguous in the shared region, so part of the lower button was
+/// not reliably tappable.
+///
+/// Instead the tall items get a reserved, height-aware block pinned to the
+/// bottom, and the flexible items (title + rows) even-space across whatever
+/// remains above it: the buttons keep their real geometry in every
+/// orientation, and it is the rows -- which have slack -- that compress.
+enum ScreenStackLayout {
+
+    /// Gap left between two stacked pinned items, and between the pinned
+    /// block and the flexible items above it.
+    static let pinnedSpacing: CGFloat = 12
+
+    /// - Parameters:
+    ///   - flexibleItems: laid out top-down, evenly spaced across the space
+    ///     left over above the pinned block. Positioned by centre, so short
+    ///     labels are what absorbs a cramped height.
+    ///   - pinnedToBottom: laid out bottom-up in reverse order (the last
+    ///     element sits lowest), each reserving its own
+    ///     `calculateAccumulatedFrame().height` -- the accumulated frame,
+    ///     not the plate size, so a `ButtonNode`'s accent frame counts.
+    ///   - topLimit: safe-area-adjusted top edge, in the screen node's own
+    ///     (origin-centred) coordinate space.
+    ///   - bottomLimit: safe-area-adjusted bottom edge.
+    static func position(
+        flexibleItems: [SKNode],
+        pinnedToBottom: [SKNode],
+        topLimit: CGFloat,
+        bottomLimit: CGFloat
+    ) {
+        let availableHeight = max(0, topLimit - bottomLimit)
+        let margin = availableHeight * 0.06
+
+        var pinnedBlockTop = bottomLimit + margin
+        for item in pinnedToBottom.reversed() {
+            let height = item.calculateAccumulatedFrame().height
+            item.position = CGPoint(x: 0, y: pinnedBlockTop + height / 2)
+            pinnedBlockTop += height + pinnedSpacing
+        }
+
+        let flexibleTop = topLimit - margin
+        let flexibleBottom = pinnedToBottom.isEmpty ? bottomLimit + margin : pinnedBlockTop
+        let flexibleHeight = max(0, flexibleTop - flexibleBottom)
+        let step = flexibleItems.count > 1 ? flexibleHeight / CGFloat(flexibleItems.count - 1) : 0
+
+        for (index, item) in flexibleItems.enumerated() {
+            item.position = CGPoint(x: 0, y: flexibleTop - step * CGFloat(index))
+        }
+    }
+}
+
 /// Test double used only by the tests (`GameSceneScreenSwitchingTests`,
 /// `LayerOrderingTests`) to prove the state-driven registry swap without any
 /// real screen content. Not referenced by production code - the concrete

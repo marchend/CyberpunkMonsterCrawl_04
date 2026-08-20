@@ -167,8 +167,16 @@ final class HighScoreStore {
     /// - Throws: `HighScoreStoreError.encodingFailed` when the table cannot
     ///   be encoded -- the caller learns nothing was written rather than
     ///   being told the run was saved.
+    /// - Parameter id: the recorded entry's identity. Defaults to a fresh
+    ///   `UUID()` (the shape every pre-`CYBERPUN-17-13`-PR-2 caller/test
+    ///   relies on), but a caller that needs to *know* the recorded entry's
+    ///   identity up front -- `DeathScreenNode.willEnter()`, which threads
+    ///   it into `HighScoresScreenNode`'s highlight-by-id so a tied score
+    ///   still highlights the right row -- can generate the id itself and
+    ///   pass it in, rather than this method inventing one it has no way to
+    ///   hand back to a `HighScoreRecordOutcome`-only return value.
     @discardableResult
-    func recordRun(_ summary: RunSummary) throws -> HighScoreRecordOutcome {
+    func recordRun(_ summary: RunSummary, id: UUID = UUID()) throws -> HighScoreRecordOutcome {
         var outcome = HighScoreRecordOutcome.recorded
         var entries: [HighScoreEntry]
         do {
@@ -182,7 +190,7 @@ final class HighScoreStore {
         // Strictly greater than every sequence currently in the table, so
         // record order stays unique even after a trim dropped earlier rows.
         let nextSequence = (entries.map(\.sequence).max() ?? -1) + 1
-        entries.append(HighScoreEntry(sequence: nextSequence, summary: summary))
+        entries.append(HighScoreEntry(id: id, sequence: nextSequence, summary: summary))
 
         try persist(Self.ranked(entries, limitedTo: maxEntries))
         return outcome

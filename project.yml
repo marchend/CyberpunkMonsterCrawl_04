@@ -15,6 +15,14 @@ settings:
       # Required so `@testable import CyberpunkMonsterCrawl` in the test
       # target can link against the Debug-configuration app module.
       SWIFT_ENABLE_TESTABILITY: "YES"
+      # This project sets its build settings explicitly rather than
+      # inheriting XcodeGen's config presets, so `DEBUG` was never defined
+      # in any configuration -- which silently made every `#if DEBUG` block
+      # in the app (`assertSceneInvariants()` and its five call sites,
+      # `LaunchGotoState`) dead code in Debug builds too, not just in
+      # Release. Defining it here is what makes `#if DEBUG` mean
+      # "Debug-only" rather than "never compiled".
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
 targets:
   CyberpunkMonsterCrawl:
     type: application

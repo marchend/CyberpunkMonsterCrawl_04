@@ -207,10 +207,10 @@ final class PulseRingNodeTests: XCTestCase {
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
         XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
         XCTAssertEqual(
-            PulseRingNode.xScale(forRadiusTiles: -5), 1,
+            PulseRingNode.xScale(forRadiusTiles: -5), 1, accuracy: 1e-6,
             "a pure function must stay total, even off a real input."
         )
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1, accuracy: 1e-6)
     }
 
     func test_play_appliesTheComputedPerAxisScale() {

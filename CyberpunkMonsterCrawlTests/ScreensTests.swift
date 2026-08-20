@@ -309,11 +309,67 @@ final class ScreensTests: XCTestCase {
         // no state machine of its own yet.
     }
 
+    // MARK: - DeathScreenNode / HighScoresScreenNode fixtures (CYBERPUN-17-13 PR 2)
+
+    /// A uniquely-named, per-test-isolated `HighScoreStore` -- the same
+    /// per-test isolation shape `HighScoreStoreTests.makeIsolatedDefaults()`
+    /// establishes, restated here so this file does not reach into that
+    /// one's private helper. `cleanup()` removes the suite's persistent
+    /// domain so nothing survives the test itself.
+    private func makeIsolatedHighScoreStore() -> (store: HighScoreStore, cleanup: () -> Void) {
+        let suiteName = "com.cyberpunkmonstercrawl.tests.screens.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        return (HighScoreStore(defaults: defaults), { defaults.removePersistentDomain(forName: suiteName) })
+    }
+
+    /// A fixture `RunSummary` computed through the real `RunScoreCalculator`
+    /// from fixture `RunSummaryStats`/`RunStats`/`XPLevelSystem` state --
+    /// per the story's own "using fixture ... state" test guidance -- with
+    /// a distinct, individually recognisable value in every field, so a
+    /// mixed-up row mapping (e.g. RABIES showing damage dealt) fails a
+    /// value-based assertion instead of passing by coincidence.
+    private func makeFixtureRunSummary() -> RunSummary {
+        let runSummaryStats = RunSummaryStats()
+        for _ in 0..<4 { runSummaryStats.recordKill() }
+        runSummaryStats.recordInfection()
+        runSummaryStats.recordInfection()
+
+        let runStats = RunStats()
+        runStats.recordDamage(88)
+
+        let xpLevelSystem = XPLevelSystem()
+        xpLevelSystem.awardXP(2 * XPLevelSystem.xpPerLevel) // level 3
+
+        return RunScoreCalculator.summarize(
+            runSummaryStats: runSummaryStats,
+            runStats: runStats,
+            xpLevelSystem: xpLevelSystem,
+            elapsedSeconds: 125 // 2:05 -- exercises the mm:ss formatting
+        )
+    }
+
+    private func makeDeathScreen(
+        onRunAgain: @escaping () -> Void = {},
+        onBackToMenu: @escaping () -> Void = {},
+        runSummary: RunSummary? = nil,
+        highScoreStore: HighScoreStore
+    ) -> DeathScreenNode {
+        let summary = runSummary ?? makeFixtureRunSummary()
+        return DeathScreenNode(
+            onRunAgain: onRunAgain,
+            onBackToMenu: onBackToMenu,
+            runSummaryProvider: { summary },
+            highScoreStore: highScoreStore
+        )
+    }
+
     // MARK: - DeathScreenNode
 
     func test_deathScreenNode_runAgainButton_runsTheSuppliedClosure() {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
         var runAgainTapped = false
-        let death = DeathScreenNode(onRunAgain: { runAgainTapped = true }, onBackToMenu: {})
+        let death = makeDeathScreen(onRunAgain: { runAgainTapped = true }, highScoreStore: store)
 
         death.runAgainButton.handleTouch()
 
@@ -321,8 +377,10 @@ final class ScreensTests: XCTestCase {
     }
 
     func test_deathScreenNode_backToMenuButton_runsTheSuppliedClosure() {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
         var backToMenuTapped = false
-        let death = DeathScreenNode(onRunAgain: {}, onBackToMenu: { backToMenuTapped = true })
+        let death = makeDeathScreen(onBackToMenu: { backToMenuTapped = true }, highScoreStore: store)
 
         death.backToMenuButton.handleTouch()
 
@@ -330,18 +388,173 @@ final class ScreensTests: XCTestCase {
     }
 
     func test_deathScreenNode_layout_keepsButtonsDistinct() {
-        let death = DeathScreenNode(onRunAgain: {}, onBackToMenu: {})
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = makeDeathScreen(highScoreStore: store)
 
         death.layout(for: CGSize(width: 400, height: 800), safeAreaInsets: .zero)
 
         XCTAssertNotEqual(death.runAgainButton.position.y, death.backToMenuButton.position.y)
     }
 
+    /// The ticket's "lays out in portrait **and landscape**", pinned by
+    /// geometry rather than by two `position.y` values merely differing --
+    /// which passes at *any* amount of overlap.
+    ///
+    /// Landscape is the case that actually failed: eleven evenly spaced
+    /// items across an 852x393 safe area left ~32.7pt between centres,
+    /// while RUN AGAIN is 64pt tall (72pt with its accent frame) and BACK
+    /// TO MENU 48pt, so the two plates overlapped by ~23pt and the SCORE
+    /// row landed inside RUN AGAIN. Overlapping `ButtonNode`s also make
+    /// `GameScene.routeTouch(at:)`'s `atPoint(_:)` result ambiguous in the
+    /// shared region, so this is a lost tap, not just a cosmetic smudge.
+    func test_deathScreenNode_layout_keepsButtonAndRowFramesDisjoint_inBothOrientations() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = makeDeathScreen(highScoreStore: store)
+        // Rows have to carry their real text before their frames mean
+        // anything -- an empty `SKLabelNode` has an empty frame, which
+        // intersects nothing.
+        death.willEnter()
+
+        let orientations: [(name: String, size: CGSize, insets: UIEdgeInsets)] = [
+            ("portrait", CGSize(width: 393, height: 852), UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)),
+            ("landscape", CGSize(width: 852, height: 393), UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)),
+        ]
+
+        for orientation in orientations {
+            death.layout(for: orientation.size, safeAreaInsets: orientation.insets)
+
+            let runAgainFrame = death.runAgainButton.calculateAccumulatedFrame()
+            let backToMenuFrame = death.backToMenuButton.calculateAccumulatedFrame()
+            XCTAssertFalse(
+                runAgainFrame.intersects(backToMenuFrame),
+                "\(orientation.name): RUN AGAIN \(runAgainFrame) overlaps BACK TO MENU \(backToMenuFrame)"
+            )
+
+            let lastRow = try XCTUnwrap(
+                Self.labelNodes(in: death.node).first { $0.name == "death.summaryRow.7" },
+                "\(orientation.name): the SCORE row must exist"
+            )
+            XCTAssertFalse(
+                lastRow.calculateAccumulatedFrame().intersects(runAgainFrame),
+                "\(orientation.name): the SCORE row overlaps RUN AGAIN's plate"
+            )
+        }
+    }
+
+    /// `.death` entered without a run ever having mounted a player (a
+    /// direct `transition(to: .death)` -- a test, or the DEBUG
+    /// `LaunchGotoState` hook) must persist **nothing**. The previous
+    /// all-zero fallback summary was recorded like any other, so every
+    /// such launch permanently appended a fake `score: 0` /
+    /// `SURVIVED 00:00` row to the real table -- after which that device's
+    /// high-scores screen could never show its empty state again.
+    func test_deathScreenNode_willEnter_withNoRun_rendersZerosButRecordsNothing() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = DeathScreenNode(
+            onRunAgain: {},
+            onBackToMenu: {},
+            runSummaryProvider: { nil },
+            highScoreStore: store
+        )
+
+        death.willEnter()
+
+        XCTAssertEqual(try store.sortedEntries().count, 0, "a run that never happened must not make the table")
+        XCTAssertNil(death.lastRecordedRunID)
+        let rowTexts = Self.labelNodes(in: death.node).map { $0.text ?? "" }
+        XCTAssertTrue(
+            rowTexts.contains("SCORE: 0"),
+            "the screen must still render a well-defined placeholder, found \(rowTexts)"
+        )
+    }
+
+    /// AC1: dying shows all eight rows with the run's real values, computed
+    /// via `RunScoreCalculator` from fixture `RunSummaryStats`/`RunStats`/
+    /// `XPLevelSystem` state (see `makeFixtureRunSummary()`).
+    func test_deathScreenNode_willEnter_populatesAllEightRowsWithTheRunsRealValues() {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let summary = makeFixtureRunSummary()
+        let death = makeDeathScreen(runSummary: summary, highScoreStore: store)
+
+        death.willEnter()
+
+        let rowTexts = Self.labelNodes(in: death.node).map { $0.text ?? "" }
+        let expectedFragments = [
+            "SURVIVED: 02:05",
+            "RACCOONS DOWN: \(summary.raccoonsDown)",
+            "LEVEL: \(summary.level)",
+            "RABIES: \(summary.rabies)",
+            "DAMAGE DEALT: \(summary.damageDealt)",
+            "KILL BONUS: \(summary.killBonus)",
+            "SURVIVAL: \(summary.survivalBonus)",
+            "SCORE: \(summary.score)",
+        ]
+        for expected in expectedFragments {
+            XCTAssertTrue(
+                rowTexts.contains(expected),
+                "expected a row reading \"\(expected)\", found \(rowTexts)"
+            )
+        }
+    }
+
+    /// The death screen must record into `HighScoreStore` exactly once per
+    /// death: `willEnter()` fires once per genuine `.death` entry, but a
+    /// rotation drives `layout(for:safeAreaInsets:)` too, and that must
+    /// never record a second entry for the same death.
+    func test_deathScreenNode_willEnter_recordsExactlyOneEntryPerDeath() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = makeDeathScreen(highScoreStore: store)
+
+        death.willEnter()
+        death.layout(for: CGSize(width: 400, height: 800), safeAreaInsets: .zero)
+        death.layout(for: CGSize(width: 800, height: 400), safeAreaInsets: .zero)
+
+        XCTAssertEqual(try store.sortedEntries().count, 1)
+    }
+
+    /// A second, separate death (RUN AGAIN then die again) is a genuinely
+    /// new entry into `.death`, so it must record a second row.
+    func test_deathScreenNode_secondWillEnter_recordsASecondEntry() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = makeDeathScreen(highScoreStore: store)
+
+        death.willEnter()
+        death.willEnter()
+
+        XCTAssertEqual(try store.sortedEntries().count, 2)
+    }
+
+    /// `lastRecordedRunID` is what `GameViewController` threads into
+    /// `HighScoresScreenNode`'s highlight -- it must match the entry that
+    /// was actually just persisted, not merely be non-nil.
+    func test_deathScreenNode_willEnter_lastRecordedRunID_matchesThePersistedEntry() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = makeDeathScreen(highScoreStore: store)
+
+        death.willEnter()
+
+        let recordedID = try XCTUnwrap(death.lastRecordedRunID)
+        let entries = try store.sortedEntries()
+        XCTAssertEqual(entries.map(\.id), [recordedID])
+    }
+
     // MARK: - HighScoresScreenNode
 
     func test_highScoresScreenNode_backToMenuButton_runsTheSuppliedClosure() {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
         var backToMenuTapped = false
-        let highScores = HighScoresScreenNode(onBackToMenu: { backToMenuTapped = true })
+        let highScores = HighScoresScreenNode(
+            onBackToMenu: { backToMenuTapped = true },
+            highScoreStore: store
+        )
 
         highScores.backToMenuButton.handleTouch()
 
@@ -349,12 +562,160 @@ final class ScreensTests: XCTestCase {
     }
 
     func test_highScoresScreenNode_layout_resizesBackgroundToSceneSize() {
-        let highScores = HighScoresScreenNode(onBackToMenu: {})
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let highScores = HighScoresScreenNode(onBackToMenu: {}, highScoreStore: store)
         let size = CGSize(width: 400, height: 800)
 
         highScores.layout(for: size, safeAreaInsets: .zero)
 
         let background = highScores.node.children.compactMap { $0 as? SKSpriteNode }.first
         XCTAssertEqual(background?.size, size)
+    }
+
+    /// AC4: the high-scores screen displays the persisted table sorted
+    /// descending by score, matching `HighScoreStore.sortedEntries()`'s own
+    /// order exactly.
+    func test_highScoresScreenNode_willEnter_rendersEntries_sortedDescending() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        for score in [100, 900, 450] {
+            try store.recordRun(RunSummary(
+                survivedSeconds: 10, raccoonsDown: 1, level: 1, rabies: 0,
+                damageDealt: score, killBonus: 0, survivalBonus: 0, score: score
+            ))
+        }
+        let highScores = HighScoresScreenNode(onBackToMenu: {}, highScoreStore: store)
+        highScores.layout(for: CGSize(width: 400, height: 800), safeAreaInsets: .zero)
+
+        highScores.willEnter()
+
+        let rowTexts = (0..<3).map { index in
+            Self.labelNodes(in: highScores.node).first { $0.name == "highScores.row.\(index)" }?.text ?? ""
+        }
+        XCTAssertEqual(rowTexts, ["#1  SCORE 900", "#2  SCORE 450", "#3  SCORE 100"])
+    }
+
+    /// A fresh table shows the empty-state message, not a zero-row table
+    /// that could be mistaken for "not implemented".
+    func test_highScoresScreenNode_willEnter_emptyTable_showsEmptyState() {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let highScores = HighScoresScreenNode(onBackToMenu: {}, highScoreStore: store)
+        highScores.layout(for: CGSize(width: 400, height: 800), safeAreaInsets: .zero)
+
+        highScores.willEnter()
+
+        let emptyState = highScores.node.children.first { $0.name == "highScores.emptyState" } as? SKLabelNode
+        XCTAssertEqual(emptyState?.isHidden, false)
+    }
+
+    /// The same landscape geometry check for the variable-length table: a
+    /// full ten-row table plus the title and the button is the worst case,
+    /// and the one the old even-spacing scheme squeezed hardest (twelve
+    /// items, ~29.8pt between centres under a 48pt button).
+    func test_highScoresScreenNode_layout_fullTable_keepsLastRowClearOfTheButton_inLandscape() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        for score in 1...HighScoreStore.defaultMaxEntries {
+            try store.recordRun(RunSummary(
+                survivedSeconds: 10, raccoonsDown: 1, level: 1, rabies: 0,
+                damageDealt: score, killBonus: 0, survivalBonus: 0, score: score
+            ))
+        }
+        let highScores = HighScoresScreenNode(onBackToMenu: {}, highScoreStore: store)
+        highScores.layout(
+            for: CGSize(width: 852, height: 393),
+            safeAreaInsets: UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)
+        )
+
+        highScores.willEnter()
+
+        let lastRow = try XCTUnwrap(
+            Self.labelNodes(in: highScores.node)
+                .first { $0.name == "highScores.row.\(HighScoreStore.defaultMaxEntries - 1)" },
+            "a full table must render its last row"
+        )
+        XCTAssertFalse(
+            lastRow.calculateAccumulatedFrame()
+                .intersects(highScores.backToMenuButton.calculateAccumulatedFrame()),
+            "the last high-score row overlaps BACK TO MENU in landscape"
+        )
+    }
+
+    /// AC4's highlight must key off the entry's stable `id`, not its score:
+    /// two tied entries are otherwise indistinguishable, and the wrong one
+    /// highlighting would silently misreport whose run just finished.
+    func test_highScoresScreenNode_willEnter_highlightsByID_evenWithATiedScore() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+
+        let tiedSummary = RunSummary(
+            survivedSeconds: 10, raccoonsDown: 1, level: 1, rabies: 0,
+            damageDealt: 250, killBonus: 0, survivalBonus: 0, score: 250
+        )
+        let firstID = UUID()
+        let secondID = UUID()
+        try store.recordRun(tiedSummary, id: firstID)
+        try store.recordRun(tiedSummary, id: secondID)
+
+        let highScores = HighScoresScreenNode(
+            onBackToMenu: {},
+            highScoreStore: store,
+            highlightedRunIDProvider: { secondID }
+        )
+        highScores.layout(for: CGSize(width: 400, height: 800), safeAreaInsets: .zero)
+
+        highScores.willEnter()
+
+        let rows = (0..<2).compactMap { index in
+            Self.labelNodes(in: highScores.node).first { $0.name == "highScores.row.\(index)" }
+        }
+        XCTAssertEqual(rows.count, 2)
+        let entries = try store.sortedEntries()
+        let firstRowEntryIsSecondID = entries[0].id == secondID
+        let highlightedRow = firstRowEntryIsSecondID ? rows[0] : rows[1]
+        let otherRow = firstRowEntryIsSecondID ? rows[1] : rows[0]
+
+        Self.assertColorsEqual(highlightedRow.fontColor, PixelGritPalette.neonAccent)
+        Self.assertColorsNotEqual(otherRow.fontColor, PixelGritPalette.neonAccent)
+    }
+
+    /// `UIColor` equality (and even its `description`) can disagree for two
+    /// colors that were constructed identically, because the components are
+    /// stored as float32 under the hood — comparing the `UIColor` objects
+    /// directly is flaky. Compare the RGBA components with a tolerance instead.
+    private static func rgbaComponents(_ color: UIColor?) -> (CGFloat, CGFloat, CGFloat, CGFloat)? {
+        guard let color else { return nil }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return nil }
+        return (r, g, b, a)
+    }
+
+    private static func assertColorsEqual(
+        _ lhs: UIColor?, _ rhs: UIColor?, accuracy: CGFloat = 1e-4,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        guard let l = rgbaComponents(lhs), let r = rgbaComponents(rhs) else {
+            XCTFail("expected both colors to be convertible to RGBA components", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(l.0, r.0, accuracy: accuracy, "red component mismatch", file: file, line: line)
+        XCTAssertEqual(l.1, r.1, accuracy: accuracy, "green component mismatch", file: file, line: line)
+        XCTAssertEqual(l.2, r.2, accuracy: accuracy, "blue component mismatch", file: file, line: line)
+        XCTAssertEqual(l.3, r.3, accuracy: accuracy, "alpha component mismatch", file: file, line: line)
+    }
+
+    private static func assertColorsNotEqual(
+        _ lhs: UIColor?, _ rhs: UIColor?, accuracy: CGFloat = 1e-4,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        guard let l = rgbaComponents(lhs), let r = rgbaComponents(rhs) else {
+            XCTFail("expected both colors to be convertible to RGBA components", file: file, line: line)
+            return
+        }
+        let isEqual = abs(l.0 - r.0) < accuracy && abs(l.1 - r.1) < accuracy
+            && abs(l.2 - r.2) < accuracy && abs(l.3 - r.3) < accuracy
+        XCTAssertFalse(isEqual, "expected colors to differ, but they matched within tolerance", file: file, line: line)
     }
 }
