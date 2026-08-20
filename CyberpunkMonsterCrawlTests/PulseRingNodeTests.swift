@@ -205,6 +205,15 @@ final class PulseRingNodeTests: XCTestCase {
         // `-5` cases below for exactly the same reason -- `max(1, ...)`
         // returns the literal `1.0` for every radius in this test -- so
         // they are exact too, and nothing in this test is tolerant.
+        //
+        // Restored on PR #53 review after a brief, unjustified detour to
+        // `accuracy: 1e-6`: nothing was ever observed failing here, and the
+        // "float32 cannot guarantee exact equality" rationale contradicted
+        // the two sibling tests above (`..._dividesByTheMeasuredRing_...`,
+        // `..._isAWholeInteger_...`) that run the same arithmetic and stayed
+        // exact. If residue ever does appear on this path, the exact
+        // assertion is the messenger and the finding gets recorded -- not
+        // absorbed by a tolerance.
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)

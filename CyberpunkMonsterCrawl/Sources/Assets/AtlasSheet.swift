@@ -81,7 +81,20 @@ enum AtlasSheet: CaseIterable {
                 cellSize: CGSize(width: 24, height: 24)
             )
         case .pulse:
-            // 256×32px, 32×32 cell (8 frames): pulse shockwave.
+            // 256x32px, 32x32 cell (8 frames): pulse shockwave.
+            //
+            // CYBERPUN-17-10-t5 re-checked this declaration directly against
+            // the shipped Assets.xcassets/Atlas/sprite_pulse.imageset
+            // /sprite_pulse.png bytes while investigating the pulse-ability
+            // crash. The leading hypothesis there was that this declared
+            // size disagreed with the measured one, tripping
+            // SpriteSheet.init's precondition -- it does not: the shipped
+            // PNG decodes at exactly 256x32, matching this declaration
+            // exactly (also independently pinned by
+            // PulseRingArtMeasurementTests
+            // .test_spritePulse_decodesAtItsDeclaredSheetGeometry_withRealPixelsInEveryFrame()
+            // and AtlasDimensionsTests) -- so that hypothesis is ruled out,
+            // not merely unconfirmed.
             return SpriteSheet(
                 imageID: "sprite_pulse",
                 pixelSize: CGSize(width: 256, height: 32),

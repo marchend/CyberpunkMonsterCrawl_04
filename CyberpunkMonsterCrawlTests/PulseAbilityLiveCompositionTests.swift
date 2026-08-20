@@ -1,4 +1,5 @@
 import CoreGraphics
+import QuartzCore
 import SpriteKit
 import UIKit
 import XCTest
@@ -76,15 +77,75 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
     private var hostView: UIView!
     private var presentedView: FixedInsetsSKView!
 
+    /// Only populated by `test_livePulseAnimation_...` below, which is the
+    /// one test in this file that actually presents its view inside a real
+    /// `UIWindow` -- every other test here (matching the rest of this
+    /// suite) stays off-window on purpose. Retained the same "instance
+    /// property, not a local" way `hostView`/`presentedView` are, for the
+    /// same dangling-reference reason.
+    private var window: UIWindow!
+
     override func tearDown() {
+        // Pausing before tearing the hierarchy down matters only for the
+        // one real-rendering test below: an unpaused `SKView` still
+        // servicing a live display link while its scene/window are torn
+        // out from under it is exactly the kind of teardown race this
+        // property exists to avoid, even though every other test here
+        // never flips `isPaused` off in the first place.
+        presentedView?.isPaused = true
         presentedView = nil
         hostView?.subviews.forEach { $0.removeFromSuperview() }
         hostView = nil
+        window?.isHidden = true
+        window?.rootViewController = nil
+        window = nil
         super.tearDown()
     }
 
     private func makeComposedScene() -> GameScene {
         GameViewController().makeGameScene(size: sceneSize)
+    }
+
+    /// Drains the main run loop until the display link has actually ticked
+    /// `frameCount` times -- i.e. until SpriteKit's own render loop has
+    /// really produced that many frames -- and, if `minimumElapsed` is
+    /// given, until at least that much animation time has also passed.
+    ///
+    /// Raised on PR #53 review: the live test below used to wait a fixed
+    /// `RunLoop.run(until: Date() + 0.7)`, which assumes a loaded CI host
+    /// renders as fast as a quiet one and silently degrades into "assert
+    /// after almost no frames" precisely when the machine is busy. The
+    /// value of that test is the render *pass*, not the duration, so the
+    /// wait is now driven off frames. `timeout` exists only so a display
+    /// link that never fires (an unattached or backgrounded view) fails
+    /// this assertion instead of hanging the suite.
+    @discardableResult
+    private func renderRealFrames(
+        _ frameCount: Int,
+        minimumElapsed: TimeInterval = 0,
+        timeout: TimeInterval = 10,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Int {
+        let counter = DisplayLinkFrameCounter()
+        let link = CADisplayLink(target: counter, selector: #selector(DisplayLinkFrameCounter.tick(_:)))
+        link.add(to: .main, forMode: .common)
+        defer { link.invalidate() }
+
+        let start = Date()
+        while counter.frames < frameCount || Date().timeIntervalSince(start) < minimumElapsed {
+            guard Date().timeIntervalSince(start) < timeout else { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+
+        XCTAssertGreaterThanOrEqual(
+            counter.frames, frameCount,
+            "SpriteKit rendered only \(counter.frames) of the \(frameCount) frames this test needs "
+                + "within \(timeout)s -- the real render pass this test exists to exercise did not happen.",
+            file: file,
+            line: line
+        )
+        return counter.frames
     }
 
     /// Hosts `scene` in a real, presented `SKView` that reports `insets`
@@ -372,6 +433,88 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         XCTAssertTrue(scene.nodesEscapingTheirLayerBand().isEmpty)
         XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
     }
+
+    // MARK: - Real (unpaused, in-window) rendering: the one condition no test above exercises
+
+    /// `CYBERPUN-17-10-t5`: every test above -- and every pre-`-t4` pulse
+    /// test -- keeps its `SKView` `isPaused = true` and never attaches it to
+    /// a real `UIWindow`. SpriteKit's own render loop is driven by a
+    /// `CADisplayLink` that only fires for a view that is both unpaused
+    /// *and* actually installed in an on-screen window; nothing above ever
+    /// satisfies both, so nothing above has ever made SpriteKit actually
+    /// upload `sprite_pulse`'s texture data to the GPU and draw a real frame
+    /// of the mounted `PulseRingNode` -- exactly the moment the runtime
+    /// probe's journey lost the process at (step 5, first `.gameplay`
+    /// entry) and again at (step 8, right after the pulse-button press).
+    ///
+    /// This test closes that specific, previously-unexercised gap: a real
+    /// window, a real unpaused `SKView`, a real `PLAY` tap, a real pulse-
+    /// button tap, and enough real run-loop time for SpriteKit to actually
+    /// render past the ring's full 8-frame play-through
+    /// (`8 * PulseRingNode.frameDuration` = 0.24s) -- all against the
+    /// production `PulseRingNode`/`AtlasSheet.pulse` path, never a stub.
+    ///
+    /// **What a green run here does and does not establish.** Exactly like
+    /// every other test in this file (see this file's own header note): a
+    /// crash-free run here is not proof this *was* the journey's crash
+    /// cause, since that cause remains genuinely unidentified (this task's
+    /// own audit ruled out the leading `sprite_pulse` dimension hypothesis
+    /// -- see `AtlasSheet.pulse`'s own doc comment -- and found no other
+    /// reachable defect). What it *does* establish, for the first time in
+    /// this suite, is that a real SpriteKit render pass over the exact
+    /// mounted node/texture/animation this journey exercises does not, on
+    /// its own, tear the process down in this test environment.
+    func test_livePulseAnimation_realWindowUnpausedRendering_survivesAFullRingPlaythrough() throws {
+        let scene = makeComposedScene()
+        let view = makeLiveView(scene, insets: liveInsets)
+        let menu = try XCTUnwrap(scene.activeScreen as? MenuScreenNode)
+
+        let hostedWindow = UIWindow(frame: CGRect(origin: .zero, size: sceneSize))
+        let rootViewController = UIViewController()
+        rootViewController.view.addSubview(hostView)
+        hostedWindow.rootViewController = rootViewController
+        hostedWindow.makeKeyAndVisible()
+        window = hostedWindow
+
+        // Real rendering from here on: SpriteKit's own display-link loop,
+        // not this test manually stepping `scene.update(_:)` the way the
+        // paused-view journey test above does.
+        view.isPaused = false
+
+        let playFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: menu.playButton))
+        scene.dispatchTouch(atScenePoint: CGPoint(x: playFrame.midX, y: playFrame.midY))
+        XCTAssertEqual(scene.stateMachine.currentState, .gameplay)
+
+        // Let real frames actually render before pressing the button --
+        // counted frames, not elapsed seconds (see `renderRealFrames`).
+        renderRealFrames(12)
+        XCTAssertNotNil(view.window, "the view must still be presented after real rendering has started")
+
+        let pulseFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: scene.pulseButton))
+        let responder = scene.dispatchTouch(atScenePoint: CGPoint(x: pulseFrame.midX, y: pulseFrame.midY))
+        XCTAssertTrue(responder === scene.pulseButton, "the live press must resolve to the pulse button")
+        XCTAssertTrue(scene.pulseAbility.isOnCooldown, "the live press must actually fire the ability")
+
+        // The ring's own full play-through is 8 * PulseRingNode.frameDuration
+        // (0.03s) = 0.24s of *animation* time, so this wait has two
+        // independent floors: enough real rendered frames that a render pass
+        // is genuinely what got exercised, and enough elapsed time that the
+        // ring animation actually finished. On a loaded host the frame floor
+        // is what stretches the wait; on a fast one the animation floor is.
+        renderRealFrames(24, minimumElapsed: 8 * PulseRingNode.frameDuration + 0.1)
+
+        XCTAssertNotNil(view.window, "the view must still be presented in a window after real rendering")
+        XCTAssertEqual(
+            scene.stateMachine.currentState, .gameplay,
+            "a real, unpaused render pass over the mounted PulseRingNode must not have torn the app down"
+        )
+        XCTAssertTrue(
+            scene.nodesEscapingTheirLayerBand().isEmpty,
+            "node(s) escaped their layer band after a real, unpaused render pass: "
+                + scene.layerBandViolationReport().joined(separator: "; ")
+        )
+        XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
+    }
 }
 
 // MARK: -
@@ -393,4 +536,17 @@ private final class FixedInsetsSKView: SKView {
     var injectedSafeAreaInsets: UIEdgeInsets = .zero
 
     override var safeAreaInsets: UIEdgeInsets { injectedSafeAreaInsets }
+}
+
+/// Counts real display-link ticks, so the live-rendering test can wait for
+/// rendered *frames* instead of for wall-clock seconds -- see
+/// `PulseAbilityLiveCompositionTests.renderRealFrames(_:minimumElapsed:timeout:)`.
+/// An `NSObject` subclass because `CADisplayLink`'s target/selector pair is
+/// an Objective-C callback.
+private final class DisplayLinkFrameCounter: NSObject {
+    private(set) var frames = 0
+
+    @objc func tick(_ link: CADisplayLink) {
+        frames += 1
+    }
 }
