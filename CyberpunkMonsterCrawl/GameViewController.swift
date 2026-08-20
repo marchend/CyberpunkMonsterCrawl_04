@@ -93,7 +93,34 @@ final class GameViewController: UIViewController {
         // Presenting last, with the container already wired up, so the first
         // set of accessibility mirrors is built from the scene the app
         // actually launches into (`presentScene` refreshes them).
-        skView.presentScene(makeGameScene(size: view.bounds.size))
+        let scene = makeGameScene(size: view.bounds.size)
+        skView.presentScene(scene)
+
+        // `CYBERPUN-17-13` PR 2: honour a `LaunchGotoState` test hook, if
+        // present, so a `.mothership` journey can reach `.death`/
+        // `.highScores` directly -- a normal launch has neither the
+        // argument nor the environment variable set, so `resolve()`
+        // returns `nil` and this is a no-op for a real player.
+        applyLaunchGotoStateIfNeeded(on: scene)
+    }
+
+    /// Drives whatever legal transition sequence reaches `LaunchGotoState
+    /// .resolve()`'s target from the scene's initial `.menu` state --
+    /// `.death` is only reachable *through* `.gameplay` (see
+    /// `GameStateMachine`'s transition table), so reaching it here takes
+    /// two calls, not one.
+    private func applyLaunchGotoStateIfNeeded(on scene: GameScene) {
+        switch LaunchGotoState.resolve() {
+        case .none, .menu:
+            break
+        case .gameplay:
+            scene.stateMachine.transition(to: .gameplay)
+        case .death:
+            scene.stateMachine.transition(to: .gameplay)
+            scene.stateMachine.transition(to: .death)
+        case .highScores:
+            scene.stateMachine.transition(to: .highScores)
+        }
     }
 
     /// The container's mirrors are geometry, so they have to follow every
@@ -125,21 +152,53 @@ final class GameViewController: UIViewController {
             for: .menu
         )
         scene.register(GameplayScreenNode(), for: .gameplay)
-        scene.register(
-            DeathScreenNode(
-                onRunAgain: { [weak scene] in
-                    scene?.stateMachine.transition(to: .gameplay)
-                },
-                onBackToMenu: { [weak scene] in
-                    scene?.stateMachine.transition(to: .menu)
+
+        // `deathScreen` is kept as a local so `HighScoresScreenNode` below
+        // can read its `lastRecordedRunID` after the fact (`CYBERPUN-17-13`
+        // PR 2's "thread the just-finished run's id from death into
+        // high-scores" requirement) -- weakly, the same way every other
+        // closure here captures `scene` weakly, so neither screen keeps the
+        // other alive.
+        let deathScreen = DeathScreenNode(
+            onRunAgain: { [weak scene] in
+                scene?.stateMachine.transition(to: .gameplay)
+            },
+            onBackToMenu: { [weak scene] in
+                scene?.stateMachine.transition(to: .menu)
+            },
+            runSummaryProvider: { [weak scene] in
+                // A `nil` scene/playerCombat means `.death` was entered
+                // without a run ever having mounted a player (not reachable
+                // from real gameplay -- `.death` is only a legal transition
+                // from `.gameplay`, which always mounts one first -- but
+                // still possible from a direct `stateMachine.transition(to:
+                // .death)` call, e.g. in a test). This all-zero fallback
+                // keeps that call site well-defined rather than crashing.
+                guard let scene, let playerCombat = scene.playerCombat else {
+                    return RunSummary(
+                        survivedSeconds: 0, raccoonsDown: 0, level: 1, rabies: 0,
+                        damageDealt: 0, killBonus: 0, survivalBonus: 0, score: 0
+                    )
                 }
-            ),
-            for: .death
+                return RunScoreCalculator.summarize(
+                    runSummaryStats: scene.runStats,
+                    runStats: playerCombat.runStats,
+                    xpLevelSystem: playerCombat.xpLevelSystem,
+                    elapsedSeconds: scene.runElapsedSeconds
+                )
+            },
+            highScoreStore: scene.highScoreStore
         )
+        scene.register(deathScreen, for: .death)
+
         scene.register(
             HighScoresScreenNode(
                 onBackToMenu: { [weak scene] in
                     scene?.stateMachine.transition(to: .menu)
+                },
+                highScoreStore: scene.highScoreStore,
+                highlightedRunIDProvider: { [weak deathScreen] in
+                    deathScreen?.lastRecordedRunID
                 }
             ),
             for: .highScores

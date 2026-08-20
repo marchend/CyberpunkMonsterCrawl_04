@@ -206,6 +206,35 @@ final class GameScene: SKScene {
     /// death-screen summary (`CYBERPUN-17-13`) can hold this reference.
     let runStats = RunSummaryStats()
 
+    /// Seconds elapsed in the current (or most recently completed)
+    /// `.gameplay` run (`CYBERPUN-17-13`) -- the source for the death
+    /// screen's SURVIVED/SURVIVAL rows. Reset to `0` on every fresh
+    /// `.gameplay` entry (`updateWorldContent(for:)`, beside `runStats
+    /// .reset()`) and incremented only while `stateMachine.currentState
+    /// == .gameplay`, the same gate `raccoonSpawnDirector`/`pickupManager`/
+    /// `playerCombat` share below -- so time parked on the death/
+    /// high-scores/menu screen after a run ends is never counted toward
+    /// the *next* run's clock.
+    private(set) var runElapsedSeconds: TimeInterval = 0
+
+    /// Persisted high-score table (`CYBERPUN-17-13`), constructed once for
+    /// the scene's whole lifetime over the app's real `UserDefaults` suite.
+    /// `DeathScreenNode` records into this exactly once per death
+    /// (`willEnter()`); `HighScoresScreenNode` reads it every time it is
+    /// shown.
+    ///
+    /// Force-unwrapped rather than optional: `HighScoreStore
+    /// .productionSuiteName` is a hardcoded constant that is neither the
+    /// app's own bundle identifier nor `NSGlobalDomain` (the only two
+    /// values `UserDefaults(suiteName:)` rejects), so `nil` here would mean
+    /// that constant itself is wrong -- a programmer error worth crashing
+    /// on, not a reason to silently fall back to `.standard` (see
+    /// `HighScoreStore`'s own doc comment on why it never does).
+    /// `HighScoreStoreTests
+    /// .test_productionSuiteName_isConstructible_andNotAReservedDomain`
+    /// pins that this construction succeeds.
+    let highScoreStore = HighScoreStore(suiteName: HighScoreStore.productionSuiteName)!
+
     /// The player's targeting/firing/bullets/effects/progression
     /// composition (`CYBERPUN-17-9` PR 3): constructed once, lazily, in
     /// `startPlayer(at:)` the first time a run mounts `PlayerNode` (its
@@ -448,6 +477,12 @@ final class GameScene: SKScene {
             // infections. (`startPlayer(at:)` above resets the player's own
             // HP/infection state.)
             runStats.reset()
+            // A fresh run's elapsed-time clock: RUN AGAIN must not carry
+            // the previous run's SURVIVED/SURVIVAL rows into a run that
+            // has not even started yet -- the same "no bleed-through" rule
+            // `runStats.reset()` above and `raccoonSpawnDirector.reset()`/
+            // `startPickups()`/`pulseAbility.reset()` below all follow.
+            runElapsedSeconds = 0
             thumbstick.isRunActive = true
             // `PulseButton` has no `isRunActive`-style gate of its own
             // (see that type's own "Mount instructions" doc note), so the
@@ -726,6 +761,12 @@ final class GameScene: SKScene {
         // "time since the last `.gameplay` entry, including time parked on
         // the death screen".
         if stateMachine.currentState == .gameplay {
+            // CYBERPUN-17-13: the run's own wall-clock timer, gated
+            // identically to the swarm/pickups/combat updates below so
+            // time spent on the death/high-scores/menu screen after this
+            // run ends never counts toward the *next* run's SURVIVED row.
+            runElapsedSeconds += deltaTime
+
             // Independent of the camera-lock/chunk-streaming code paths
             // above -- and of `raccoonSpawnDirector` below -- other than
             // sharing this same `.gameplay` gate for the reason
