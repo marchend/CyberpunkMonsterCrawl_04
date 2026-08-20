@@ -26,11 +26,12 @@ import Foundation
 /// overwhelmingly choose two different junctions
 /// (`RunSpawnSelectorTests` checks this holds across many seeds).
 ///
-/// **That variety only reaches the player once something varies the seed.**
-/// `GameScene.worldSeed` is a fixed constant nothing in the app writes, so
-/// as composed today every run is handed the same input and therefore
-/// spawns at the same junction. See `GameScene.spawnTilePosition()` for
-/// where the missing per-run seed is tracked.
+/// **That variety reaches the player via `GameScene.worldSeed`.**
+/// `GameScene.startNewRun()` (`CYBERPUN-17-13` PR 3) draws a fresh random
+/// `worldSeed` before every RUN AGAIN, so consecutive runs are handed
+/// different seeds and land at different junctions; the very first
+/// `.menu -> .gameplay` entry still spawns at the fixed default's
+/// junction -- see `GameScene.worldSeed`'s own doc comment.
 enum RunSpawnSelector {
     /// How many blocks, on each axis, either side of the world origin a
     /// candidate junction may be drawn from. Large enough that a sweep of

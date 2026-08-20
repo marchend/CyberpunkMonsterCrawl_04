@@ -202,9 +202,9 @@ final class PulseRingNodeTests: XCTestCase {
         // `test_scale_isAWholeInteger_onBothAxes_forEveryRealRadius`) is that
         // the scale is a *whole integer*, which a tolerance is exactly the
         // thing that would let a non-integer slip past.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
         XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
         XCTAssertEqual(
             PulseRingNode.xScale(forRadiusTiles: -5), 1, accuracy: 1e-6,

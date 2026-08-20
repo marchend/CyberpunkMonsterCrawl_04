@@ -95,40 +95,7 @@ final class GameViewController: UIViewController {
         // actually launches into (`presentScene` refreshes them).
         let scene = makeGameScene(size: view.bounds.size)
         skView.presentScene(scene)
-
-        // `SCAFFOLDING(CYBERPUN-17-13)`: honour the DEBUG-only
-        // `LaunchGotoState` test hook, if present, so a `.mothership`
-        // journey can reach `.death`/`.highScores` before the
-        // HP-reaches-zero -> `.death` trigger exists. Compiled out of
-        // Release along with `LaunchGotoState` itself, so a shipped binary
-        // has no launch-time state override at all; in DEBUG a normal
-        // launch has neither the argument nor the environment variable
-        // set, so `resolve()` returns `nil` and this is a no-op.
-        #if DEBUG
-        applyLaunchGotoStateIfNeeded(on: scene)
-        #endif
     }
-
-    #if DEBUG
-    /// Drives whatever legal transition sequence reaches `LaunchGotoState
-    /// .resolve()`'s target from the scene's initial `.menu` state --
-    /// `.death` is only reachable *through* `.gameplay` (see
-    /// `GameStateMachine`'s transition table), so reaching it here takes
-    /// two calls, not one.
-    private func applyLaunchGotoStateIfNeeded(on scene: GameScene) {
-        switch LaunchGotoState.resolve() {
-        case .none, .menu:
-            break
-        case .gameplay:
-            scene.stateMachine.transition(to: .gameplay)
-        case .death:
-            scene.stateMachine.transition(to: .gameplay)
-            scene.stateMachine.transition(to: .death)
-        case .highScores:
-            scene.stateMachine.transition(to: .highScores)
-        }
-    }
-    #endif
 
     /// The container's mirrors are geometry, so they have to follow every
     /// layout pass - a rotation resizes the scene and moves every
@@ -168,7 +135,12 @@ final class GameViewController: UIViewController {
         // other alive.
         let deathScreen = DeathScreenNode(
             onRunAgain: { [weak scene] in
-                scene?.stateMachine.transition(to: .gameplay)
+                // `startNewRun()` (`CYBERPUN-17-13` PR 3), not a plain
+                // `stateMachine.transition(to: .gameplay)`: RUN AGAIN must
+                // draw a fresh `worldSeed` (new city, new starting
+                // junction) before landing in `.gameplay`, which only this
+                // entry point does.
+                scene?.startNewRun()
             },
             onBackToMenu: { [weak scene] in
                 scene?.stateMachine.transition(to: .menu)
@@ -179,8 +151,7 @@ final class GameViewController: UIViewController {
                 // reachable from real gameplay (`.death` is only a legal
                 // transition from `.gameplay`, which always mounts one
                 // first), but reachable from a direct
-                // `stateMachine.transition(to: .death)` call: a test, or
-                // the DEBUG `LaunchGotoState` hook above.
+                // `stateMachine.transition(to: .death)` call: a test.
                 //
                 // Returning `nil` rather than an all-zero `RunSummary` is
                 // the difference between "no run to report" and "a run
