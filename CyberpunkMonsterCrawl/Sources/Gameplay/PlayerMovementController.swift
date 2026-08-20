@@ -36,16 +36,14 @@ import Foundation
 /// position. See `FloatingThumbstickNode`'s doc comment for the producer
 /// side.
 ///
-/// **What is still outstanding on the story, and where it is tracked.** The
-/// movement/collision/camera wiring above is done; one item is not, and it
-/// is not given an invented ticket ID here: the run's spawn junction is
-/// identical on every run, because nothing in the app writes
-/// `GameScene.worldSeed` -- see `GameScene.spawnTilePosition()` for the full
-/// note. It is tracked on the `CYBERPUN-17-7` story itself, requested as a
-/// follow-up on its tasks. The authoritative list of what is implemented
-/// versus still outstanding for this story is the `CYBERPUN-17-7` entry in
-/// AGENT.md/CLAUDE.md; read that rather than inferring the remaining scope
-/// from these doc comments.
+/// **The movement/collision/camera wiring above is done, and so is the
+/// once-outstanding per-run spawn junction.** `CYBERPUN-17-13` PR 3's
+/// `GameScene.startNewRun()` now draws a fresh `worldSeed` before every RUN
+/// AGAIN, so consecutive runs spawn at different junctions -- see
+/// `GameScene.spawnTilePosition()` for the full note. The authoritative
+/// list of what is implemented versus still outstanding for this story is
+/// the `CYBERPUN-17-7` entry in AGENT.md/CLAUDE.md; read that rather than
+/// inferring the remaining scope from these doc comments.
 ///
 /// Both halves now share one production call site, and
 /// `ThumbstickMovementSeamTests` still drives a real

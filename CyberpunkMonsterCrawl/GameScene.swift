@@ -76,16 +76,22 @@ final class GameScene: SKScene {
 
     /// The seed the run's city is generated from.
     ///
-    /// A fixed default so a launch is reproducible (and so the ground plane
-    /// needs no extra composition-root plumbing to exist); whichever later
-    /// story owns run setup can set this per run before `.gameplay` is
-    /// entered, and the whole world follows from it — `WorldSeed`'s contract
-    /// is that the same seed reproduces the identical city forever.
+    /// A fixed default for the very first run of a launch, so a fresh
+    /// install always opens onto the identical city — `WorldSeed`'s
+    /// contract is that the same seed reproduces the identical city
+    /// forever, and there is no reason a first launch needs to be
+    /// unpredictable.
     ///
-    /// **Nothing in the app writes this today** (only tests do), which is why
-    /// the run's spawn junction is currently the same on every run rather
-    /// than a new one each time — see `spawnTilePosition()` for the full
-    /// note and where that gap is tracked.
+    /// **RUN AGAIN draws a fresh one.** `startNewRun()` (`CYBERPUN-17-13`
+    /// PR 3) — the production entry point `GameViewController`'s
+    /// `DeathScreenNode.onRunAgain` calls — overwrites this with a new
+    /// random value before transitioning to `.gameplay`, so every restart
+    /// lands in a different part of the city, on a different starting
+    /// junction (see `spawnTilePosition()`). A plain `stateMachine
+    /// .transition(to: .gameplay)` call — what the very first
+    /// `.menu -> .gameplay` PLAY does, and what most of this codebase's own
+    /// scene-wiring tests use to reach `.gameplay` for reasons unrelated to
+    /// seed variety — leaves this value untouched, deliberately.
     var worldSeed = WorldSeed(rawValue: 0x0C17_5EED)
 
     /// The mounted ground plane, streamed into `worldLayer` while a run is in
@@ -431,6 +437,61 @@ final class GameScene: SKScene {
         }
     }
 
+    // MARK: - RUN AGAIN (`CYBERPUN-17-13` PR 3)
+
+    /// The one production entry point for RUN AGAIN: draws a fresh,
+    /// unpredictable `worldSeed` and transitions straight to `.gameplay` --
+    /// no menu detour -- so every restart spawns in a different part of the
+    /// city, at a different starting junction (`spawnTilePosition()`
+    /// derives entirely from `worldSeed`). `updateWorldContent(for:)`'s
+    /// `.gameplay` branch then performs the rest of a fresh run's reset
+    /// exactly as it already does for the very first `.gameplay` entry --
+    /// ground plane, player HP/infection, weapon/XP progression, swarm,
+    /// pickups, run counters, elapsed-time clock and pulse cooldown -- so
+    /// nothing here duplicates that logic.
+    ///
+    /// `GameViewController`'s `DeathScreenNode.onRunAgain` calls this
+    /// rather than `stateMachine.transition(to: .gameplay)` directly,
+    /// precisely so a restart always draws a new seed. A plain
+    /// `transition(to:)` call must *not* have that side effect -- the very
+    /// first `.menu -> .gameplay` PLAY, and most of this codebase's own
+    /// scene-wiring tests, reach `.gameplay` that way for reasons unrelated
+    /// to seed variety, and rely on `worldSeed` staying exactly what they
+    /// set it to.
+    ///
+    /// Returns `false` -- the same contract `transition(to:)` has -- and
+    /// leaves `worldSeed` untouched when `.gameplay` is not a legal next
+    /// state from wherever the machine currently is: an illegal call must
+    /// not silently draw and discard a seed nobody will ever see used. The
+    /// guard returns that `false` directly rather than re-issuing the
+    /// transition it has just established is illegal purely to borrow its
+    /// return value.
+    ///
+    /// Note the guard is `canTransition(to: .gameplay)`, which is also true
+    /// from `.menu` -- it is deliberately the *seed-draw* precondition, not
+    /// a RUN AGAIN authorisation check. That RUN AGAIN is only ever pressed
+    /// from `.death` holds by call-site convention (`GameViewController`'s
+    /// `DeathScreenNode.onRunAgain` is the sole production caller), not by
+    /// this line; a hypothetical future `.menu` caller would get a fresh
+    /// seed rather than a rejection.
+    @discardableResult
+    func startNewRun() -> Bool {
+        guard stateMachine.canTransition(to: .gameplay) else {
+            return false
+        }
+        worldSeed = Self.randomWorldSeed()
+        return stateMachine.transition(to: .gameplay)
+    }
+
+    /// A fresh, unpredictable seed for `startNewRun()`. Plain
+    /// `UInt64.random(in:)` (backed by `SystemRandomNumberGenerator`) --
+    /// like `pulseRNG`'s own doc comment notes for the pulse's damage
+    /// rolls, nothing about which junction a new run starts at needs to be
+    /// deterministic/seedable in a real run.
+    private static func randomWorldSeed() -> WorldSeed {
+        WorldSeed(rawValue: UInt64.random(in: UInt64.min...UInt64.max))
+    }
+
     // MARK: - World content
 
     /// Brings world content in step with `state`: entering `.gameplay` picks
@@ -519,24 +580,16 @@ final class GameScene: SKScene {
     /// guaranteed street under every seed (see that type's own doc
     /// comment).
     ///
-    /// **As composed today this is the same junction on every run.**
     /// `RunSpawnSelector.selectSpawnTile(seed:)` is a pure function of
-    /// `worldSeed`, and nothing in the app ever *writes* `worldSeed` -- it is
-    /// a fixed default (see that property's own doc comment), so every RUN
-    /// AGAIN and every app launch selects the identical tile. That is the
-    /// selector working exactly as specified (same seed => same city, same
-    /// spawn); it is not "a new starting junction per run", and this story
-    /// should not be recorded as having delivered that half. What is missing
-    /// is a per-run `worldSeed`, which belongs to whichever story owns run
-    /// setup. No separate ticket for it exists yet, and rather than invent
-    /// an ID here (the convention `PlayerMovementController`'s
-    /// outstanding-scope note follows) it is tracked on the `CYBERPUN-17-7`
-    /// story itself: requested as a follow-up on `CYBERPUN-17-7-t3` and
-    /// re-stated on `CYBERPUN-17-7-t4`, so the request outlives whichever
-    /// task closes first. Until that follow-up is filed **and** delivered,
-    /// this half of the story's spawn goal is recorded as not delivered
-    /// rather than quietly deferred. The moment `worldSeed` varies per run,
-    /// this method varies the junction with it and needs no change.
+    /// `worldSeed` alone, so all the variety this method needs comes from
+    /// `worldSeed` varying -- which it now does across a restart:
+    /// `startNewRun()` (`CYBERPUN-17-13` PR 3) draws a fresh random seed
+    /// before every RUN AGAIN, so this method lands on a different junction
+    /// each time with no change of its own. The very first
+    /// `.menu -> .gameplay` entry still spawns at the fixed default's
+    /// junction, since PLAY reaches `.gameplay` through a plain
+    /// `stateMachine.transition(to:)` rather than `startNewRun()` -- see
+    /// `worldSeed`'s own doc comment for why.
     private func spawnTilePosition() -> TilePoint {
         let tile = RunSpawnSelector.selectSpawnTile(seed: worldSeed)
         return TilePoint(x: Double(tile.tileX), y: Double(tile.tileY))

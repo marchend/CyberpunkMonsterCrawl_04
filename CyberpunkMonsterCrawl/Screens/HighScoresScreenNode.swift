@@ -9,9 +9,8 @@ import UIKit
 ///
 /// The back-to-menu navigation is unchanged from the skeleton this
 /// replaces (`CYBERPUN-17-2`): still wired straight to the shared
-/// `GameStateMachine` by `GameViewController`. Only the
-/// `// SCAFFOLDING(CYBERPUN-17-13)` placeholder background + label are
-/// gone -- replaced by the row content below.
+/// `GameStateMachine` by `GameViewController`. The prior placeholder
+/// background and label are gone -- replaced by the row content below.
 final class HighScoresScreenNode: ScreenNode {
 
     let node = SKNode()
