@@ -349,6 +349,34 @@ final class RaccoonSpawnDirector {
         }
     }
 
+    /// Overwrites the internally tracked tile-space position for `raccoon`,
+    /// so the next per-frame `update(...)` call continues steering from
+    /// wherever a caller (`CYBERPUN-17-10-t3`'s pulse-ability scene wiring)
+    /// just moved it, rather than silently reverting the raccoon to
+    /// wherever this director last computed.
+    ///
+    /// **Why this exists.** `PulseAbility.trigger(...)` hands back each hit
+    /// raccoon's *new* tile-space position, but nothing before this method
+    /// could make that position stick: every live raccoon's on-screen
+    /// position is re-derived from this director's own tracked
+    /// `activeRaccoons[index].position` on *every* per-frame `update` call
+    /// (see the loop above), so a caller that only wrote `raccoon.position`
+    /// (the SKNode's own screen position) directly would see it silently
+    /// overwritten back to the pre-push tile the very next frame -- for a
+    /// scene wired into the real render loop, indistinguishable from the
+    /// push never having happened.
+    ///
+    /// A no-op for a raccoon this director is not currently tracking --
+    /// matched by node identity (`===`), the same identity-based lookup
+    /// `BulletPool` uses for its own pool slots -- covering both "already
+    /// died and been pruned between the `targetCandidates` snapshot and
+    /// this call" and "never spawned through this director at all" (e.g. a
+    /// raccoon a test constructed and mounted directly).
+    func syncPushedPosition(_ position: TilePoint, for raccoon: RaccoonNode) {
+        guard let index = activeRaccoons.firstIndex(where: { $0.node === raccoon }) else { return }
+        activeRaccoons[index].position = position
+    }
+
     /// Tears down every live raccoon and restarts the spawn timer/ramp
     /// clock from scratch. `GameScene.updateWorldContent(for:)` calls this
     /// on every fresh entry to `.gameplay`, the same way it restarts

@@ -254,6 +254,81 @@ final class RaccoonSpawnDirectorTests: XCTestCase {
         )
     }
 
+    // MARK: - syncPushedPosition: a pulse's shove survives the next frame
+
+    /// Spawns a raccoon through the real per-frame loop, shoves it the way
+    /// `GameScene.applyPulseHit(_:)` does, and runs one more frame.
+    ///
+    /// This is the regression `syncPushedPosition(_:for:)`'s doc comment
+    /// describes and the one thing PR #48 left unproven (review): every live
+    /// raccoon's screen position is re-derived from this director's own
+    /// tracked tile position on *every* `update(...)`, so without the sync
+    /// the next frame silently reverts the shove. Deleting the
+    /// `activeRaccoons[index].position = position` line must turn this red.
+    func test_syncPushedPosition_makesAPushSurviveTheNextUpdate() throws {
+        let worldLayer = SKNode()
+        let director = RaccoonSpawnDirector(worldLayer: worldLayer, rng: SplitMix64RandomNumberGenerator(seed: 5))
+        let playerPosition = TilePoint(x: 0, y: 0)
+
+        director.update(
+            deltaTime: RaccoonSpawnDirector.initialSpawnInterval + 0.01,
+            playerPosition: playerPosition,
+            player: nil,
+            obstructions: []
+        )
+        XCTAssertEqual(director.swarmCount, 1, "precondition: exactly one raccoon spawned through the director.")
+
+        let spawned = try XCTUnwrap(director.targetCandidates.first)
+        let raccoon = spawned.raccoon
+        let spawnTile = spawned.position
+
+        // A pulse-sized shove, well clear of a single frame's own steering
+        // step (~0.05 tiles at RaccoonSeekBehavior.pointsPerSecond).
+        let pushedTile = TilePoint(x: spawnTile.x + 12, y: spawnTile.y + 12)
+        director.syncPushedPosition(pushedTile, for: raccoon)
+
+        XCTAssertEqual(
+            director.targetCandidates.first?.position, pushedTile,
+            "the director's own tracked position must adopt the pushed tile immediately."
+        )
+
+        director.update(deltaTime: 1.0 / 60.0, playerPosition: playerPosition, player: nil, obstructions: [])
+
+        let afterTile = try XCTUnwrap(director.targetCandidates.first?.position)
+        XCTAssertLessThan(
+            hypot(afterTile.x - pushedTile.x, afterTile.y - pushedTile.y), 0.5,
+            "the next frame must steer *from* the pushed tile — it moved \(afterTile) instead."
+        )
+        XCTAssertGreaterThan(
+            hypot(afterTile.x - spawnTile.x, afterTile.y - spawnTile.y), 1,
+            "the raccoon snapped back toward its pre-push tile — the shove was silently undone."
+        )
+        XCTAssertEqual(
+            raccoon.position,
+            PixelCrispness.snappedPosition(for: IsometricProjection.tileToScreen(afterTile), scale: 1),
+            "the mounted node's screen position must be re-derived from the pushed tile, not the stale one."
+        )
+    }
+
+    func test_syncPushedPosition_isANoOp_forARaccoonThisDirectorNeverSpawned() {
+        let worldLayer = SKNode()
+        let director = RaccoonSpawnDirector(worldLayer: worldLayer, rng: SplitMix64RandomNumberGenerator(seed: 5))
+
+        director.update(
+            deltaTime: RaccoonSpawnDirector.initialSpawnInterval + 0.01,
+            playerPosition: TilePoint(x: 0, y: 0),
+            player: nil,
+            obstructions: []
+        )
+        let trackedBefore = director.targetCandidates.map(\.position)
+
+        // A hand-built raccoon this director has never seen: matched by node
+        // identity, so it must not overwrite the tracked swarm's positions.
+        director.syncPushedPosition(TilePoint(x: 99, y: 99), for: RaccoonNode(tier: .base))
+
+        XCTAssertEqual(director.targetCandidates.map(\.position), trackedBefore)
+    }
+
     // MARK: - reset()
 
     func test_reset_removesAllRaccoons_andRestartsTheSpawnTimer() {

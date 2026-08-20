@@ -220,6 +220,50 @@ final class GameScene: SKScene {
     /// exposed for theirs.
     private(set) var playerCombat: Player?
 
+    // MARK: - Pulse ability (`CYBERPUN-17-10-t3`)
+
+    /// The player-triggered pulse ability's pure decision layer
+    /// (`CYBERPUN-17-10-t1`; `Sources/Abilities/PulseAbility.swift`).
+    /// Ticked every `.gameplay` frame from
+    /// `advanceMovementAndCamera(currentTime:)` (so its cooldown counts
+    /// down whether or not a press ever lands, the same "no ticking behind
+    /// an opaque death/high-scores/menu backdrop" reasoning
+    /// `raccoonSpawnDirector`/`pickupManager`/`playerCombat` are all
+    /// gated on) and consumed by `applyPulseTrigger(raccoons:)` on every
+    /// accepted `pulseButton` press.
+    let pulseAbility = PulseAbility()
+
+    /// The random source `pulseAbility.trigger(...)`'s damage rolls draw
+    /// from. A plain `SystemRandomNumberGenerator` -- unlike
+    /// `raccoonSpawnDirector`'s own `SplitMix64RandomNumberGenerator`,
+    /// nothing about the pulse's damage rolls needs to be
+    /// deterministic/seedable in a real run, and keeping this independent
+    /// of the swarm's own RNG stream means the two can never accidentally
+    /// interact.
+    private var pulseRNG = SystemRandomNumberGenerator()
+
+    /// The pulse's ring visual (`Sources/Rendering/PulseRingNode.swift`):
+    /// a single reused node -- see that type's own "One reused instance"
+    /// doc note -- mounted directly under `effectsLayer` in
+    /// `commonInit()`, hidden until the first trigger.
+    let pulseRing = PulseRingNode()
+
+    /// The HUD pulse-ability button (`CYBERPUN-17-10-t2`;
+    /// `Sources/UI/PulseButton.swift`). Built in `commonInit()` (its
+    /// `onPress` closure captures `self`, so unlike `thumbstick` it cannot
+    /// be a plain stored-property initializer) and mounted at
+    /// `FloatingThumbstickNode.reservedPulseButtonSlot(forSize:
+    /// safeAreaInsets:)`, positioned from the slot's *centre*
+    /// (`layoutPulseButton()`) per that method's own mount instructions.
+    /// Hidden outside `.gameplay` by `updateWorldContent(for:)`, the same
+    /// way `thumbstick.isRunActive` gates the movement stick -- this node
+    /// has no `isRunActive`-style gate of its own (see its own doc
+    /// comment), so the scene owns hiding it. `private(set)` so
+    /// scene-wiring tests can drive a real press via
+    /// `pulseButton.handleTouch()`, the same way `groundPlane`/`playerCombat`
+    /// are exposed for theirs.
+    private(set) var pulseButton: PulseButton!
+
     /// The touch currently engaging `thumbstick`, if any -- tracked so
     /// `touchesMoved`/`touchesEnded`/`touchesCancelled` can tell the stick's
     /// own drag apart from any other concurrent touch (a button tap)
@@ -280,6 +324,24 @@ final class GameScene: SKScene {
         // a view attaches.
         uiLayer.addChild(thumbstick)
         thumbstick.layout(for: size, safeAreaInsets: .zero)
+
+        // `PulseButton`'s `onPress` closure captures `self`, so it is
+        // built here (once `self` is fully initialized) rather than as a
+        // stored-property initializer the way `thumbstick` is. Hidden
+        // until the first `.gameplay` entry, mirroring `thumbstick`'s own
+        // headless-safe layout call above.
+        pulseButton = PulseButton(onPress: { [weak self] in
+            self?.handlePulsePress()
+        })
+        pulseButton.isHidden = true
+        uiLayer.addChild(pulseButton)
+        layoutPulseButton()
+
+        // The pulse's ring visual: one reused node, hidden until the
+        // ability first fires (see `PulseRingNode`'s own "One reused
+        // instance" doc note). Mounted directly under `effectsLayer`, the
+        // same convention `HitEffects`' transient combat visuals follow.
+        effectsLayer.addChild(pulseRing)
 
         // Repositions `worldLayer` (never `cameraNode`) to keep
         // `playerWorldPosition` centred on screen, and forwards the same
@@ -387,12 +449,33 @@ final class GameScene: SKScene {
             // HP/infection state.)
             runStats.reset()
             thumbstick.isRunActive = true
+            // `PulseButton` has no `isRunActive`-style gate of its own
+            // (see that type's own "Mount instructions" doc note), so the
+            // scene owns hiding it outside `.gameplay` -- otherwise a
+            // live `AccessibleSKView` mirror would sit over the menu's
+            // bottom-left quadrant and forward touches into
+            // `dispatchTouch`. Its cooldown-derived visual is refreshed
+            // every `.gameplay` frame from `advanceMovementAndCamera(
+            // currentTime:)` -- but not before the *first* such frame runs,
+            // so the button is snapped to "ready" here too rather than
+            // opening RUN AGAIN still wearing last run's dimmed wedge.
+            pulseButton.isHidden = false
+            // ... and a fresh ability for a fresh run, the same reason
+            // `raccoonSpawnDirector.reset()` / `startPickups()` /
+            // `runStats.reset()` above exist: without this, a run that
+            // ended mid-cooldown burns up to `PulseAbility.cooldownSeconds`
+            // of the next one, and the player's first press does nothing --
+            // a dropped input, which is exactly what this ability's "must
+            // respond to every press" product gate forbids.
+            pulseAbility.reset()
+            pulseButton.setCooldownProgress(pulseCooldownProgress())
             cameraController.update(focus: spawn, viewportSize: size)
             #if DEBUG
             assertSceneInvariants()
             #endif
         case .menu, .death, .highScores:
             thumbstick.isRunActive = false
+            pulseButton.isHidden = true
         }
     }
 
@@ -681,7 +764,117 @@ final class GameScene: SKScene {
                 direction: player.facing,
                 raccoons: raccoonSpawnDirector.targetCandidates
             )
+
+            // `CYBERPUN-17-10-t3`: tick the pulse's cooldown down every
+            // frame of an active run (independent of whether a press ever
+            // lands -- `PulseAbility.update(deltaTime:)` is a no-op once
+            // ready) and drive `pulseButton`'s cooldown visual from it, the
+            // same "decision layer owns the number, presentation layer
+            // reads it" split `WeaponFiringController`/`WeaponOverlayRenderer`
+            // already establish for the auto-fire weapon.
+            pulseAbility.update(deltaTime: deltaTime)
+            pulseButton.setCooldownProgress(pulseCooldownProgress())
         }
+    }
+
+    /// `1.0` == fully ready, `0.0` == a cooldown was just started -- the
+    /// exact scale `PulseButton.setCooldownProgress(_:)` expects, derived
+    /// from `PulseAbility`'s own `cooldownRemaining`/`cooldownSeconds`
+    /// rather than a duplicated countdown kept on this scene.
+    private func pulseCooldownProgress() -> CGFloat {
+        guard PulseAbility.cooldownSeconds > 0 else { return 1 }
+        let progress = 1 - (pulseAbility.cooldownRemaining / PulseAbility.cooldownSeconds)
+        return CGFloat(max(0, min(1, progress)))
+    }
+
+    // MARK: - Pulse ability (`CYBERPUN-17-10-t3`)
+
+    /// `pulseButton.onPress`'s production target: fires the ability
+    /// against `raccoonSpawnDirector`'s live swarm. Thin on purpose -- the
+    /// whole decide-apply-render sequence lives in
+    /// `applyPulseTrigger(raccoons:)`, which is exposed (not `private`)
+    /// precisely so `PulseSceneWiringTests` can drive it directly against
+    /// a hand-built swarm, the same "test the wiring without needing the
+    /// spawn director's own randomness/timing" shape
+    /// `PlayerCombatSceneWiringTests` already established for
+    /// `Player.update(...)`.
+    private func handlePulsePress() {
+        applyPulseTrigger(raccoons: raccoonSpawnDirector.targetCandidates)
+    }
+
+    /// Fires `pulseAbility.trigger(...)` from the player's current
+    /// position/level against `raccoons`, applying every hit's damage and
+    /// pushed position (`applyPulseHit(_:)`) and spawning/replaying
+    /// `pulseRing` -- all within this one call, so a press's whole effect
+    /// (push, damage, ring) lands in a single update tick.
+    ///
+    /// Returns `nil` -- doing nothing observable -- exactly when
+    /// `pulseAbility.trigger(...)` itself does (the ability is on
+    /// cooldown), per that method's own "no waiting out a cooldown"
+    /// contract; `PulseButton` itself never gates a press (see that
+    /// type's own "product gate 1" doc note), so this is the one place
+    /// cooldown rejection actually takes effect. A `nil`
+    /// `playerWorldPosition`/`playerCombat` (no run mounted yet -- not
+    /// reachable in a real build once `pulseButton` is hidden outside
+    /// `.gameplay`, but this stays total for a direct test call) is also a
+    /// no-op.
+    @discardableResult
+    func applyPulseTrigger(raccoons: [TargetSelection.Candidate]) -> PulseAbility.Result? {
+        guard let playerWorldPosition, let playerCombat else { return nil }
+
+        guard let result = pulseAbility.trigger(
+            playerPosition: playerWorldPosition,
+            level: playerCombat.xpLevelSystem.level,
+            raccoons: raccoons,
+            obstructions: groundPlane?.residentObstructions ?? [],
+            rng: &pulseRNG
+        ) else {
+            return nil
+        }
+
+        for hit in result.hits {
+            applyPulseHit(hit)
+        }
+
+        let ringPosition = effectsSpacePoint(fromWorldSpace: IsometricProjection.tileToScreen(playerWorldPosition))
+        pulseRing.play(radiusTiles: result.radius, at: ringPosition)
+
+        return result
+    }
+
+    /// Applies one `PulseAbility.Hit`'s damage and pushed position to the
+    /// live `RaccoonNode`: `takeDamage(_:)` (already public via
+    /// `Damageable`), then the same tile-to-screen-position/depth
+    /// projection every other world-space actor in this repo follows
+    /// (`PlayerNode.updateDepth`/`RaccoonSpawnDirector.applyScreenPosition`),
+    /// plus `raccoonSpawnDirector.syncPushedPosition(_:for:)` so the
+    /// swarm director's own tracked position agrees -- without that call,
+    /// the very next per-frame `raccoonSpawnDirector.update(...)` would
+    /// re-derive this same raccoon's screen position from its own stale,
+    /// pre-push tile position and silently undo the shove the same frame
+    /// it landed (see that method's own doc comment).
+    private func applyPulseHit(_ hit: PulseAbility.Hit) {
+        hit.raccoon.takeDamage(hit.damage)
+
+        let rawPosition = IsometricProjection.tileToScreen(hit.newPosition)
+        hit.raccoon.position = PixelCrispness.snappedPosition(for: rawPosition, scale: deviceScale)
+        hit.raccoon.updateDepth(atTilePosition: hit.newPosition)
+
+        raccoonSpawnDirector.syncPushedPosition(hit.newPosition, for: hit.raccoon)
+    }
+
+    /// Converts a `worldLayer`-space point (e.g. raw
+    /// `IsometricProjection.tileToScreen` output) into `effectsLayer`'s
+    /// own space, so a node parented under `effectsLayer` -- which
+    /// nothing camera-offsets -- draws where the world actually is rather
+    /// than `worldLayer.position` away from it. The same conversion
+    /// `Player`'s own private `effectsSpacePoint(fromWorldSpace:)`
+    /// performs for bullets/flashes/puffs; restated here (rather than
+    /// reached into, since `Player` holds no reference back to this
+    /// scene) for `pulseRing`, the only other `effectsLayer` consumer of a
+    /// raw world-space point.
+    private func effectsSpacePoint(fromWorldSpace point: CGPoint) -> CGPoint {
+        effectsLayer.convert(point, from: worldLayer)
     }
 
     // MARK: - Pickups (`CYBERPUN-17-11` PR 3)
@@ -925,6 +1118,7 @@ final class GameScene: SKScene {
         centreCameraOnScene()
         activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
         thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+        layoutPulseButton()
         #if DEBUG
         assertSceneInvariants()
         #endif
@@ -935,6 +1129,30 @@ final class GameScene: SKScene {
         centreCameraOnScene()
         activeScreen?.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
         thumbstick.layout(for: size, safeAreaInsets: currentSafeAreaInsets)
+        layoutPulseButton()
+    }
+
+    /// Positions `pulseButton` at `FloatingThumbstickNode
+    /// .reservedPulseButtonSlot(forSize:safeAreaInsets:)`'s *centre*
+    /// (`slot.midX`/`slot.midY`, never `slot.origin`) -- `PulseButton`
+    /// draws its plate centred on its own origin, so anchoring from the
+    /// slot's origin would land the button half a width off the reserved
+    /// slot, per that button's own "Mount instructions" doc note.
+    private func layoutPulseButton() {
+        // `SKScene.init(size:)` calls `-[SKScene setSize:]` synchronously
+        // inside `super.init(size:)`, which fires `didChangeSize(_:)` -- and
+        // therefore this method -- *before* `commonInit()` has run and
+        // assigned `pulseButton`. Guard rather than force-unwrap so that
+        // first, pre-`commonInit` call is a harmless no-op; every layout
+        // point that matters (`commonInit()` itself, `didMove(to:)`, and
+        // every later `didChangeSize(_:)`) runs after `pulseButton` exists
+        // and lays it out for real.
+        guard let pulseButton else { return }
+        let slot = FloatingThumbstickNode.reservedPulseButtonSlot(
+            forSize: size,
+            safeAreaInsets: currentSafeAreaInsets
+        )
+        pulseButton.position = CGPoint(x: slot.midX, y: slot.midY)
     }
 
     /// Only applied once the scene is presented (and on every size change,
