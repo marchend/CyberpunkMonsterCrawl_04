@@ -1,3 +1,4 @@
+import os
 import SpriteKit
 import UIKit
 
@@ -43,7 +44,14 @@ final class DeathScreenNode: ScreenNode {
     /// `runElapsedSeconds` at the moment this screen enters, so the values
     /// shown are exactly the ones the run just ended with -- never a stale
     /// snapshot taken earlier.
-    private let runSummaryProvider: () -> RunSummary
+    ///
+    /// `nil` means "no run happened" (`.death` entered without a player
+    /// ever having been mounted -- a test, or the DEBUG `LaunchGotoState`
+    /// hook). That case renders the zero placeholder below but records
+    /// **nothing**: a fake `score: 0` row persisted into the player's real
+    /// table is a far stronger side effect than a well-defined return
+    /// value needs to be.
+    private let runSummaryProvider: () -> RunSummary?
 
     /// The persisted high-score table `willEnter()` records this run's
     /// summary into.
@@ -51,21 +59,29 @@ final class DeathScreenNode: ScreenNode {
 
     private static let rowCount = 8
 
+    /// Rendered when `runSummaryProvider()` returns `nil` (no run
+    /// happened). Display-only: `willEnter()` never records it, so it can
+    /// never reach `HighScoreStore`.
+    private static let noRunSummary = RunSummary(
+        survivedSeconds: 0, raccoonsDown: 0, level: 1, rabies: 0,
+        damageDealt: 0, killBonus: 0, survivalBonus: 0, score: 0
+    )
+
     /// - Parameters:
     ///   - onRunAgain: run when RUN AGAIN is tapped. `GameViewController`
     ///     passes `stateMachine.transition(to: .gameplay)`.
     ///   - onBackToMenu: run when the back-to-menu entry is tapped.
     ///     `GameViewController` passes `stateMachine.transition(to: .menu)`.
-    ///   - runSummaryProvider: computes the just-ended run's `RunSummary`.
-    ///     Called exactly once per `willEnter()` -- never on a mere
-    ///     `layout(for:safeAreaInsets:)` pass (a rotation) -- so a fixture
-    ///     closure in a test can assert it is called the expected number
-    ///     of times.
+    ///   - runSummaryProvider: computes the just-ended run's `RunSummary`,
+    ///     or `nil` when no run happened. Called exactly once per
+    ///     `willEnter()` -- never on a mere `layout(for:safeAreaInsets:)`
+    ///     pass (a rotation) -- so a fixture closure in a test can assert
+    ///     it is called the expected number of times.
     ///   - highScoreStore: the table `willEnter()` records into.
     init(
         onRunAgain: @escaping () -> Void,
         onBackToMenu: @escaping () -> Void,
-        runSummaryProvider: @escaping () -> RunSummary,
+        runSummaryProvider: @escaping () -> RunSummary?,
         highScoreStore: HighScoreStore
     ) {
         self.runSummaryProvider = runSummaryProvider
@@ -116,8 +132,19 @@ final class DeathScreenNode: ScreenNode {
 
     func willEnter() {
         let summary = runSummaryProvider()
-        for (label, text) in zip(summaryRowLabels, Self.rowTexts(for: summary)) {
+        for (label, text) in zip(summaryRowLabels, Self.rowTexts(for: summary ?? Self.noRunSummary)) {
             label.text = text
+        }
+
+        // Nothing to record when no run happened: `.death` reached without
+        // a player having been mounted is a test/DEBUG-hook path, and
+        // persisting its placeholder zeros would append a fake
+        // `score: 0` / `SURVIVED 00:00` row to the player's real table --
+        // permanently, and to a table that could then never show its
+        // empty state again.
+        guard let summary else {
+            lastRecordedRunID = nil
+            return
         }
 
         // Recorded exactly once per death: this method fires once per
@@ -133,36 +160,39 @@ final class DeathScreenNode: ScreenNode {
             // Persistence failing must not stop the summary from being
             // shown -- the player still sees what they earned this run,
             // there is simply nothing new to highlight on the high-scores
-            // screen.
+            // screen. Logged rather than merely swallowed: without this,
+            // "this run didn't make the table" and "the write failed" look
+            // identical from the outside, and `HighScoreStore` went to
+            // some trouble to tell its failures apart.
+            GameLog.persistence.error(
+                "death screen could not record this run: \(String(describing: error), privacy: .public)"
+            )
             lastRecordedRunID = nil
         }
     }
 
     func willExit() {}
 
-    /// Stacks the title, all eight rows and both buttons in one evenly
-    /// spaced vertical sequence between the safe-area-adjusted top and
-    /// bottom edges, so nothing is clipped or pushed under a notch/home
-    /// indicator in either orientation -- the same "position every item at
-    /// a fixed fraction of the available height" shape that keeps this
-    /// correct regardless of how tall or short `size` is, rather than a
-    /// set of hand-picked offsets tuned for one aspect ratio.
+    /// Stacks the title and all eight rows above a reserved, bottom-pinned
+    /// block holding the two buttons, between the safe-area-adjusted top
+    /// and bottom edges, so nothing is clipped or pushed under a
+    /// notch/home indicator in either orientation.
+    ///
+    /// Delegated to `ScreenStackLayout.position(...)` -- see there for why
+    /// the buttons get a height-aware reserved block instead of a share of
+    /// one even spacing: an 852x393 landscape gave eleven evenly spaced
+    /// items ~32.7pt between centres, which the 72pt RUN AGAIN and 48pt
+    /// BACK TO MENU overlapped by ~23pt.
     func layout(for size: CGSize, safeAreaInsets: UIEdgeInsets) {
         background.size = size
         background.position = .zero
 
-        let topLimit = size.height / 2 - safeAreaInsets.top
-        let bottomLimit = -size.height / 2 + safeAreaInsets.bottom
-        let availableHeight = topLimit - bottomLimit
-
-        let items: [SKNode] = [titleLabel] + summaryRowLabels + [runAgainButton, backToMenuButton]
-        let margin = availableHeight * 0.06
-        let usableHeight = max(0, availableHeight - margin * 2)
-        let step = items.count > 1 ? usableHeight / CGFloat(items.count - 1) : 0
-
-        for (index, item) in items.enumerated() {
-            item.position = CGPoint(x: 0, y: topLimit - margin - step * CGFloat(index))
-        }
+        ScreenStackLayout.position(
+            flexibleItems: [titleLabel] + summaryRowLabels,
+            pinnedToBottom: [runAgainButton, backToMenuButton],
+            topLimit: size.height / 2 - safeAreaInsets.top,
+            bottomLimit: -size.height / 2 + safeAreaInsets.bottom
+        )
     }
 
     /// SURVIVED/SURVIVAL formatting: `RunScoreCalculator`'s own doc comment

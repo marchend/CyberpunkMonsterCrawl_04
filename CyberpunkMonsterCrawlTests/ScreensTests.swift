@@ -397,6 +397,80 @@ final class ScreensTests: XCTestCase {
         XCTAssertNotEqual(death.runAgainButton.position.y, death.backToMenuButton.position.y)
     }
 
+    /// The ticket's "lays out in portrait **and landscape**", pinned by
+    /// geometry rather than by two `position.y` values merely differing --
+    /// which passes at *any* amount of overlap.
+    ///
+    /// Landscape is the case that actually failed: eleven evenly spaced
+    /// items across an 852x393 safe area left ~32.7pt between centres,
+    /// while RUN AGAIN is 64pt tall (72pt with its accent frame) and BACK
+    /// TO MENU 48pt, so the two plates overlapped by ~23pt and the SCORE
+    /// row landed inside RUN AGAIN. Overlapping `ButtonNode`s also make
+    /// `GameScene.routeTouch(at:)`'s `atPoint(_:)` result ambiguous in the
+    /// shared region, so this is a lost tap, not just a cosmetic smudge.
+    func test_deathScreenNode_layout_keepsButtonAndRowFramesDisjoint_inBothOrientations() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = makeDeathScreen(highScoreStore: store)
+        // Rows have to carry their real text before their frames mean
+        // anything -- an empty `SKLabelNode` has an empty frame, which
+        // intersects nothing.
+        death.willEnter()
+
+        let orientations: [(name: String, size: CGSize, insets: UIEdgeInsets)] = [
+            ("portrait", CGSize(width: 393, height: 852), UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)),
+            ("landscape", CGSize(width: 852, height: 393), UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)),
+        ]
+
+        for orientation in orientations {
+            death.layout(for: orientation.size, safeAreaInsets: orientation.insets)
+
+            let runAgainFrame = death.runAgainButton.calculateAccumulatedFrame()
+            let backToMenuFrame = death.backToMenuButton.calculateAccumulatedFrame()
+            XCTAssertFalse(
+                runAgainFrame.intersects(backToMenuFrame),
+                "\(orientation.name): RUN AGAIN \(runAgainFrame) overlaps BACK TO MENU \(backToMenuFrame)"
+            )
+
+            let lastRow = try XCTUnwrap(
+                Self.labelNodes(in: death.node).first { $0.name == "death.summaryRow.7" },
+                "\(orientation.name): the SCORE row must exist"
+            )
+            XCTAssertFalse(
+                lastRow.calculateAccumulatedFrame().intersects(runAgainFrame),
+                "\(orientation.name): the SCORE row overlaps RUN AGAIN's plate"
+            )
+        }
+    }
+
+    /// `.death` entered without a run ever having mounted a player (a
+    /// direct `transition(to: .death)` -- a test, or the DEBUG
+    /// `LaunchGotoState` hook) must persist **nothing**. The previous
+    /// all-zero fallback summary was recorded like any other, so every
+    /// such launch permanently appended a fake `score: 0` /
+    /// `SURVIVED 00:00` row to the real table -- after which that device's
+    /// high-scores screen could never show its empty state again.
+    func test_deathScreenNode_willEnter_withNoRun_rendersZerosButRecordsNothing() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        let death = DeathScreenNode(
+            onRunAgain: {},
+            onBackToMenu: {},
+            runSummaryProvider: { nil },
+            highScoreStore: store
+        )
+
+        death.willEnter()
+
+        XCTAssertEqual(try store.sortedEntries().count, 0, "a run that never happened must not make the table")
+        XCTAssertNil(death.lastRecordedRunID)
+        let rowTexts = Self.labelNodes(in: death.node).map { $0.text ?? "" }
+        XCTAssertTrue(
+            rowTexts.contains("SCORE: 0"),
+            "the screen must still render a well-defined placeholder, found \(rowTexts)"
+        )
+    }
+
     /// AC1: dying shows all eight rows with the run's real values, computed
     /// via `RunScoreCalculator` from fixture `RunSummaryStats`/`RunStats`/
     /// `XPLevelSystem` state (see `makeFixtureRunSummary()`).
@@ -534,6 +608,39 @@ final class ScreensTests: XCTestCase {
 
         let emptyState = highScores.node.children.first { $0.name == "highScores.emptyState" } as? SKLabelNode
         XCTAssertEqual(emptyState?.isHidden, false)
+    }
+
+    /// The same landscape geometry check for the variable-length table: a
+    /// full ten-row table plus the title and the button is the worst case,
+    /// and the one the old even-spacing scheme squeezed hardest (twelve
+    /// items, ~29.8pt between centres under a 48pt button).
+    func test_highScoresScreenNode_layout_fullTable_keepsLastRowClearOfTheButton_inLandscape() throws {
+        let (store, cleanup) = makeIsolatedHighScoreStore()
+        defer { cleanup() }
+        for score in 1...HighScoreStore.defaultMaxEntries {
+            try store.recordRun(RunSummary(
+                survivedSeconds: 10, raccoonsDown: 1, level: 1, rabies: 0,
+                damageDealt: score, killBonus: 0, survivalBonus: 0, score: score
+            ))
+        }
+        let highScores = HighScoresScreenNode(onBackToMenu: {}, highScoreStore: store)
+        highScores.layout(
+            for: CGSize(width: 852, height: 393),
+            safeAreaInsets: UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)
+        )
+
+        highScores.willEnter()
+
+        let lastRow = try XCTUnwrap(
+            Self.labelNodes(in: highScores.node)
+                .first { $0.name == "highScores.row.\(HighScoreStore.defaultMaxEntries - 1)" },
+            "a full table must render its last row"
+        )
+        XCTAssertFalse(
+            lastRow.calculateAccumulatedFrame()
+                .intersects(highScores.backToMenuButton.calculateAccumulatedFrame()),
+            "the last high-score row overlaps BACK TO MENU in landscape"
+        )
     }
 
     /// AC4's highlight must key off the entry's stable `id`, not its score:

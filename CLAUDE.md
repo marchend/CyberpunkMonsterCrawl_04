@@ -43,11 +43,11 @@ project.yml                          XcodeGen spec (app + test targets)
 setup.sh, .gitignore
 CyberpunkMonsterCrawl/
   AppDelegate.swift, SceneDelegate.swift   UIKit scene wiring
-  GameViewController.swift                 composition root: hosts the SKView, builds GameScene, registers all four screens, presents it
+  GameViewController.swift                 composition root: hosts the SKView, builds GameScene, registers all four screens, presents it; in DEBUG only (compiled out of Release with the hook itself) applies Sources/Debug/LaunchGotoState.swift, the SCAFFOLDING(CYBERPUN-17-13) -goto/GOTO_STATE launch override that lets a journey reach .death before the HP-reaches-zero trigger exists
   GameStateMachine.swift                   menu/gameplay/death/highScores GKStateMachine wrapper
   GameScene.swift                          three persistent layers (worldLayer/effectsLayer/uiLayer), state-driven screen registry, UI-first touch dispatch; mounts the streamed ground plane + PlayerNode on entry to .gameplay, snapping the player's screen position via PixelCrispness.snappedPosition on every mount/reposition; mounts the floating thumbstick in uiLayer and routes touchesBegan/Moved/Ended/Cancelled to it (activeStickTouch); runs the per-frame run pipeline in advanceMovementAndCamera(currentTime:): thumbstick -> PlayerMovementController -> CollisionResolver -> PlayerNode position/depth/visual state -> CameraController (CYBERPUN-17-7). The SCAFFOLDING(CYBERPUN-17-7) PlayerScaffoldingDriver demo vector, its debugPlayerDemoEnabled flag and the debug camera pan are deleted
   Layers/LayerConstants.swift              named zPosition bands enforcing worldLayer < effectsLayer < uiLayer
-  Layers/ScreenNode.swift                  ScreenNode protocol + PlaceholderScreenNode test double
+  Layers/ScreenNode.swift                  ScreenNode protocol + ScreenStackLayout (the shared vertical stack both content screens lay out with: flexible title/rows even-spaced above a height-aware, bottom-pinned button block, so a 72pt RUN AGAIN and a 48pt BACK TO MENU cannot overlap in landscape) + PlaceholderScreenNode test double
   Layers/TouchResponder.swift              touch-consumer protocol + the "scene is the sole dispatcher" contract
   Layers/ButtonNode.swift                  minimal tappable button (plate + label, optional neon accent frame) delivered to via TouchResponder
   Layers/SceneInvariants.swift             runtime audits: cumulative-z band escapes, nodes bypassing scene touch dispatch
@@ -56,8 +56,8 @@ CyberpunkMonsterCrawl/
   Layers/AccessibleSKView.swift            the hosted SKView subclass: publishes one UIAccessibilityElement per accessible uiLayer node, with a screen-space accessibilityFrame derived from the same coordinate path routeTouch(at:) hit-tests, so identifier/element-driven taps (XCUITest, the runtime probe, VoiceOver) land on the button instead of missing it
   Screens/MenuScreenNode.swift             the menu: title + neon PLAY button + placeholder HIGH SCORES entry, registered for .menu
   Screens/GameplayScreenNode.swift         skeleton .gameplay screen; mounts no full-bleed backdrop and, since CYBERPUN-17-5-t4, no text of its own, and (since CYBERPUN-17-7-t5) no accessibility marker either — the streamed city + player render through it, world touches fall through, and the screen mounts no children at all until the real HUD (CYBERPUN-17-12) lands
-  Screens/DeathScreenNode.swift            skeleton .death screen; real RUN AGAIN / back-to-menu buttons, SCAFFOLDING(CYBERPUN-17-13) placeholder run-summary content
-  Screens/HighScoresScreenNode.swift       skeleton .highScores screen; real back-to-menu button, SCAFFOLDING(CYBERPUN-17-13) placeholder scores content
+  Screens/DeathScreenNode.swift            the real .death screen: eight RunScoreCalculator rows + RUN AGAIN / back-to-menu buttons, recorded into HighScoreStore once per willEnter() - and never when the run summary is nil (no run happened), so a -goto death launch cannot persist a fake score: 0 row; a swallowed record failure is logged via Sources/Diagnostics/GameLog.swift's GameLog.persistence
+  Screens/HighScoresScreenNode.swift       the real .highScores screen: the persisted table rebuilt every willEnter(), the just-finished run highlighted by id, real back-to-menu button; an unreadable table still renders as the empty state but is now logged via GameLog.persistence rather than silently swallowed
   PrivacyInfo.xcprivacy, *.entitlements
   Assets.xcassets/                         the single asset catalog for the target: Atlas/ (10 atlas-sheet imagesets, 1x only), Buildings/ (12 building-sprite imagesets, building_00...building_11, 1x only)
     AppIcon.appiconset/                    stub AppIcon slot (art not yet imported)

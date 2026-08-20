@@ -1,3 +1,4 @@
+import os
 import SpriteKit
 import UIKit
 
@@ -122,7 +123,20 @@ final class HighScoresScreenNode: ScreenNode {
         }
         rowLabels.removeAll()
 
-        let entries = (try? highScoreStore.sortedEntries()) ?? []
+        var entries: [HighScoreEntry] = []
+        do {
+            entries = try highScoreStore.sortedEntries()
+        } catch {
+            // Logged rather than merely swallowed: an unreadable (i.e.
+            // quarantined, `HighScoreStoreError.storedDataUnreadable`)
+            // payload renders below as the "NO RUNS YET" empty state, so
+            // without this line the screen tells the player their table is
+            // empty when it is in fact intact-but-unreadable, and nothing
+            // anywhere records that the read failed.
+            GameLog.persistence.error(
+                "high-scores screen could not read the table: \(String(describing: error), privacy: .public)"
+            )
+        }
         emptyStateLabel.isHidden = !entries.isEmpty
 
         let highlightedID = highlightedRunIDProvider()
@@ -140,13 +154,14 @@ final class HighScoresScreenNode: ScreenNode {
         }
     }
 
-    /// Stacks the title, the row list (or the empty-state message when
-    /// there are no entries) and the back-to-menu button in one evenly
-    /// spaced vertical sequence between the safe-area-adjusted top and
-    /// bottom edges -- the same shape `DeathScreenNode.layout(for:
-    /// safeAreaInsets:)` uses, restated here since the row *count* varies
-    /// (this screen's list is 0...`HighScoreStore.defaultMaxEntries` long)
-    /// where that screen's is fixed at eight.
+    /// Stacks the title and the row list (or the empty-state message when
+    /// there are no entries) above a reserved, bottom-pinned block holding
+    /// the back-to-menu button, between the safe-area-adjusted top and
+    /// bottom edges -- the same `ScreenStackLayout.position(...)` call
+    /// `DeathScreenNode.layout(for:safeAreaInsets:)` makes, now shared
+    /// rather than restated, so a full table (twelve items in landscape,
+    /// which the old even-spacing scheme squeezed to ~29.8pt between
+    /// centres under a 48pt button) cannot overlap the button.
     ///
     /// A no-op before the first real `layout(for:safeAreaInsets:)` call
     /// (`lastLayoutSize == .zero`), which only a headless construction
@@ -156,18 +171,13 @@ final class HighScoresScreenNode: ScreenNode {
         let size = lastLayoutSize
         let safeAreaInsets = lastLayoutSafeAreaInsets
 
-        let topLimit = size.height / 2 - safeAreaInsets.top
-        let bottomLimit = -size.height / 2 + safeAreaInsets.bottom
-        let availableHeight = topLimit - bottomLimit
-
         let middleItems: [SKNode] = rowLabels.isEmpty ? [emptyStateLabel] : rowLabels
-        let items: [SKNode] = [titleLabel] + middleItems + [backToMenuButton]
-        let margin = availableHeight * 0.06
-        let usableHeight = max(0, availableHeight - margin * 2)
-        let step = items.count > 1 ? usableHeight / CGFloat(items.count - 1) : 0
 
-        for (index, item) in items.enumerated() {
-            item.position = CGPoint(x: 0, y: topLimit - margin - step * CGFloat(index))
-        }
+        ScreenStackLayout.position(
+            flexibleItems: [titleLabel] + middleItems,
+            pinnedToBottom: [backToMenuButton],
+            topLimit: size.height / 2 - safeAreaInsets.top,
+            bottomLimit: -size.height / 2 + safeAreaInsets.bottom
+        )
     }
 }

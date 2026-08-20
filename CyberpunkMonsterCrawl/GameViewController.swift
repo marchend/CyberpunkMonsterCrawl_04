@@ -96,14 +96,20 @@ final class GameViewController: UIViewController {
         let scene = makeGameScene(size: view.bounds.size)
         skView.presentScene(scene)
 
-        // `CYBERPUN-17-13` PR 2: honour a `LaunchGotoState` test hook, if
-        // present, so a `.mothership` journey can reach `.death`/
-        // `.highScores` directly -- a normal launch has neither the
-        // argument nor the environment variable set, so `resolve()`
-        // returns `nil` and this is a no-op for a real player.
+        // `SCAFFOLDING(CYBERPUN-17-13)`: honour the DEBUG-only
+        // `LaunchGotoState` test hook, if present, so a `.mothership`
+        // journey can reach `.death`/`.highScores` before the
+        // HP-reaches-zero -> `.death` trigger exists. Compiled out of
+        // Release along with `LaunchGotoState` itself, so a shipped binary
+        // has no launch-time state override at all; in DEBUG a normal
+        // launch has neither the argument nor the environment variable
+        // set, so `resolve()` returns `nil` and this is a no-op.
+        #if DEBUG
         applyLaunchGotoStateIfNeeded(on: scene)
+        #endif
     }
 
+    #if DEBUG
     /// Drives whatever legal transition sequence reaches `LaunchGotoState
     /// .resolve()`'s target from the scene's initial `.menu` state --
     /// `.death` is only reachable *through* `.gameplay` (see
@@ -122,6 +128,7 @@ final class GameViewController: UIViewController {
             scene.stateMachine.transition(to: .highScores)
         }
     }
+    #endif
 
     /// The container's mirrors are geometry, so they have to follow every
     /// layout pass - a rotation resizes the scene and moves every
@@ -168,17 +175,26 @@ final class GameViewController: UIViewController {
             },
             runSummaryProvider: { [weak scene] in
                 // A `nil` scene/playerCombat means `.death` was entered
-                // without a run ever having mounted a player (not reachable
-                // from real gameplay -- `.death` is only a legal transition
-                // from `.gameplay`, which always mounts one first -- but
-                // still possible from a direct `stateMachine.transition(to:
-                // .death)` call, e.g. in a test). This all-zero fallback
-                // keeps that call site well-defined rather than crashing.
+                // without a run ever having mounted a player -- not
+                // reachable from real gameplay (`.death` is only a legal
+                // transition from `.gameplay`, which always mounts one
+                // first), but reachable from a direct
+                // `stateMachine.transition(to: .death)` call: a test, or
+                // the DEBUG `LaunchGotoState` hook above.
+                //
+                // Returning `nil` rather than an all-zero `RunSummary` is
+                // the difference between "no run to report" and "a run
+                // scoring 0": `DeathScreenNode.willEnter()` persists
+                // whatever it is handed, so a manufactured zero summary
+                // permanently appended a fake `score: 0` /
+                // `SURVIVED 00:00` row to the real high-score table on
+                // every `-goto death` launch -- after which that device's
+                // high-scores screen could never show its empty state
+                // again. `nil` still renders (as an all-zero, unrecorded
+                // placeholder), so the call site stays well-defined
+                // without the persistent side effect.
                 guard let scene, let playerCombat = scene.playerCombat else {
-                    return RunSummary(
-                        survivedSeconds: 0, raccoonsDown: 0, level: 1, rabies: 0,
-                        damageDealt: 0, killBonus: 0, survivalBonus: 0, score: 0
-                    )
+                    return nil
                 }
                 return RunScoreCalculator.summarize(
                     runSummaryStats: scene.runStats,
