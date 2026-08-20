@@ -195,6 +195,13 @@ final class PulseRingNodeTests: XCTestCase {
     }
 
     func test_scale_neverDropsBelowOne_forAVanishinglySmallOrZeroRadius() {
+        // Exact equality on purpose: `max(1, (projectedWidthPoints / ringWidth)
+        // .rounded())` returns the literal `1.0` floor for these radii, so there
+        // is no floating-point residue for a tolerance to absorb -- and this
+        // test's whole point (see
+        // `test_scale_isAWholeInteger_onBothAxes_forEveryRealRadius`) is that
+        // the scale is a *whole integer*, which a tolerance is exactly the
+        // thing that would let a non-integer slip past.
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)

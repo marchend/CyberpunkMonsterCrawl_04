@@ -9,10 +9,15 @@ import UIKit
 /// the story's "Out of scope" section: "the run-summary rows \u2014 skeleton
 /// screens are enough here").
 ///
-/// // SCAFFOLDING(CYBERPUN-17-16): the placeholder background + label below
-/// stand in for the run-summary rows. Integration checkpoint #2 exercises
-/// the full gameplay -> death loop end to end and is expected to drive the
-/// real summary content that replaces this placeholder.
+/// // SCAFFOLDING(CYBERPUN-17-13): the placeholder background + label below
+/// stand in for the run-summary rows. `CYBERPUN-17-13` is the story that
+/// replaces them with the real rows (its data layer -- `RunScoreCalculator`
+/// / `RunSummary` / `HighScoreStore` -- has landed; the UI PR mounts them
+/// here), so the marker names the ticket that actually owns the removal.
+/// (It previously named `CYBERPUN-17-16`, which is not a filed ticket --
+/// see `WeaponFiringControllerIntegrationTests`' header on this codebase's
+/// no-invented-ticket-IDs rule -- so the grep gate would have outlived any
+/// owner who could clear it.)
 final class DeathScreenNode: ScreenNode {
 
     let node = SKNode()
@@ -24,7 +29,7 @@ final class DeathScreenNode: ScreenNode {
     let backToMenuButton: ButtonNode
 
     private let background: SKSpriteNode
-    // SCAFFOLDING(CYBERPUN-17-16): placeholder label; no real run summary yet.
+    // SCAFFOLDING(CYBERPUN-17-13): placeholder label; no real run summary yet.
     private let placeholderLabel = SKLabelNode(text: "YOU DIED")
 
     /// - Parameters:

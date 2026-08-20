@@ -8,11 +8,15 @@ import UIKit
 /// scope for CYBERPUN-17-2: local high-score persistence is deferred work
 /// (see CLAUDE.md "Deferred work"), so there is nothing real to render yet.
 ///
-/// // SCAFFOLDING(CYBERPUN-17-16): the placeholder background + label below
-/// stand in for the scores list. Integration checkpoint #2 exercises the
-/// full menu -> highScores loop end to end and is expected to drive the real
-/// scores content (once local persistence lands) that replaces this
-/// placeholder.
+/// // SCAFFOLDING(CYBERPUN-17-13): the placeholder background + label below
+/// stand in for the scores list. `CYBERPUN-17-13` is the story that replaces
+/// them with the real list -- local persistence has landed (`HighScoreStore`),
+/// and that story's UI PR renders it here -- so the marker names the ticket
+/// that actually owns the removal. (It previously named `CYBERPUN-17-16`,
+/// which is not a filed ticket -- see
+/// `WeaponFiringControllerIntegrationTests`' header on this codebase's
+/// no-invented-ticket-IDs rule -- so the grep gate would have outlived any
+/// owner who could clear it.)
 final class HighScoresScreenNode: ScreenNode {
 
     let node = SKNode()
@@ -22,7 +26,7 @@ final class HighScoresScreenNode: ScreenNode {
     let backToMenuButton: ButtonNode
 
     private let background: SKSpriteNode
-    // SCAFFOLDING(CYBERPUN-17-16): placeholder label; no real scores list yet.
+    // SCAFFOLDING(CYBERPUN-17-13): placeholder label; no real scores list yet.
     private let placeholderLabel = SKLabelNode(text: "HIGH SCORES \u{2014} COMING SOON")
 
     /// - Parameter onBackToMenu: run when the back-to-menu entry is tapped.
