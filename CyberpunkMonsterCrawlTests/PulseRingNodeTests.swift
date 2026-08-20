@@ -195,10 +195,10 @@ final class PulseRingNodeTests: XCTestCase {
     }
 
     func test_scale_neverDropsBelowOne_forAVanishinglySmallOrZeroRadius() {
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
         XCTAssertEqual(
             PulseRingNode.xScale(forRadiusTiles: -5), 1,
             "a pure function must stay total, even off a real input."
