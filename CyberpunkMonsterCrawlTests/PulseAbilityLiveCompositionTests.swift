@@ -1,4 +1,5 @@
 import CoreGraphics
+import QuartzCore
 import SpriteKit
 import UIKit
 import XCTest
@@ -103,6 +104,48 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
 
     private func makeComposedScene() -> GameScene {
         GameViewController().makeGameScene(size: sceneSize)
+    }
+
+    /// Drains the main run loop until the display link has actually ticked
+    /// `frameCount` times -- i.e. until SpriteKit's own render loop has
+    /// really produced that many frames -- and, if `minimumElapsed` is
+    /// given, until at least that much animation time has also passed.
+    ///
+    /// Raised on PR #53 review: the live test below used to wait a fixed
+    /// `RunLoop.run(until: Date() + 0.7)`, which assumes a loaded CI host
+    /// renders as fast as a quiet one and silently degrades into "assert
+    /// after almost no frames" precisely when the machine is busy. The
+    /// value of that test is the render *pass*, not the duration, so the
+    /// wait is now driven off frames. `timeout` exists only so a display
+    /// link that never fires (an unattached or backgrounded view) fails
+    /// this assertion instead of hanging the suite.
+    @discardableResult
+    private func renderRealFrames(
+        _ frameCount: Int,
+        minimumElapsed: TimeInterval = 0,
+        timeout: TimeInterval = 10,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Int {
+        let counter = DisplayLinkFrameCounter()
+        let link = CADisplayLink(target: counter, selector: #selector(DisplayLinkFrameCounter.tick(_:)))
+        link.add(to: .main, forMode: .common)
+        defer { link.invalidate() }
+
+        let start = Date()
+        while counter.frames < frameCount || Date().timeIntervalSince(start) < minimumElapsed {
+            guard Date().timeIntervalSince(start) < timeout else { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+
+        XCTAssertGreaterThanOrEqual(
+            counter.frames, frameCount,
+            "SpriteKit rendered only \(counter.frames) of the \(frameCount) frames this test needs "
+                + "within \(timeout)s -- the real render pass this test exists to exercise did not happen.",
+            file: file,
+            line: line
+        )
+        return counter.frames
     }
 
     /// Hosts `scene` in a real, presented `SKView` that reports `insets`
@@ -442,8 +485,9 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         scene.dispatchTouch(atScenePoint: CGPoint(x: playFrame.midX, y: playFrame.midY))
         XCTAssertEqual(scene.stateMachine.currentState, .gameplay)
 
-        // Let real frames actually render before pressing the button.
-        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        // Let real frames actually render before pressing the button --
+        // counted frames, not elapsed seconds (see `renderRealFrames`).
+        renderRealFrames(12)
         XCTAssertNotNil(view.window, "the view must still be presented after real rendering has started")
 
         let pulseFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: scene.pulseButton))
@@ -452,9 +496,12 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         XCTAssertTrue(scene.pulseAbility.isOnCooldown, "the live press must actually fire the ability")
 
         // The ring's own full play-through is 8 * PulseRingNode.frameDuration
-        // (0.03s) = 0.24s; give real rendering comfortable headroom past
-        // that before asserting on the app's state.
-        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        // (0.03s) = 0.24s of *animation* time, so this wait has two
+        // independent floors: enough real rendered frames that a render pass
+        // is genuinely what got exercised, and enough elapsed time that the
+        // ring animation actually finished. On a loaded host the frame floor
+        // is what stretches the wait; on a fast one the animation floor is.
+        renderRealFrames(24, minimumElapsed: 8 * PulseRingNode.frameDuration + 0.1)
 
         XCTAssertNotNil(view.window, "the view must still be presented in a window after real rendering")
         XCTAssertEqual(
@@ -489,4 +536,17 @@ private final class FixedInsetsSKView: SKView {
     var injectedSafeAreaInsets: UIEdgeInsets = .zero
 
     override var safeAreaInsets: UIEdgeInsets { injectedSafeAreaInsets }
+}
+
+/// Counts real display-link ticks, so the live-rendering test can wait for
+/// rendered *frames* instead of for wall-clock seconds -- see
+/// `PulseAbilityLiveCompositionTests.renderRealFrames(_:minimumElapsed:timeout:)`.
+/// An `NSObject` subclass because `CADisplayLink`'s target/selector pair is
+/// an Objective-C callback.
+private final class DisplayLinkFrameCounter: NSObject {
+    private(set) var frames = 0
+
+    @objc func tick(_ link: CADisplayLink) {
+        frames += 1
+    }
 }

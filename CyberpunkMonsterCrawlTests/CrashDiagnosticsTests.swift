@@ -5,6 +5,13 @@ import XCTest
 import Darwin
 #endif
 
+// SCAFFOLDING(CYBERPUN-17-10): deleted together with `CrashDiagnostics`
+// itself (and its `AppDelegate` call site) once the still-unfiled
+// crash-cause ticket names the frame the `pulse-ability` journey dies on --
+// these tests exist only to keep the capture honest while it stands, and
+// must not become a reason to keep it.
+
+#if DEBUG
 /// `CYBERPUN-17-10-t5`: the crash-diagnostic capture this task adds so a
 /// probe run that loses the app process leaves a symbolicated trace behind
 /// instead of only "process gone, no frame named"
@@ -127,22 +134,79 @@ final class CrashDiagnosticsTests: XCTestCase {
         XCTAssertTrue(text.contains("<no reason>"))
     }
 
-    // MARK: - persist(_:) actually writes to crashLogURL
+    // MARK: - persist(_:to:) actually writes its report
 
-    func test_persist_writesTheGivenTextToCrashLogURL() throws {
+    /// A throwaway destination, cleaned up after each use.
+    ///
+    /// These tests deliberately never write through the *default*
+    /// destination (`CrashDiagnostics.crashLogURL`): on a simulator shared
+    /// between this suite and a runtime-probe run, a test-written
+    /// `last-crash.log` is a fabricated crash log sitting exactly where the
+    /// investigation looks. `persist(_:to:)` takes the destination for the
+    /// same reason `crashDiagnosticsWriteReport(signalNumber:toFileDescriptor:)`
+    /// takes a file descriptor; `test_crashLogURL_...` above pins where the
+    /// real default points without writing anything to it.
+    private func makeThrowawayReportURL() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CrashDiagnosticsTests-\(UUID().uuidString).log")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    func test_persist_writesTheGivenTextToTheGivenDestination() throws {
+        let destination = makeThrowawayReportURL()
         let marker = "CrashDiagnosticsTests marker \(UUID().uuidString)"
-        CrashDiagnostics.persist(marker)
+        CrashDiagnostics.persist(marker, to: destination)
 
-        let written = try String(contentsOf: CrashDiagnostics.crashLogURL, encoding: .utf8)
+        let written = try String(contentsOf: destination, encoding: .utf8)
         XCTAssertEqual(written, marker)
     }
 
     func test_persist_overwritesAnyPreviouslyWrittenReport() throws {
-        CrashDiagnostics.persist("first report")
-        CrashDiagnostics.persist("second report")
+        let destination = makeThrowawayReportURL()
+        CrashDiagnostics.persist("first report", to: destination)
+        CrashDiagnostics.persist("second report", to: destination)
 
-        let written = try String(contentsOf: CrashDiagnostics.crashLogURL, encoding: .utf8)
+        let written = try String(contentsOf: destination, encoding: .utf8)
         XCTAssertEqual(written, "second report", "only the most recent crash's report should survive")
+    }
+
+    // MARK: - A stale report is cleared, and every report is dated
+
+    /// The evidence this whole file exists to produce is only trustworthy
+    /// if a report found after a run belongs to *that* run -- so a report
+    /// left by a previous launch must be gone before the handlers are
+    /// armed, or a run that never crashed still yields a trace.
+    func test_clearStaleReport_removesAReportLeftByAPreviousLaunch() {
+        let destination = makeThrowawayReportURL()
+        CrashDiagnostics.persist("a trace from three runs ago", to: destination)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path), "precondition")
+
+        XCTAssertTrue(CrashDiagnostics.clearStaleReport(at: destination))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: destination.path),
+            "a stale report must not survive into the next launch"
+        )
+    }
+
+    func test_clearStaleReport_withNoReportPresent_isANoOp() {
+        let destination = makeThrowawayReportURL()
+        XCTAssertFalse(CrashDiagnostics.clearStaleReport(at: destination))
+    }
+
+    func test_install_stampsTheLaunchTimeOntoEveryReport() {
+        CrashDiagnostics.install()
+        XCTAssertFalse(
+            CrashDiagnostics.launchTimestamp.isEmpty,
+            "install() must record when this process armed the handlers"
+        )
+
+        let exception = NSException(name: NSExceptionName("com.example.dated"), reason: "dated", userInfo: nil)
+        let text = CrashDiagnostics.crashReportText(forException: exception)
+        XCTAssertTrue(
+            text.hasPrefix("[launch \(CrashDiagnostics.launchTimestamp)] [crashed "),
+            "a report must be datable to a launch, not just present: \(text.prefix(120))"
+        )
     }
 
     // MARK: - crashDiagnosticsWriteReport(signalNumber:toFileDescriptor:)
@@ -151,9 +215,12 @@ final class CrashDiagnosticsTests: XCTestCase {
     /// throwaway file, without ever raising a real signal -- see this
     /// file's own header note on why that would terminate the test process.
     func test_crashDiagnosticsWriteReport_writesASignalHeaderAndANonEmptyBacktrace() throws {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CrashDiagnosticsTests-\(UUID().uuidString).log")
-        defer { try? FileManager.default.removeItem(at: tempURL) }
+        // The function is allocation-free by design (see its doc comment):
+        // it writes only into buffers allocated ahead of time, so the
+        // preparation `install()` does at launch has to happen here too.
+        crashDiagnosticsPrepareSignalHandlerBuffers()
+
+        let tempURL = makeThrowawayReportURL()
 
         let fd = open(tempURL.path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
         XCTAssertGreaterThanOrEqual(fd, 0, "precondition: the temp file must be openable")
@@ -161,11 +228,38 @@ final class CrashDiagnosticsTests: XCTestCase {
         crashDiagnosticsWriteReport(signalNumber: SIGABRT, toFileDescriptor: fd)
         close(fd)
 
+        let header = "Fatal signal \(SIGABRT)\n"
         let contents = try String(contentsOf: tempURL, encoding: .utf8)
-        XCTAssertTrue(contents.hasPrefix("Fatal signal \(SIGABRT)\n"))
+        // `contains`, not `hasPrefix`: once `install()` has run in this
+        // process the header is prefixed with the launch stamp
+        // (`[launch <ISO-8601>] `), and test order within the process is
+        // not something this assertion should depend on.
+        XCTAssertTrue(contents.contains(header), "the hand-rolled signal header must render exactly: \(contents.prefix(80))")
         XCTAssertGreaterThan(
-            contents.count, "Fatal signal \(SIGABRT)\n".count,
+            contents.count, header.count,
             "backtrace_symbols_fd must have written at least one frame after the header"
+        )
+    }
+
+    /// The digits are rendered by hand (`crashDiagnosticsWriteHeader`), not
+    /// by string interpolation -- which is the whole point, since
+    /// interpolation allocates and `malloc` is not async-signal-safe. So
+    /// pin a multi-digit signal too: a one-digit-only check would not catch
+    /// a reversed or truncated conversion.
+    func test_crashDiagnosticsWriteReport_rendersAMultiDigitSignalNumberCorrectly() throws {
+        crashDiagnosticsPrepareSignalHandlerBuffers()
+
+        let tempURL = makeThrowawayReportURL()
+        let fd = open(tempURL.path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
+        XCTAssertGreaterThanOrEqual(fd, 0, "precondition: the temp file must be openable")
+
+        crashDiagnosticsWriteReport(signalNumber: SIGSEGV, toFileDescriptor: fd)
+        close(fd)
+
+        let contents = try String(contentsOf: tempURL, encoding: .utf8)
+        XCTAssertTrue(
+            contents.contains("Fatal signal \(SIGSEGV)\n"),
+            "expected the decimal digits of \(SIGSEGV): \(contents.prefix(80))"
         )
     }
 
@@ -176,3 +270,4 @@ final class CrashDiagnosticsTests: XCTestCase {
         XCTAssertEqual(Set(CrashDiagnostics.fatalSignals), expected)
     }
 }
+#endif

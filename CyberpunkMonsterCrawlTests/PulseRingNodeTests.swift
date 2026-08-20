@@ -195,21 +195,34 @@ final class PulseRingNodeTests: XCTestCase {
     }
 
     func test_scale_neverDropsBelowOne_forAVanishinglySmallOrZeroRadius() {
-        // `max(1, (projectedWidthPoints / ringWidth).rounded())` returns the
-        // literal `1.0` floor for these radii, so no meaningful float32
-        // residue is expected -- but the result is still a CGFloat computed
-        // through SpriteKit-facing arithmetic, so we compare with a tight
-        // accuracy (sized for a 0..1-magnitude scale factor) rather than
-        // exact equality, which float32 storage cannot guarantee in general.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
+        // Exact equality on purpose: `max(1, (projectedWidthPoints / ringWidth)
+        // .rounded())` returns the literal `1.0` floor for these radii, so there
+        // is no floating-point residue for a tolerance to absorb -- and this
+        // test's whole point (see
+        // `test_scale_isAWholeInteger_onBothAxes_forEveryRealRadius`) is that
+        // the scale is a *whole integer*, which a tolerance is exactly the
+        // thing that would let a non-integer slip past. This holds for the
+        // `-5` cases below for exactly the same reason -- `max(1, ...)`
+        // returns the literal `1.0` for every radius in this test -- so
+        // they are exact too, and nothing in this test is tolerant.
+        //
+        // Restored on PR #53 review after a brief, unjustified detour to
+        // `accuracy: 1e-6`: nothing was ever observed failing here, and the
+        // "float32 cannot guarantee exact equality" rationale contradicted
+        // the two sibling tests above (`..._dividesByTheMeasuredRing_...`,
+        // `..._isAWholeInteger_...`) that run the same arithmetic and stayed
+        // exact. If residue ever does appear on this path, the exact
+        // assertion is the messenger and the finding gets recorded -- not
+        // absorbed by a tolerance.
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
         XCTAssertEqual(
-            PulseRingNode.xScale(forRadiusTiles: -5), 1, accuracy: 1e-6,
+            PulseRingNode.xScale(forRadiusTiles: -5), 1,
             "a pure function must stay total, even off a real input."
         )
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1)
     }
 
     func test_play_appliesTheComputedPerAxisScale() {
