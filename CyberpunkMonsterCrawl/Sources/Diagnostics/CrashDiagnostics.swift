@@ -14,8 +14,11 @@ import Darwin
 // `AppDelegate.application(_:didFinishLaunchingWithOptions:)` and
 // `CrashDiagnosticsTests` should all be deleted together.
 //
-// Gated `#if DEBUG` like `Sources/Debug/LaunchGotoState.swift`, the repo's
-// existing convention for exactly this shape of artifact: a shipped App
+// Gated `#if DEBUG` at both this file and its `AppDelegate` call site --
+// the repo's existing convention for exactly this shape of artifact. (That
+// convention's original exemplar, `Sources/Debug/LaunchGotoState.swift`,
+// was itself deleted as scaffolding by `CYBERPUN-17-13-t3`/PR #51, so it is
+// named here as history rather than as a file to go read.) A shipped App
 // Store binary must not have its process-wide
 // `NSSetUncaughtExceptionHandler` and six signal dispositions hijacked by a
 // debugging aid nobody owns the removal of.

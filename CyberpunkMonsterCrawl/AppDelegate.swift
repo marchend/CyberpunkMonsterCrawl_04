@@ -16,8 +16,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // changes behavior on the non-crashing path.
         //
         // Compiled out of Release along with `CrashDiagnostics` itself
-        // (same gating as the `LaunchGotoState` hook in
-        // `GameViewController`), so a shipped binary keeps its own
+        // (`#if DEBUG` here and at the top of that file -- the
+        // `LaunchGotoState` launch hook this gating was modelled on is
+        // gone, deleted as scaffolding by `CYBERPUN-17-13-t3`/PR #51), so
+        // a shipped binary keeps its own
         // process-wide exception/signal dispositions untouched. Deleted
         // together with that file once the still-unfiled crash-cause ticket
         // names the frame and closes.
