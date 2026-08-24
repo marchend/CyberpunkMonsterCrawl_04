@@ -141,8 +141,19 @@ final class GameViewController: UIViewController {
     /// Builds the scene and registers every screen. Separated from
     /// `viewDidLoad()` so the composition step itself is testable without an
     /// `SKView` (`GameViewControllerCompositionTests`).
-    func makeGameScene(size: CGSize) -> GameScene {
-        let scene = GameScene(size: size)
+    ///
+    /// - Parameter highScoreStore: the persisted table `DeathScreenNode`
+    ///   records into and `HighScoresScreenNode` reads. `nil` (the
+    ///   production default, and what `viewDidLoad()` passes) means the real
+    ///   `HighScoreStore.productionSuiteName` suite. A test that drives a
+    ///   real run into `.death` through this composition root passes a
+    ///   scratch `UserDefaults` suite instead, so recording a run here never
+    ///   appends a row to the player's own high-score table -- the same
+    ///   persistent side effect `runSummaryProvider`'s note below guards
+    ///   against from the other direction (`PlayerDeathTriggerTests`).
+    func makeGameScene(size: CGSize, highScoreStore: HighScoreStore? = nil) -> GameScene {
+        let scene = highScoreStore.map { GameScene(size: size, highScoreStore: $0) }
+            ?? GameScene(size: size)
         scene.scaleMode = .resizeFill
 
         scene.register(

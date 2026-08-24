@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import SpriteKit
 import XCTest
 @testable import CyberpunkMonsterCrawl
@@ -12,13 +13,53 @@ import XCTest
 /// dead code on a device. Mirrors `PlayerCombatSceneWiringTests`'s shape:
 /// build a real `GameScene` (via the composition root, so the death
 /// screen's real `runSummaryProvider`/`highScoreStore` wiring is exercised
-/// too, not a bespoke test double), drive it into `.gameplay`, and assert
+/// too, not a bespoke test double -- over a scratch `UserDefaults` suite,
+/// never the player's real one; see `scratchSuiteNames`), drive it into
+/// `.gameplay`, and assert
 /// on the scene's own mounted/transitioned state rather than reconstructing
 /// the pipeline by hand.
 final class PlayerDeathTriggerTests: XCTestCase {
 
+    /// Scratch `UserDefaults` suites created by `makeGameplayScene()`, torn
+    /// down after every test.
+    ///
+    /// Reaching `.death` for real is the whole subject of this suite, and
+    /// `DeathScreenNode.willEnter()` *persists* the run it is handed -- so
+    /// against the composition root's default (the real
+    /// `HighScoreStore.productionSuiteName` suite) every test here would
+    /// append a genuine row to the player's own high-score table, evict
+    /// older rows from the bounded top-10, and make any suite asserting on
+    /// that table's contents or its empty state order-dependent. That is
+    /// exactly the hazard `GameViewController`'s `runSummaryProvider` note
+    /// describes, arriving from the other direction. `makeGameScene`'s
+    /// `highScoreStore:` parameter (added on PR #55 review) is the seam;
+    /// everything this suite actually asserts -- the transition,
+    /// `playerCombat` staying mounted, a real non-`nil` `RunSummary` being
+    /// recorded -- is unaffected by which suite backs the store.
+    private var scratchSuiteNames: [String] = []
+
+    override func tearDown() {
+        for suiteName in scratchSuiteNames {
+            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+        }
+        scratchSuiteNames = []
+        super.tearDown()
+    }
+
+    /// A per-test-isolated `HighScoreStore` -- the same shape
+    /// `HighScoreStoreTests.makeIsolatedDefaults()` /
+    /// `ScreensTests.makeIsolatedHighScoreStore()` already establish.
+    private func makeIsolatedHighScoreStore() -> HighScoreStore {
+        let suiteName = "com.cyberpunkmonstercrawl.tests.playerDeathTrigger.\(UUID().uuidString)"
+        scratchSuiteNames.append(suiteName)
+        return HighScoreStore(defaults: UserDefaults(suiteName: suiteName)!)
+    }
+
     private func makeGameplayScene() -> GameScene {
-        let scene = GameViewController().makeGameScene(size: CGSize(width: 400, height: 800))
+        let scene = GameViewController().makeGameScene(
+            size: CGSize(width: 400, height: 800),
+            highScoreStore: makeIsolatedHighScoreStore()
+        )
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
         return scene
     }

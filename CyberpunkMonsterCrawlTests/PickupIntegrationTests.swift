@@ -35,6 +35,17 @@ final class PickupIntegrationTests: XCTestCase {
     /// slices -- the same shape `RaccoonSwarmSceneWiringTests.advance(_:)`
     /// uses for the identical reason (spawn cadences are seconds-scale, so a
     /// 60fps sweep would be thousands of frames).
+    ///
+    /// Keeps the player at full HP before each `.gameplay` frame for the
+    /// same reason that helper does (see its own doc comment): since
+    /// `CYBERPUN-17-13-t5` a live run whose swarm happens to chew the
+    /// player to 0 HP transitions itself to `.death`, which silently stops
+    /// `GameScene.updatePickups` -- so without this, every multi-second
+    /// window here would depend on `RaccoonSpawnDirector`'s random default
+    /// seed. Pickups, not survival, are this suite's subject.
+    ///
+    /// A test that needs a *wounded* player (the med-kit heal case below)
+    /// must therefore not drive its frames through this helper.
     @discardableResult
     private func advance(
         _ scene: GameScene,
@@ -45,6 +56,9 @@ final class PickupIntegrationTests: XCTestCase {
         var now = start
         let end = start + seconds
         while now <= end {
+            if scene.stateMachine.currentState == .gameplay {
+                scene.player?.hp = PlayerNode.baseMaxHP
+            }
             scene.update(now)
             now += step
         }
