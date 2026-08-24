@@ -217,6 +217,15 @@ final class GameViewController: UIViewController {
         // carries the open human call on where that trigger belongs
         // (inside `advanceMovementAndCamera`, or behind a narrower gate).
         //
+        // The `SCAFFOLDING(CYBERPUN-17-13)` spelling above is retained
+        // deliberately (raised on PR #54, which reverted a reword that had
+        // dropped it). It is accurate history -- that is what the deleted
+        // hook was tagged -- and this PR is explicitly *not* trying to make
+        // AGENT.md's outstanding "SCAFFOLDING marker grep gate" come up
+        // clean by deleting the literal: the marker was never the problem,
+        // the missing HP-zero trigger below is, and rewording a mention out
+        // of the tree would address the grep instead of the condition.
+        //
         // So until it lands, this screen and everything behind it --
         // `RunScoreCalculator`, `HighScoreStore.recordRun`,
         // `HighScoresScreenNode`'s just-finished-run highlight, and the
