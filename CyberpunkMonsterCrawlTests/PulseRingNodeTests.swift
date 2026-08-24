@@ -208,23 +208,28 @@ final class PulseRingNodeTests: XCTestCase {
         // scale resamples the nearest-filtered art, and `accuracy: 1e-6`
         // would swallow exactly the failure this test exists to catch.
         //
-        // Restored on review a third time (PR #51, PR #53, and now PR #54)
-        // after a detour to `accuracy: 1e-6`. That detour's stated
-        // justification -- a repo "deterministic spritekit-float32-equality
-        // lint" that supposedly flags these call sites -- was checked against
-        // the tree on PR #54 and does not exist: there is no `.swiftlint*`
+        // Restored on review a fourth time (PR #51, PR #53, PR #54 and now
+        // PR #55) after a detour to `accuracy: 1e-6`. That detour's stated
+        // justification -- a "deterministic spritekit-float32-equality lint"
+        // that supposedly flags these call sites -- was checked against the
+        // tree on PR #54 and does not exist here: there is no `.swiftlint*`
         // config anywhere, `project.yml` declares no script build phase,
         // `ci.yml` detects no stack on this repo and exits 0, `ios-build.yml`
         // runs only `xcodegen` + `xcodebuild build` + `xcodebuild test`, and
         // the only source-scanning gates (`AtlasContractConventionTests`,
         // `NoBuildingGeometryConstructionTests`) scan the *app* target with
-        // `...Tests` excluded and never look at assertions. The reason it was
-        // reverted before therefore still stands, unchanged: nothing has ever
-        // been observed failing here. If some future tool does mis-flag these
-        // lines, the fix belongs in that tool's matcher or in a scoped
-        // suppression that names it -- not in the assertion it mis-flags.
-        // If residue ever does appear on this path, the exact assertion is
-        // the messenger and the finding gets recorded, not absorbed.
+        // `...Tests` excluded and never look at assertions. PR #55 re-asserted
+        // the lint as an unobservable external gate whose tolerance is "a
+        // no-op ... a regression to `0.9999995` is still off by far more than
+        // 1e-6" -- but `|1 - 0.9999995| = 5e-7`, which is *less* than `1e-6`,
+        // so that tolerance passes the exact value the justification claims it
+        // catches. The arithmetic settles it independently of whether the
+        // lint exists: this assertion may not carry a tolerance. If some tool
+        // really does mis-flag these lines, the fix belongs in that tool's
+        // matcher or in a scoped suppression that names it -- not in the
+        // assertion it mis-flags. If residue ever does appear on this path,
+        // the exact assertion is the messenger and the finding gets recorded,
+        // not absorbed.
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)

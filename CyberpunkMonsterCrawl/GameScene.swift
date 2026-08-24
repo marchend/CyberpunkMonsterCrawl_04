@@ -224,22 +224,32 @@ final class GameScene: SKScene {
     private(set) var runElapsedSeconds: TimeInterval = 0
 
     /// Persisted high-score table (`CYBERPUN-17-13`), constructed once for
-    /// the scene's whole lifetime over the app's real `UserDefaults` suite.
+    /// the scene's whole lifetime and immutable thereafter.
     /// `DeathScreenNode` records into this exactly once per death
     /// (`willEnter()`); `HighScoresScreenNode` reads it every time it is
     /// shown.
     ///
-    /// Force-unwrapped rather than optional: `HighScoreStore
-    /// .productionSuiteName` is a hardcoded constant that is neither the
-    /// app's own bundle identifier nor `NSGlobalDomain` (the only two
-    /// values `UserDefaults(suiteName:)` rejects), so `nil` here would mean
-    /// that constant itself is wrong -- a programmer error worth crashing
-    /// on, not a reason to silently fall back to `.standard` (see
-    /// `HighScoreStore`'s own doc comment on why it never does).
-    /// `HighScoreStoreTests
+    /// `init(size:)` builds the real one over the app's `UserDefaults`
+    /// suite -- `productionHighScoreStore()` below, force-unwrapped rather
+    /// than optional: `HighScoreStore.productionSuiteName` is a hardcoded
+    /// constant that is neither the app's own bundle identifier nor
+    /// `NSGlobalDomain` (the only two values `UserDefaults(suiteName:)`
+    /// rejects), so `nil` there would mean that constant itself is wrong --
+    /// a programmer error worth crashing on, not a reason to silently fall
+    /// back to `.standard` (see `HighScoreStore`'s own doc comment on why
+    /// it never does). `HighScoreStoreTests
     /// .test_productionSuiteName_isConstructible_andNotAReservedDomain`
     /// pins that this construction succeeds.
-    let highScoreStore = HighScoreStore(suiteName: HighScoreStore.productionSuiteName)!
+    ///
+    /// `init(size:highScoreStore:)` is the **injection seam** (added on
+    /// PR #55 review): a test that drives a real run all the way into
+    /// `.death` makes `DeathScreenNode.willEnter()` persist a real row, and
+    /// with the production suite hardcoded here that row landed in the
+    /// player's own high-score table on every test run -- the same
+    /// persistent side effect `GameViewController`'s `runSummaryProvider`
+    /// comment exists to prevent, arriving from the other direction. Tests
+    /// hand in a per-test scratch suite instead.
+    let highScoreStore: HighScoreStore
 
     /// The player's targeting/firing/bullets/effects/progression
     /// composition (`CYBERPUN-17-9` PR 3): constructed once, lazily, in
@@ -316,13 +326,34 @@ final class GameScene: SKScene {
     // MARK: - Init
 
     override init(size: CGSize) {
+        self.highScoreStore = Self.productionHighScoreStore()
+        super.init(size: size)
+        commonInit()
+    }
+
+    /// The composition-root/test initializer: identical to `init(size:)`
+    /// except that the persisted high-score table is supplied by the
+    /// caller. `GameViewController.makeGameScene(size:highScoreStore:)` is
+    /// the one production route in (and passes nothing, so the real suite
+    /// is used); a test passes a scratch `UserDefaults` suite so driving a
+    /// run into `.death` cannot append a row to the player's real table.
+    init(size: CGSize, highScoreStore: HighScoreStore) {
+        self.highScoreStore = highScoreStore
         super.init(size: size)
         commonInit()
     }
 
     required init?(coder aDecoder: NSCoder) {
+        self.highScoreStore = Self.productionHighScoreStore()
         super.init(coder: aDecoder)
         commonInit()
+    }
+
+    /// The real, persisted table over `HighScoreStore.productionSuiteName`
+    /// -- see `highScoreStore`'s own doc comment for why the failure is a
+    /// crash rather than a fallback to `.standard`.
+    private static func productionHighScoreStore() -> HighScoreStore {
+        HighScoreStore(suiteName: HighScoreStore.productionSuiteName)!
     }
 
     /// Builds the persistent layer hierarchy and wires the state machine.
@@ -907,6 +938,23 @@ final class GameScene: SKScene {
             // already establish for the auto-fire weapon.
             pulseAbility.update(deltaTime: deltaTime)
             pulseButton.setCooldownProgress(pulseCooldownProgress())
+
+            // `CYBERPUN-17-13-t5`: the real HP-zero -> `.death` trigger.
+            // Checked once per frame, only while `.gameplay` is still the
+            // current state, and only after every HP-affecting update this
+            // frame has already run (raccoon bites/rabies above, and
+            // `player.update(...)` earlier in this method) -- so a raccoon
+            // that drops the player to 0 HP this frame is reflected before
+            // the transition fires, rather than racing it. This is the
+            // narrower-gate option called out when the earlier `.death`
+            // caller (a DEBUG-only launch bridge) was removed: it is the
+            // real production entry point into `.death`, not a scaffolding
+            // hook -- see `GameViewController.makeGameScene`'s composition
+            // note for how the death screen/run summary/high-score
+            // recording consume it.
+            if player.hp <= 0 {
+                stateMachine.transition(to: .death)
+            }
         }
     }
 

@@ -11,15 +11,20 @@ import SpriteKit
 /// visible from `PlayerNode.swift`, and takes the `objc_*` lookup plus
 /// `as?` unbox off the per-frame `tickRabies` path.
 ///
-/// **Scope of this PR.** HP plus the rabies DoT/infection status only --
-/// no death handling. What happens when the player's HP reaches zero is
-/// the death screen, `CYBERPUN-17-13`, a later PR in this story; this PR
-/// only clamps `hp` at zero and leaves it there, so a player who runs out
-/// of HP keeps playing at 0 HP (biteable, still ticking) until that PR
-/// lands -- a known, recorded consequence rather than a bug (see the
-/// `CYBERPUN-17-8` entry in AGENT.md/CLAUDE.md). `PlayerNode` deliberately
-/// does not conform to `Damageable` for that reason -- see that
-/// protocol's own doc comment.
+/// **Scope of this file.** HP plus the rabies DoT/infection status only --
+/// no death handling: the code below clamps `hp` at zero and stops there.
+/// What *happens* at zero HP is owned elsewhere, and as of
+/// `CYBERPUN-17-13-t5` it is wired up:
+/// `GameScene.advanceMovementAndCamera(currentTime:)` transitions the state
+/// machine to `.death` once per `.gameplay` frame when `player.hp <= 0`,
+/// after every HP-affecting update that frame (this file's `takeDamage`/
+/// `tickRabies` included) has already applied -- pinned by
+/// `PlayerDeathTriggerTests`. The earlier, recorded consequence of that
+/// trigger not existing yet (a player who ran out of HP kept playing at
+/// 0 HP, biteable and still ticking) no longer holds; the
+/// `CYBERPUN-17-13` entry in AGENT.md/CLAUDE.md records where the trigger
+/// now lives. `PlayerNode` still deliberately does not conform to
+/// `Damageable` -- see that protocol's own doc comment.
 extension PlayerNode {
 
     /// Applies `amount` direct damage, clamped at zero via `hp`'s own

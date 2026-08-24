@@ -141,8 +141,19 @@ final class GameViewController: UIViewController {
     /// Builds the scene and registers every screen. Separated from
     /// `viewDidLoad()` so the composition step itself is testable without an
     /// `SKView` (`GameViewControllerCompositionTests`).
-    func makeGameScene(size: CGSize) -> GameScene {
-        let scene = GameScene(size: size)
+    ///
+    /// - Parameter highScoreStore: the persisted table `DeathScreenNode`
+    ///   records into and `HighScoresScreenNode` reads. `nil` (the
+    ///   production default, and what `viewDidLoad()` passes) means the real
+    ///   `HighScoreStore.productionSuiteName` suite. A test that drives a
+    ///   real run into `.death` through this composition root passes a
+    ///   scratch `UserDefaults` suite instead, so recording a run here never
+    ///   appends a row to the player's own high-score table -- the same
+    ///   persistent side effect `runSummaryProvider`'s note below guards
+    ///   against from the other direction (`PlayerDeathTriggerTests`).
+    func makeGameScene(size: CGSize, highScoreStore: HighScoreStore? = nil) -> GameScene {
+        let scene = highScoreStore.map { GameScene(size: size, highScoreStore: $0) }
+            ?? GameScene(size: size)
         scene.scaleMode = .resizeFill
 
         scene.register(
@@ -207,34 +218,20 @@ final class GameViewController: UIViewController {
             },
             highScoreStore: scene.highScoreStore
         )
-        // NOTE (`CYBERPUN-17-13-t3`, raised on PR #51): **nothing in any
-        // build transitions to `.death` yet.** `-t3` deleted the DEBUG-only
-        // `LaunchGotoState` launch bridge (a `SCAFFOLDING(CYBERPUN-17-13)`
-        // hook, removed together with its tests), and that hook was the last
-        // non-test caller of `transition(to: .death)`; the HP-reaches-zero ->
-        // `.death` trigger itself is still outstanding and still has NO
-        // TICKET ID -- see AGENT.md/CLAUDE.md's `CYBERPUN-17-8` entry, which
-        // carries the open human call on where that trigger belongs
-        // (inside `advanceMovementAndCamera`, or behind a narrower gate).
-        //
-        // The `SCAFFOLDING(CYBERPUN-17-13)` spelling above is retained
-        // deliberately (raised on PR #54, which reverted a reword that had
-        // dropped it). It is accurate history -- that is what the deleted
-        // hook was tagged -- and this PR is explicitly *not* trying to make
-        // AGENT.md's outstanding "SCAFFOLDING marker grep gate" come up
-        // clean by deleting the literal: the marker was never the problem,
-        // the missing HP-zero trigger below is, and rewording a mention out
-        // of the tree would address the grep instead of the condition.
-        //
-        // So until it lands, this screen and everything behind it --
-        // `RunScoreCalculator`, `HighScoreStore.recordRun`,
+        // NOTE (`CYBERPUN-17-13-t5`): the real production entry point into
+        // `.death` is `GameScene.advanceMovementAndCamera(currentTime:)`'s
+        // HP-zero check, run once per `.gameplay` frame after every
+        // HP-affecting update that frame (raccoon bites/rabies, the
+        // player's own `update(...)`) has already applied. An earlier PR in
+        // this story had deleted the last DEBUG-only launch bridge that used
+        // to reach `.death` before this real trigger existed, leaving a
+        // stretch where nothing in any build transitioned here except a
+        // test's direct `stateMachine.transition(to: .death)` call -- that
+        // gap is what this PR closed. This screen and everything behind it
+        // (`RunScoreCalculator`, `HighScoreStore.recordRun`,
         // `HighScoresScreenNode`'s just-finished-run highlight, and the
-        // `startNewRun()` RUN AGAIN entry point above -- is reachable only
-        // from a test's direct `stateMachine.transition(to: .death)` call,
-        // never by a player. Recorded at the composition site rather than
-        // only in the docs, and deliberately *not* re-scaffolded: a surface
-        // that is unreachable in a real build should be visible as such
-        // where it is wired up.
+        // `startNewRun()` RUN AGAIN entry point above) is reachable by a
+        // player now, not only from a test.
         scene.register(deathScreen, for: .death)
 
         scene.register(

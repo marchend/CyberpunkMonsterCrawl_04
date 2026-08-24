@@ -35,6 +35,28 @@ final class RaccoonSwarmSceneWiringTests: XCTestCase {
     /// slices. Coarser than 60fps on purpose: the spawn cadence starts at
     /// `RaccoonSpawnDirector.initialSpawnInterval` (3s), so a 60fps sweep
     /// long enough to spawn anything would be thousands of frames.
+    ///
+    /// **Why the HP top-up.** `CYBERPUN-17-13-t5` made `player.hp <= 0`
+    /// transition the scene to `.death` by itself, once per `.gameplay`
+    /// frame. These tests drive 12s of *live* gameplay against a stationary
+    /// player while `RaccoonSpawnDirector` runs on its production default
+    /// RNG (`SplitMix64RandomNumberGenerator(seed: UInt64.random(in:))`),
+    /// so how much of the swarm converges and bites inside that window is a
+    /// per-run coin flip -- and a window that ever added up to
+    /// `PlayerNode.baseMaxHP` would leave the scene already in `.death`
+    /// before the explicit `transition(to: .death)` below, which would then
+    /// return `false` and fail these tests intermittently, keyed to nothing
+    /// but a seed. Restoring full HP before each `.gameplay` frame takes
+    /// the seed out of the question instead of leaving the margin to
+    /// chance: at `initialSpawnInterval` 3s at most one raccoon spawns per
+    /// elapsed interval, so a 12s window holds ~5, each biting at most once
+    /// per `BiteComponent.biteIntervalSeconds` (1s) for `biteDamage` (5) --
+    /// ~25 HP inside a 0.5s step against 100 restored.
+    ///
+    /// Death is not this suite's subject (spawn/steer gating is); the
+    /// HP-zero trigger is pinned directly by `PlayerDeathTriggerTests`. A
+    /// test that needs a *wounded* player must therefore not drive its
+    /// frames through this helper.
     @discardableResult
     private func advance(
         _ scene: GameScene,
@@ -45,6 +67,9 @@ final class RaccoonSwarmSceneWiringTests: XCTestCase {
         var now = start
         let end = start + seconds
         while now <= end {
+            if scene.stateMachine.currentState == .gameplay {
+                scene.player?.hp = PlayerNode.baseMaxHP
+            }
             scene.update(now)
             now += step
         }
@@ -75,6 +100,11 @@ final class RaccoonSwarmSceneWiringTests: XCTestCase {
         XCTAssertGreaterThan(swarmAtDeath.count, 0, "the run must have produced a swarm to park")
         let positionsAtDeath = swarmAtDeath.map(\.position)
 
+        XCTAssertEqual(
+            scene.stateMachine.currentState, .gameplay,
+            "precondition: the run must still be live -- `advance(_:)` keeps the player at full HP so the "
+                + "HP-zero -> .death trigger (CYBERPUN-17-13-t5) cannot have fired inside the window above."
+        )
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
 
         // Far longer than the run itself: at the ramped cadence this would
@@ -99,6 +129,11 @@ final class RaccoonSwarmSceneWiringTests: XCTestCase {
         let afterRun = advance(scene, seconds: 12)
         XCTAssertGreaterThan(mountedRaccoons(scene).count, 0)
 
+        XCTAssertEqual(
+            scene.stateMachine.currentState, .gameplay,
+            "precondition: the run must still be live -- `advance(_:)` keeps the player at full HP so the "
+                + "HP-zero -> .death trigger (CYBERPUN-17-13-t5) cannot have fired inside the window above."
+        )
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
 
