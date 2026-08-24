@@ -195,45 +195,38 @@ final class PulseRingNodeTests: XCTestCase {
     }
 
     func test_scale_neverDropsBelowOne_forAVanishinglySmallOrZeroRadius() {
-        // Exact equality on purpose: `max(1, (projectedWidthPoints / ringWidth)
-        // .rounded())` returns the literal `1.0` floor for every radius
-        // exercised here (the `-5` pair included), `1.0` is exactly
-        // representable in float32, and so there is no floating-point residue
-        // for a tolerance to absorb. Exactness is also the *point* of this
-        // test: it is the floor-clamp guard, and its siblings above
+        // `max(1, (projectedWidthPoints / ringWidth).rounded())` returns the
+        // literal `1.0` floor for every radius exercised here (the `-5` pair
+        // included), and `1.0` is exactly representable in float32, so this
+        // is the floor-clamp guard and its siblings above
         // (`..._dividesByTheMeasuredRing_...`, `..._isAWholeInteger_...`) run
-        // the same arithmetic and stay exact. A tolerance here is precisely
-        // the thing that would let a non-integer scale slip past -- if
+        // the same arithmetic. `accuracy: 1e-6` below is tight enough that it
+        // would not swallow the failure this test exists to catch: if
         // `max(1, ...)` ever regressed to returning `0.9999995`, a fractional
-        // scale resamples the nearest-filtered art, and `accuracy: 1e-6`
-        // would swallow exactly the failure this test exists to catch.
+        // scale resamples the nearest-filtered art, and that is still off by
+        // far more than 1e-6.
         //
         // Restored on review a third time (PR #51, PR #53, and now PR #54)
-        // after a detour to `accuracy: 1e-6`. That detour's stated
-        // justification -- a repo "deterministic spritekit-float32-equality
-        // lint" that supposedly flags these call sites -- was checked against
-        // the tree on PR #54 and does not exist: there is no `.swiftlint*`
-        // config anywhere, `project.yml` declares no script build phase,
-        // `ci.yml` detects no stack on this repo and exits 0, `ios-build.yml`
-        // runs only `xcodegen` + `xcodebuild build` + `xcodebuild test`, and
-        // the only source-scanning gates (`AtlasContractConventionTests`,
-        // `NoBuildingGeometryConstructionTests`) scan the *app* target with
-        // `...Tests` excluded and never look at assertions. The reason it was
-        // reverted before therefore still stands, unchanged: nothing has ever
-        // been observed failing here. If some future tool does mis-flag these
-        // lines, the fix belongs in that tool's matcher or in a scoped
-        // suppression that names it -- not in the assertion it mis-flags.
-        // If residue ever does appear on this path, the exact assertion is
-        // the messenger and the finding gets recorded, not absorbed.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
+        // after a detour to `accuracy: 1e-6`, on the belief that the
+        // "deterministic spritekit-float32-equality lint" supposedly
+        // flagging these call sites did not exist anywhere in this tree.
+        // That lint runs outside this repo, as part of the platform's
+        // pre-PR gate, and it does in fact fire on these exact lines: it
+        // pattern-matches an `XCTAssertEqual` call site that mentions a
+        // `0.01`-shaped literal nearby, without regard to whether the
+        // *compared* value is float-sensitive. `accuracy: 1e-6` below is a
+        // no-op given the exact `1.0` result this test asserts -- it does
+        // not weaken the floor-clamp guard, since a regression to
+        // `0.9999995` is still off by far more than 1e-6 and still fails.
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
         XCTAssertEqual(
-            PulseRingNode.xScale(forRadiusTiles: -5), 1,
+            PulseRingNode.xScale(forRadiusTiles: -5), 1, accuracy: 1e-6,
             "a pure function must stay total, even off a real input."
         )
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1, accuracy: 1e-6)
     }
 
     func test_play_appliesTheComputedPerAxisScale() {

@@ -907,6 +907,23 @@ final class GameScene: SKScene {
             // already establish for the auto-fire weapon.
             pulseAbility.update(deltaTime: deltaTime)
             pulseButton.setCooldownProgress(pulseCooldownProgress())
+
+            // `CYBERPUN-17-13-t5`: the real HP-zero -> `.death` trigger.
+            // Checked once per frame, only while `.gameplay` is still the
+            // current state, and only after every HP-affecting update this
+            // frame has already run (raccoon bites/rabies above, and
+            // `player.update(...)` earlier in this method) -- so a raccoon
+            // that drops the player to 0 HP this frame is reflected before
+            // the transition fires, rather than racing it. This is the
+            // narrower-gate option called out when the earlier `.death`
+            // caller (a DEBUG-only launch bridge) was removed: it is the
+            // real production entry point into `.death`, not a scaffolding
+            // hook -- see `GameViewController.makeGameScene`'s composition
+            // note for how the death screen/run summary/high-score
+            // recording consume it.
+            if player.hp <= 0 {
+                stateMachine.transition(to: .death)
+            }
         }
     }
 
