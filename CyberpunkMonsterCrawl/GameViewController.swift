@@ -105,6 +105,37 @@ final class GameViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         accessibilityContainerView?.refreshAccessibilityMirrors()
+        // `CYBERPUN-17-10-t4`: the safe area a scene laid itself out for can
+        // be stale by the time this pass finishes -- `didMove(to:)` fires
+        // from `presentScene(_:)` in `viewDidLoad()`, before the first real
+        // layout pass has settled the true insets, and nothing but a *size*
+        // change ever re-derived them afterward. Refreshing here (as well as
+        // from `viewSafeAreaInsetsDidChange()` below) is the belt-and-braces
+        // half of the pair: this hook runs *after* layout, so the hosted
+        // `SKView`'s own `safeAreaInsets` are settled by now, which the
+        // controller-level callback alone does not guarantee.
+        // `refreshLayoutForCurrentSafeArea()` no-ops unless the insets
+        // actually moved, so a per-pass call costs one comparison.
+        currentGameScene?.refreshLayoutForCurrentSafeArea()
+    }
+
+    /// The one place UIKit tells us the safe area moved. Forwarding it into
+    /// the scene fixes late-settling insets for **every** consumer of
+    /// `GameScene.currentSafeAreaInsets` -- the `.menu` screen (registered
+    /// before `presentScene(_:)`, so it is first laid out with `view == nil`
+    /// -> `.zero`), the active screen of any other state, the thumbstick and
+    /// the pulse button -- rather than at one state transition. See
+    /// `GameScene.refreshLayoutForCurrentSafeArea()`.
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        currentGameScene?.refreshLayoutForCurrentSafeArea()
+    }
+
+    /// The presented scene, when there is one. `skView` is implicitly
+    /// unwrapped and both hooks above can run before `viewDidLoad()` has
+    /// built it, so this is deliberately optional all the way down.
+    private var currentGameScene: GameScene? {
+        skView?.scene as? GameScene
     }
 
     /// Builds the scene and registers every screen. Separated from
