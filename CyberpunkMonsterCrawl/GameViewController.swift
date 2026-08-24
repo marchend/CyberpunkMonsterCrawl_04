@@ -209,13 +209,22 @@ final class GameViewController: UIViewController {
         )
         // NOTE (`CYBERPUN-17-13-t3`, raised on PR #51): **nothing in any
         // build transitions to `.death` yet.** `-t3` deleted the DEBUG-only
-        // `LaunchGotoState` launch bridge (a DEBUG-only test-support hook,
-        // removed together with its tests), and that hook was the last
+        // `LaunchGotoState` launch bridge (a `SCAFFOLDING(CYBERPUN-17-13)`
+        // hook, removed together with its tests), and that hook was the last
         // non-test caller of `transition(to: .death)`; the HP-reaches-zero ->
         // `.death` trigger itself is still outstanding and still has NO
         // TICKET ID -- see AGENT.md/CLAUDE.md's `CYBERPUN-17-8` entry, which
         // carries the open human call on where that trigger belongs
         // (inside `advanceMovementAndCamera`, or behind a narrower gate).
+        //
+        // The `SCAFFOLDING(CYBERPUN-17-13)` spelling above is retained
+        // deliberately (raised on PR #54, which reverted a reword that had
+        // dropped it). It is accurate history -- that is what the deleted
+        // hook was tagged -- and this PR is explicitly *not* trying to make
+        // AGENT.md's outstanding "SCAFFOLDING marker grep gate" come up
+        // clean by deleting the literal: the marker was never the problem,
+        // the missing HP-zero trigger below is, and rewording a mention out
+        // of the tree would address the grep instead of the condition.
         //
         // So until it lands, this screen and everything behind it --
         // `RunScoreCalculator`, `HighScoreStore.recordRun`,
