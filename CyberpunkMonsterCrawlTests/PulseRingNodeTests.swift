@@ -206,8 +206,10 @@ final class PulseRingNodeTests: XCTestCase {
         // returns the literal `1.0` for every radius in this test -- so
         // they are exact too, and nothing in this test is tolerant.
         //
-        // Restored on PR #53 review after a brief, unjustified detour to
-        // `accuracy: 1e-6`: nothing was ever observed failing here, and the
+        // Restored on review (raised on PR #51, and again on PR #53) after
+        // a brief, unjustified detour to `accuracy: 1e-6` -- reverted on
+        // every line here, the `-5` pair included, so the file states one
+        // rule: nothing was ever observed failing here, and the
         // "float32 cannot guarantee exact equality" rationale contradicted
         // the two sibling tests above (`..._dividesByTheMeasuredRing_...`,
         // `..._isAWholeInteger_...`) that run the same arithmetic and stayed

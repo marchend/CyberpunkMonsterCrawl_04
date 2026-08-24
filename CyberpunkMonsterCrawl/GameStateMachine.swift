@@ -26,6 +26,16 @@ enum GameState: CaseIterable, Hashable {
 ///   death      -> menu        (Back to menu)
 ///   highScores -> menu        (Back to menu)
 ///
+/// **RUN AGAIN's new-seed/new-junction/full-reset behaviour
+/// (`CYBERPUN-17-13` PR 3) is not this type's concern.** This file stays
+/// scene/rendering-agnostic (no `WorldSeed`, no `RunStats`/`XPLevelSystem`,
+/// no run-scoped counters), so drawing a fresh `worldSeed` and driving the
+/// rest of a run's reset lives on `GameScene.startNewRun()` — the
+/// production RUN AGAIN entry point — which calls `transition(to:
+/// .gameplay)` below to do the actual `death -> gameplay` move once its own
+/// seed/reset work is done. A plain `transition(to: .gameplay)` call (this
+/// type's only public way to move between states) never touches the seed.
+///
 /// Each state holds a weak back-reference to its owning `GameStateMachine`
 /// so `didEnter(from:)` can push the change out through `onChange`; the
 /// machine owns its states, so a strong reference here would be a cycle.

@@ -444,8 +444,8 @@ final class ScreensTests: XCTestCase {
     }
 
     /// `.death` entered without a run ever having mounted a player (a
-    /// direct `transition(to: .death)` -- a test, or the DEBUG
-    /// `LaunchGotoState` hook) must persist **nothing**. The previous
+    /// direct `transition(to: .death)` -- a test) must persist
+    /// **nothing**. The previous
     /// all-zero fallback summary was recorded like any other, so every
     /// such launch permanently appended a fake `score: 0` /
     /// `SURVIVED 00:00` row to the real table -- after which that device's

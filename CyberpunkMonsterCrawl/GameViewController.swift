@@ -95,40 +95,7 @@ final class GameViewController: UIViewController {
         // actually launches into (`presentScene` refreshes them).
         let scene = makeGameScene(size: view.bounds.size)
         skView.presentScene(scene)
-
-        // `SCAFFOLDING(CYBERPUN-17-13)`: honour the DEBUG-only
-        // `LaunchGotoState` test hook, if present, so a `.mothership`
-        // journey can reach `.death`/`.highScores` before the
-        // HP-reaches-zero -> `.death` trigger exists. Compiled out of
-        // Release along with `LaunchGotoState` itself, so a shipped binary
-        // has no launch-time state override at all; in DEBUG a normal
-        // launch has neither the argument nor the environment variable
-        // set, so `resolve()` returns `nil` and this is a no-op.
-        #if DEBUG
-        applyLaunchGotoStateIfNeeded(on: scene)
-        #endif
     }
-
-    #if DEBUG
-    /// Drives whatever legal transition sequence reaches `LaunchGotoState
-    /// .resolve()`'s target from the scene's initial `.menu` state --
-    /// `.death` is only reachable *through* `.gameplay` (see
-    /// `GameStateMachine`'s transition table), so reaching it here takes
-    /// two calls, not one.
-    private func applyLaunchGotoStateIfNeeded(on scene: GameScene) {
-        switch LaunchGotoState.resolve() {
-        case .none, .menu:
-            break
-        case .gameplay:
-            scene.stateMachine.transition(to: .gameplay)
-        case .death:
-            scene.stateMachine.transition(to: .gameplay)
-            scene.stateMachine.transition(to: .death)
-        case .highScores:
-            scene.stateMachine.transition(to: .highScores)
-        }
-    }
-    #endif
 
     /// The container's mirrors are geometry, so they have to follow every
     /// layout pass - a rotation resizes the scene and moves every
@@ -199,7 +166,12 @@ final class GameViewController: UIViewController {
         // other alive.
         let deathScreen = DeathScreenNode(
             onRunAgain: { [weak scene] in
-                scene?.stateMachine.transition(to: .gameplay)
+                // `startNewRun()` (`CYBERPUN-17-13` PR 3), not a plain
+                // `stateMachine.transition(to: .gameplay)`: RUN AGAIN must
+                // draw a fresh `worldSeed` (new city, new starting
+                // junction) before landing in `.gameplay`, which only this
+                // entry point does.
+                scene?.startNewRun()
             },
             onBackToMenu: { [weak scene] in
                 scene?.stateMachine.transition(to: .menu)
@@ -210,8 +182,7 @@ final class GameViewController: UIViewController {
                 // reachable from real gameplay (`.death` is only a legal
                 // transition from `.gameplay`, which always mounts one
                 // first), but reachable from a direct
-                // `stateMachine.transition(to: .death)` call: a test, or
-                // the DEBUG `LaunchGotoState` hook above.
+                // `stateMachine.transition(to: .death)` call: a test.
                 //
                 // Returning `nil` rather than an all-zero `RunSummary` is
                 // the difference between "no run to report" and "a run
@@ -236,6 +207,25 @@ final class GameViewController: UIViewController {
             },
             highScoreStore: scene.highScoreStore
         )
+        // NOTE (`CYBERPUN-17-13-t3`, raised on PR #51): **nothing in any
+        // build transitions to `.death` yet.** `-t3` deleted the DEBUG-only
+        // `LaunchGotoState` launch bridge (a `SCAFFOLDING(CYBERPUN-17-13)`
+        // hook, removed together with its tests), and that hook was the last
+        // non-test caller of `transition(to: .death)`; the HP-reaches-zero ->
+        // `.death` trigger itself is still outstanding and still has NO
+        // TICKET ID -- see AGENT.md/CLAUDE.md's `CYBERPUN-17-8` entry, which
+        // carries the open human call on where that trigger belongs
+        // (inside `advanceMovementAndCamera`, or behind a narrower gate).
+        //
+        // So until it lands, this screen and everything behind it --
+        // `RunScoreCalculator`, `HighScoreStore.recordRun`,
+        // `HighScoresScreenNode`'s just-finished-run highlight, and the
+        // `startNewRun()` RUN AGAIN entry point above -- is reachable only
+        // from a test's direct `stateMachine.transition(to: .death)` call,
+        // never by a player. Recorded at the composition site rather than
+        // only in the docs, and deliberately *not* re-scaffolded: a surface
+        // that is unreachable in a real build should be visible as such
+        // where it is wired up.
         scene.register(deathScreen, for: .death)
 
         scene.register(

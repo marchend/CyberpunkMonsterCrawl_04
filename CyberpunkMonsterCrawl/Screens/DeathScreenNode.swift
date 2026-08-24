@@ -8,11 +8,16 @@ import UIKit
 /// `RunScoreCalculator` and persisted into `HighScoreStore` exactly once
 /// per death.
 ///
-/// The RUN AGAIN / back-to-menu navigation is unchanged from the skeleton
-/// this replaces (`CYBERPUN-17-2`): both closures are still wired straight
-/// to the shared `GameStateMachine` by `GameViewController`. Only the
-/// `// SCAFFOLDING(CYBERPUN-17-13)` placeholder background + label are
-/// gone -- replaced by the row content below.
+/// The back-to-menu navigation is unchanged from the skeleton this
+/// replaces (`CYBERPUN-17-2`): that closure is still wired straight to the
+/// shared `GameStateMachine` by `GameViewController`. RUN AGAIN's closure
+/// changed in `CYBERPUN-17-13` PR 3: `GameViewController` now passes
+/// `GameScene.startNewRun()` rather than a plain `stateMachine.transition(
+/// to: .gameplay)`, so a restart draws a fresh `worldSeed` (new city, new
+/// starting junction) before landing in `.gameplay` -- this screen itself
+/// is unchanged, since it only ever invokes whichever closure it is
+/// handed. The prior placeholder background and label are gone --
+/// replaced by the row content below.
 final class DeathScreenNode: ScreenNode {
 
     let node = SKNode()
@@ -46,8 +51,8 @@ final class DeathScreenNode: ScreenNode {
     /// snapshot taken earlier.
     ///
     /// `nil` means "no run happened" (`.death` entered without a player
-    /// ever having been mounted -- a test, or the DEBUG `LaunchGotoState`
-    /// hook). That case renders the zero placeholder below but records
+    /// ever having been mounted -- a test). That case renders the zero
+    /// placeholder below but records
     /// **nothing**: a fake `score: 0` row persisted into the player's real
     /// table is a far stronger side effect than a well-defined return
     /// value needs to be.
@@ -69,7 +74,9 @@ final class DeathScreenNode: ScreenNode {
 
     /// - Parameters:
     ///   - onRunAgain: run when RUN AGAIN is tapped. `GameViewController`
-    ///     passes `stateMachine.transition(to: .gameplay)`.
+    ///     passes `GameScene.startNewRun()` (`CYBERPUN-17-13` PR 3), not a
+    ///     plain `stateMachine.transition(to: .gameplay)` -- that is what
+    ///     draws the fresh `worldSeed`/starting junction a restart needs.
     ///   - onBackToMenu: run when the back-to-menu entry is tapped.
     ///     `GameViewController` passes `stateMachine.transition(to: .menu)`.
     ///   - runSummaryProvider: computes the just-ended run's `RunSummary`,
