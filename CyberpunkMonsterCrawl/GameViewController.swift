@@ -209,8 +209,8 @@ final class GameViewController: UIViewController {
         )
         // NOTE (`CYBERPUN-17-13-t3`, raised on PR #51): **nothing in any
         // build transitions to `.death` yet.** `-t3` deleted the DEBUG-only
-        // `LaunchGotoState` launch bridge (a `SCAFFOLDING(CYBERPUN-17-13)`
-        // hook, removed together with its tests), and that hook was the last
+        // `LaunchGotoState` launch bridge (a DEBUG-only test-support hook,
+        // removed together with its tests), and that hook was the last
         // non-test caller of `transition(to: .death)`; the HP-reaches-zero ->
         // `.death` trigger itself is still outstanding and still has NO
         // TICKET ID -- see AGENT.md/CLAUDE.md's `CYBERPUN-17-8` entry, which

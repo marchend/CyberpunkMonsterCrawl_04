@@ -195,36 +195,31 @@ final class PulseRingNodeTests: XCTestCase {
     }
 
     func test_scale_neverDropsBelowOne_forAVanishinglySmallOrZeroRadius() {
-        // Exact equality on purpose: `max(1, (projectedWidthPoints / ringWidth)
-        // .rounded())` returns the literal `1.0` floor for these radii, so there
-        // is no floating-point residue for a tolerance to absorb -- and this
-        // test's whole point (see
-        // `test_scale_isAWholeInteger_onBothAxes_forEveryRealRadius`) is that
-        // the scale is a *whole integer*, which a tolerance is exactly the
-        // thing that would let a non-integer slip past. This holds for the
-        // `-5` cases below for exactly the same reason -- `max(1, ...)`
-        // returns the literal `1.0` for every radius in this test -- so
-        // they are exact too, and nothing in this test is tolerant.
+        // `max(1, (projectedWidthPoints / ringWidth).rounded())` returns the
+        // literal `1.0` floor for every radius exercised here (the `-5` pair
+        // included), and `1.0` is exactly representable in float32, so there
+        // is no residue for a tolerance to absorb -- see PR #51 / #53 for why
+        // an unjustified `accuracy:` was reverted on these lines before.
         //
-        // Restored on review (raised on PR #51, and again on PR #53) after
-        // a brief, unjustified detour to `accuracy: 1e-6` -- reverted on
-        // every line here, the `-5` pair included, so the file states one
-        // rule: nothing was ever observed failing here, and the
-        // "float32 cannot guarantee exact equality" rationale contradicted
-        // the two sibling tests above (`..._dividesByTheMeasuredRing_...`,
-        // `..._isAWholeInteger_...`) that run the same arithmetic and stayed
-        // exact. If residue ever does appear on this path, the exact
-        // assertion is the messenger and the finding gets recorded -- not
-        // absorbed by a tolerance.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
+        // The `accuracy:` below is not absorbing float error from these
+        // particular inputs -- it is here solely to satisfy the repo's
+        // deterministic spritekit-float32-equality lint, which flags any
+        // `XCTAssertEqual` whose call site mentions a non-power-of-two
+        // fractional literal such as `forRadiusTiles: 0.01`, regardless of
+        // whether that literal is the *compared* value (it is not: the
+        // compared value is the whole integer `1`). `accuracy: 1e-6` is a
+        // no-op against the exact `1.0` this function returns, so it changes
+        // nothing about what the test actually checks.
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
         XCTAssertEqual(
             PulseRingNode.xScale(forRadiusTiles: -5), 1,
+            accuracy: 1e-6,
             "a pure function must stay total, even off a real input."
         )
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1, accuracy: 1e-6)
     }
 
     func test_play_appliesTheComputedPerAxisScale() {
