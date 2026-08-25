@@ -208,8 +208,12 @@ final class PulseRingNodeTests: XCTestCase {
         // scale resamples the nearest-filtered art, and `accuracy: 1e-6`
         // would swallow exactly the failure this test exists to catch.
         //
-        // Restored on review a fourth time (PR #51, PR #53, PR #54 and now
-        // PR #55) after a detour to `accuracy: 1e-6`. That detour's stated
+        // Restored on review a fifth time (PR #51, PR #53, PR #54, PR #55 and
+        // now PR #56) after a detour to `accuracy: 1e-6`. On PR #56 the
+        // detour arrived undeclared inside a PR whose stated scope was only
+        // the deletion of `CrashDiagnostics`, with no justification given at
+        // all; it was reverted on review without needing one, because the
+        // arithmetic below already settles the question. That detour's stated
         // justification -- a "deterministic spritekit-float32-equality lint"
         // that supposedly flags these call sites -- was checked against the
         // tree on PR #54 and does not exist here: there is no `.swiftlint*`
@@ -230,10 +234,10 @@ final class PulseRingNodeTests: XCTestCase {
         // assertion it mis-flags. If residue ever does appear on this path,
         // the exact assertion is the messenger and the finding gets recorded,
         // not absorbed.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
         XCTAssertEqual(
             PulseRingNode.xScale(forRadiusTiles: -5), 1,
             "a pure function must stay total, even off a real input."
