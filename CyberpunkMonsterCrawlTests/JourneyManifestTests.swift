@@ -53,6 +53,27 @@ final class JourneyManifestTests: XCTestCase {
         "wait_for_element",
     ]
 
+    /// The upper bound the mothership journey schema puts on a single `wait`
+    /// step's `seconds`; a longer step is rejected (or silently clamped) by
+    /// the probe at verification time, days after the PR merged.
+    ///
+    /// The cap is defined by the mothership runner's journey schema, which is
+    /// external to this repo -- there is no schema file under `.mothership/`
+    /// to read it from, so this constant is the single in-suite definition of
+    /// it and `test_everyStep_...` asserts it per step. Every journey in the
+    /// tree honours it today (`raccoon-swarm` and `auto-fire-weapons` sit at
+    /// exactly 30, the highest in the tree).
+    ///
+    /// This is the other end of
+    /// `test_theDeathJourneysWaitForElementSteps_areBackstoppedByADerivedFloorWait`:
+    /// that gate sums *contiguous* `wait` steps precisely because this cap
+    /// makes the derived ~30.7s death floor uncoverable by one step. Without
+    /// the assertion below, the `30 + 6` split could be collapsed back into a
+    /// single `wait: 36`, which would keep this file green while breaching the
+    /// schema at verification time. Pinned from both ends instead of only
+    /// explained in prose.
+    private static let maximumWaitSeconds: TimeInterval = 30
+
     // MARK: - Loading
 
     private struct Journey {
@@ -189,6 +210,16 @@ final class JourneyManifestTests: XCTestCase {
                         seconds, 0,
                         "\(position): a wait needs a positive \"seconds\"."
                     )
+                    XCTAssertLessThanOrEqual(
+                        seconds, Self.maximumWaitSeconds,
+                        "\(position): a single wait may not exceed "
+                            + "\(Self.maximumWaitSeconds)s (see maximumWaitSeconds -- the "
+                            + "mothership journey schema's per-step cap). A longer floor wait "
+                            + "must be split across consecutive wait steps, which "
+                            + "test_theDeathJourneysWaitForElementSteps_areBackstoppedByADerivedFloorWait "
+                            + "sums; a single over-cap step stays green here and is rejected or "
+                            + "clamped by the probe at verification time."
+                    )
 
                 case "tap_at":
                     XCTAssertNotNil(step["x"] as? NSNumber, "\(position): tap_at needs an \"x\".")
@@ -278,8 +309,9 @@ final class JourneyManifestTests: XCTestCase {
     /// above exists for, one level subtler because the label asserts what
     /// the pixels do not show.
     ///
-    /// So each `wait_for_element` must be backstopped by an explicit `wait`
-    /// that already covers the derived time-to-death: the element wait then
+    /// So each `wait_for_element` must be backstopped by one or more explicit
+    /// `wait` steps that together already cover the derived time-to-death:
+    /// the element wait then
     /// only has to absorb the tail (spawn jitter, approach heading, swarm
     /// size), not the whole run. Overshoot costs nothing -- `DeathScreenNode`
     /// mounts no auto-dismiss, so the death screen stays up until a button
@@ -290,6 +322,19 @@ final class JourneyManifestTests: XCTestCase {
     /// trim of the journey's waits, or a retune of the spawn cadence, seek
     /// speed, bite cadence, bite damage or player HP, fails here instead of
     /// silently mislabelling an evidence capture days later.
+    ///
+    /// The floor wait is summed over every contiguous `wait` step immediately
+    /// preceding `wait_for_element`, not just the single previous step. The
+    /// mothership schema caps a single `wait` step at `maximumWaitSeconds`
+    /// (30s) -- pinned there and asserted per step by `test_everyStep_...`,
+    /// so the premise this sum rests on is enforced in-suite rather than only
+    /// stated here -- and the derived
+    /// floor here (~30.7s) already exceeds that cap on its own, so the
+    /// journey has to split its floor wait across two (or more) consecutive,
+    /// schema-compliant `wait` steps -- summing only the immediately
+    /// preceding step would make that split unrepresentable without either
+    /// breaching the schema (a single step over 30s) or under-covering the
+    /// floor (falling back to one short step).
     func test_theDeathJourneysWaitForElementSteps_areBackstoppedByADerivedFloorWait() {
         let journeys = loadJourneys()
 
@@ -309,23 +354,38 @@ final class JourneyManifestTests: XCTestCase {
             where (step["action"] as? String) == "wait_for_element" {
                 waitForElementSteps += 1
 
-                let previous = index > 0 ? journey.steps[index - 1] : [:]
-                guard (previous["action"] as? String) == "wait" else {
+                // Walk backwards over every contiguous "wait" step immediately
+                // preceding this wait_for_element and sum their "seconds".
+                // A journey may need more than one schema-compliant wait step
+                // (each <= `maximumWaitSeconds`, which `test_everyStep_...`
+                // enforces per step) to cover a floor above that per-step cap.
+                var floorStartIndex = index
+                var summedSeconds: TimeInterval = 0
+                while floorStartIndex > 0,
+                      (journey.steps[floorStartIndex - 1]["action"] as? String) == "wait" {
+                    floorStartIndex -= 1
+                    summedSeconds += (journey.steps[floorStartIndex]["seconds"] as? NSNumber)?.doubleValue ?? 0
+                }
+
+                guard floorStartIndex < index else {
                     XCTFail(
-                        "\(file) step \(index): wait_for_element must be immediately preceded by a "
-                            + "floor \"wait\". The probe's default element timeout is unknown here, "
-                            + "and a fall-through captures a gameplay frame under a death-screen "
-                            + "label."
+                        "\(file) step \(index): wait_for_element must be immediately preceded by "
+                            + "one or more floor \"wait\" steps. The probe's default element "
+                            + "timeout is unknown here, and a fall-through captures a gameplay "
+                            + "frame under a death-screen label."
                     )
                     continue
                 }
 
-                let seconds = (previous["seconds"] as? NSNumber)?.doubleValue ?? 0
+                let stepRange = floorStartIndex == index - 1
+                    ? "step \(floorStartIndex)"
+                    : "steps \(floorStartIndex)-\(index - 1)"
+
                 XCTAssertGreaterThanOrEqual(
-                    seconds,
+                    summedSeconds,
                     Self.secondsBeforeThePlayerCanBeDead,
-                    "\(file) step \(index - 1): waits only \(seconds)s before the wait_for_element "
-                        + "that follows it, but the player cannot be dead before "
+                    "\(file) \(stepRange): waits only \(summedSeconds)s (summed) before the "
+                        + "wait_for_element that follows, but the player cannot be dead before "
                         + "\(Self.secondsBeforeThePlayerCanBeDead)s "
                         + "(no raccoon on screen before "
                         + "\(Self.secondsBeforeARaccoonCanBeOnScreen)s, then "

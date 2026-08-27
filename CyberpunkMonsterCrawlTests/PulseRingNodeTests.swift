@@ -208,37 +208,49 @@ final class PulseRingNodeTests: XCTestCase {
         // scale resamples the nearest-filtered art, and `accuracy: 1e-6`
         // would swallow exactly the failure this test exists to catch.
         //
-        // Restored on review a sixth time (PR #51, PR #53, PR #54, PR #55,
-        // PR #56 and now PR #58) after a detour to `accuracy: 1e-6`. On
-        // PR #56 the detour arrived undeclared inside a PR whose stated scope
-        // was only the deletion of `CrashDiagnostics`, with no justification
-        // given at all; it was reverted on review without needing one,
-        // because the arithmetic below already settles the question. On
-        // PR #58 it rode along again, this time inside CYBERPUN-17-13's
-        // death-screen evidence slice -- again unrelated to that PR's scope,
-        // again unjustified, and this time applied to only the `0`/`0.01`
-        // pairs while the sibling `-5` assertions below stayed exact, so the
-        // single test disagreed with itself as well as with this comment. That detour's stated
-        // justification -- a "deterministic spritekit-float32-equality lint"
-        // that supposedly flags these call sites -- was checked against the
-        // tree on PR #54 and does not exist here: there is no `.swiftlint*`
-        // config anywhere, `project.yml` declares no script build phase,
-        // `ci.yml` detects no stack on this repo and exits 0, `ios-build.yml`
-        // runs only `xcodegen` + `xcodebuild build` + `xcodebuild test`, and
-        // the only source-scanning gates (`AtlasContractConventionTests`,
+        // Restored on review a seventh time (PR #51, PR #53, PR #54, PR #55,
+        // PR #56, PR #58 and now PR #59) after a detour to `accuracy: 1e-6`.
+        // On PR #56 the detour arrived undeclared inside a PR whose stated
+        // scope was only the deletion of `CrashDiagnostics`, with no
+        // justification given at all; it was reverted on review without
+        // needing one, because the arithmetic below already settles the
+        // question. On PR #58 it rode along again, this time inside
+        // CYBERPUN-17-13's death-screen evidence slice -- again unrelated to
+        // that PR's scope, again unjustified, and this time applied to only
+        // the `0`/`0.01` pairs while the sibling `-5` assertions below stayed
+        // exact, so the single test disagreed with itself as well as with
+        // this comment. On PR #59 it rode along a third time inside that same
+        // story's evidence slice (scope: `death-and-high-scores.json` plus
+        // `JourneyManifestTests`), once more only on the `0`/`0.01` pairs, and
+        // this time it also deleted this comment -- the record of the six
+        // prior reverts -- along with the assertions. Its justification called
+        // the tolerance "a no-op against the current exact `1.0` result" that
+        // "only ever matters if that arithmetic changes", while naming as the
+        // case to protect a rewrite landing "a whisker off the `1.0` floor":
+        // that is `|1 - 0.9999995| = 5e-7 < 1e-6`, i.e. the one deviation the
+        // tolerance hides rather than reports.
+        //
+        // That detour's stated justification -- a "deterministic
+        // spritekit-float32-equality lint" that supposedly flags these call
+        // sites -- was checked against the tree on PR #54 and does not exist
+        // here: there is no `.swiftlint*` config anywhere, `project.yml`
+        // declares no script build phase, `ci.yml` detects no stack on this
+        // repo and exits 0, `ios-build.yml` runs only `xcodegen` +
+        // `xcodebuild build` + `xcodebuild test`, and the only
+        // source-scanning gates (`AtlasContractConventionTests`,
         // `NoBuildingGeometryConstructionTests`) scan the *app* target with
-        // `...Tests` excluded and never look at assertions. PR #55 re-asserted
-        // the lint as an unobservable external gate whose tolerance is "a
-        // no-op ... a regression to `0.9999995` is still off by far more than
-        // 1e-6" -- but `|1 - 0.9999995| = 5e-7`, which is *less* than `1e-6`,
-        // so that tolerance passes the exact value the justification claims it
-        // catches. The arithmetic settles it independently of whether the
-        // lint exists: this assertion may not carry a tolerance. If some tool
-        // really does mis-flag these lines, the fix belongs in that tool's
-        // matcher or in a scoped suppression that names it -- not in the
-        // assertion it mis-flags. If residue ever does appear on this path,
-        // the exact assertion is the messenger and the finding gets recorded,
-        // not absorbed.
+        // `...Tests` excluded and never look at assertions. PR #55
+        // re-asserted the lint as an unobservable external gate whose
+        // tolerance is "a no-op ... a regression to `0.9999995` is still off
+        // by far more than 1e-6" -- but `|1 - 0.9999995| = 5e-7`, which is
+        // *less* than `1e-6`, so that tolerance passes the exact value the
+        // justification claims it catches. The arithmetic settles it
+        // independently of whether the lint exists: this assertion may not
+        // carry a tolerance. If some tool really does mis-flag these lines,
+        // the fix belongs in that tool's matcher or in a scoped suppression
+        // that names it -- not in the assertion it mis-flags. If residue ever
+        // does appear on this path, the exact assertion is the messenger and
+        // the finding gets recorded, not absorbed.
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
         XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
