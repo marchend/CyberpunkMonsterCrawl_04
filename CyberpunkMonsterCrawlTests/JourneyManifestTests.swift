@@ -1,4 +1,5 @@
 import Foundation
+import SpriteKit
 import XCTest
 @testable import CyberpunkMonsterCrawl
 
@@ -240,6 +241,130 @@ final class JourneyManifestTests: XCTestCase {
         let offScreenGapPoints = offScreenGapTiles * IsometricProjection.tileHalfWidth
         let walkInSeconds = offScreenGapPoints / RaccoonSeekBehavior.pointsPerSecond
         return RaccoonSpawnDirector.initialSpawnInterval + walkInSeconds
+    }
+
+    /// The earliest moment after entering `.gameplay` at which the player
+    /// can be dead -- i.e. the earliest a death screen can exist for a
+    /// `wait_for_element` to find -- derived from the production constants
+    /// the same way `secondsBeforeARaccoonCanBeOnScreen` is.
+    ///
+    /// Nothing can damage the player before a raccoon is on screen at all,
+    /// so that floor is the first term. From contact, `BiteComponent` seeds
+    /// its cooldown at `biteIntervalSeconds` so the first bite lands on the
+    /// frame contact is observed, and `N` bites therefore span `N - 1`
+    /// intervals; `N` is `baseMaxHP / biteDamage` rounded up (20 bites of 5
+    /// against 100 HP at today's values), for ~19s on top of the ~11.7s
+    /// approach.
+    ///
+    /// Deliberately the *floor*, not the journey's chosen wait: the journey
+    /// budgets margin on top of it, and a single biter is the slowest case
+    /// (a fuller swarm only kills sooner), so nothing here claims to predict
+    /// when death actually happens -- only that it cannot have happened
+    /// before this.
+    private static var secondsBeforeThePlayerCanBeDead: TimeInterval {
+        let bitesToDrainFullHP = (Double(PlayerNode.baseMaxHP) / Double(BiteComponent.biteDamage))
+            .rounded(.up)
+        let drainSeconds = max(0, bitesToDrainFullHP - 1) * BiteComponent.biteIntervalSeconds
+        return secondsBeforeARaccoonCanBeOnScreen + drainSeconds
+    }
+
+    /// `CYBERPUN-17-13`'s journey is the first in this tree to use
+    /// `wait_for_element`, and the probe's default timeout for that verb is
+    /// not documented anywhere here (PR #58 review). If that default is
+    /// shorter than the run, the step falls through while the game is still
+    /// in `.gameplay` and the next `screenshot` -- labelled
+    /// `death-screen-summary` -- captures a gameplay frame instead, which is
+    /// the same "empty rooftop reads as feature missing" failure the gate
+    /// above exists for, one level subtler because the label asserts what
+    /// the pixels do not show.
+    ///
+    /// So each `wait_for_element` must be backstopped by an explicit `wait`
+    /// that already covers the derived time-to-death: the element wait then
+    /// only has to absorb the tail (spawn jitter, approach heading, swarm
+    /// size), not the whole run. Overshoot costs nothing -- `DeathScreenNode`
+    /// mounts no auto-dismiss, so the death screen stays up until a button
+    /// is tapped -- which is what makes the floor safe to set from the
+    /// production constants rather than guessed downward.
+    ///
+    /// Binding the literals to the derived floor is the point: a CI-speedup
+    /// trim of the journey's waits, or a retune of the spawn cadence, seek
+    /// speed, bite cadence, bite damage or player HP, fails here instead of
+    /// silently mislabelling an evidence capture days later.
+    func test_theDeathJourneysWaitForElementSteps_areBackstoppedByADerivedFloorWait() {
+        let journeys = loadJourneys()
+
+        let deathJourneys = journeys.filter { $0.stories.contains("CYBERPUN-17-13") }
+        XCTAssertFalse(
+            deathJourneys.isEmpty,
+            "No journey names CYBERPUN-17-13 in its \"stories\", so product verification has "
+                + "nothing to run for the death-screen/high-scores work and falls back to a "
+                + "launch-only capture."
+        )
+
+        for journey in deathJourneys {
+            let file = journey.fileName
+            var waitForElementSteps = 0
+
+            for (index, step) in journey.steps.enumerated()
+            where (step["action"] as? String) == "wait_for_element" {
+                waitForElementSteps += 1
+
+                let previous = index > 0 ? journey.steps[index - 1] : [:]
+                guard (previous["action"] as? String) == "wait" else {
+                    XCTFail(
+                        "\(file) step \(index): wait_for_element must be immediately preceded by a "
+                            + "floor \"wait\". The probe's default element timeout is unknown here, "
+                            + "and a fall-through captures a gameplay frame under a death-screen "
+                            + "label."
+                    )
+                    continue
+                }
+
+                let seconds = (previous["seconds"] as? NSNumber)?.doubleValue ?? 0
+                XCTAssertGreaterThanOrEqual(
+                    seconds,
+                    Self.secondsBeforeThePlayerCanBeDead,
+                    "\(file) step \(index - 1): waits only \(seconds)s before the wait_for_element "
+                        + "that follows it, but the player cannot be dead before "
+                        + "\(Self.secondsBeforeThePlayerCanBeDead)s "
+                        + "(no raccoon on screen before "
+                        + "\(Self.secondsBeforeARaccoonCanBeOnScreen)s, then "
+                        + "\(PlayerNode.baseMaxHP) HP drained at BiteComponent.biteDamage "
+                        + "\(BiteComponent.biteDamage) every "
+                        + "\(BiteComponent.biteIntervalSeconds)s). That leaves the whole run "
+                        + "resting on an undocumented element-wait default."
+                )
+            }
+
+            // Anti-vacuity: the loop above is the entire gate, so a journey
+            // rewritten back to guessed `wait` durations -- or one that drops
+            // the death capture altogether -- would pass it silently.
+            XCTAssertGreaterThan(
+                waitForElementSteps, 0,
+                "\(file): names CYBERPUN-17-13 but uses no wait_for_element step, so this gate "
+                    + "passes vacuously. The death screen is reached at a duration nobody can "
+                    + "predict; if that is deliberately being guessed again, this gate needs "
+                    + "rewriting rather than emptying."
+            )
+        }
+    }
+
+    /// Anti-vacuity for the gate above, mirroring
+    /// `test_theOnScreenFloor_isStrictlyStrongerThanTheSpawnIntervalAlone`:
+    /// the death floor must stay strictly stronger than the approach floor it
+    /// builds on. If a retune ever collapsed the drain term (a one-bite kill,
+    /// a zero bite interval), the assertion above would quietly weaken to
+    /// "waited until a raccoon could be on screen" -- which is nowhere near
+    /// the death screen the capture is labelled for.
+    func test_theDeathFloor_isStrictlyStrongerThanTheApproachFloorAlone() {
+        XCTAssertGreaterThan(
+            Self.secondsBeforeThePlayerCanBeDead,
+            Self.secondsBeforeARaccoonCanBeOnScreen,
+            "The derived death floor (\(Self.secondsBeforeThePlayerCanBeDead)s) has collapsed onto "
+                + "the on-screen floor (\(Self.secondsBeforeARaccoonCanBeOnScreen)s), so the "
+                + "wait_for_element backstop no longer binds on the time the player actually "
+                + "takes to die."
+        )
     }
 
     /// `CYBERPUN-17-9`'s own journey. This story's visible work (the weapon
