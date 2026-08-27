@@ -1,6 +1,5 @@
 import SpriteKit
 import UIKit
-// `SCAFFOLDING(CYBERPUN-17-13)` — close-cleanup lane TEST FIXTURE (2026-08-27): a deliberate prose mention of this story's removed LaunchGotoState bridge, staged so the enabled lane's first run has a real audit finding. The lane is expected to delete exactly this line.
 
 /// Hosts the single SKView for the app (an `AccessibleSKView`, so
 /// accessibility-driven taps land where the scene actually hit-tests) and is
