@@ -53,6 +53,27 @@ final class JourneyManifestTests: XCTestCase {
         "wait_for_element",
     ]
 
+    /// The upper bound the mothership journey schema puts on a single `wait`
+    /// step's `seconds`; a longer step is rejected (or silently clamped) by
+    /// the probe at verification time, days after the PR merged.
+    ///
+    /// The cap is defined by the mothership runner's journey schema, which is
+    /// external to this repo -- there is no schema file under `.mothership/`
+    /// to read it from, so this constant is the single in-suite definition of
+    /// it and `test_everyStep_...` asserts it per step. Every journey in the
+    /// tree honours it today (`raccoon-swarm` and `auto-fire-weapons` sit at
+    /// exactly 30, the highest in the tree).
+    ///
+    /// This is the other end of
+    /// `test_theDeathJourneysWaitForElementSteps_areBackstoppedByADerivedFloorWait`:
+    /// that gate sums *contiguous* `wait` steps precisely because this cap
+    /// makes the derived ~30.7s death floor uncoverable by one step. Without
+    /// the assertion below, the `30 + 6` split could be collapsed back into a
+    /// single `wait: 36`, which would keep this file green while breaching the
+    /// schema at verification time. Pinned from both ends instead of only
+    /// explained in prose.
+    private static let maximumWaitSeconds: TimeInterval = 30
+
     // MARK: - Loading
 
     private struct Journey {
@@ -189,6 +210,16 @@ final class JourneyManifestTests: XCTestCase {
                         seconds, 0,
                         "\(position): a wait needs a positive \"seconds\"."
                     )
+                    XCTAssertLessThanOrEqual(
+                        seconds, Self.maximumWaitSeconds,
+                        "\(position): a single wait may not exceed "
+                            + "\(Self.maximumWaitSeconds)s (see maximumWaitSeconds -- the "
+                            + "mothership journey schema's per-step cap). A longer floor wait "
+                            + "must be split across consecutive wait steps, which "
+                            + "test_theDeathJourneysWaitForElementSteps_areBackstoppedByADerivedFloorWait "
+                            + "sums; a single over-cap step stays green here and is rejected or "
+                            + "clamped by the probe at verification time."
+                    )
 
                 case "tap_at":
                     XCTAssertNotNil(step["x"] as? NSNumber, "\(position): tap_at needs an \"x\".")
@@ -294,7 +325,10 @@ final class JourneyManifestTests: XCTestCase {
     ///
     /// The floor wait is summed over every contiguous `wait` step immediately
     /// preceding `wait_for_element`, not just the single previous step. The
-    /// mothership schema caps a single `wait` step at 30s, and the derived
+    /// mothership schema caps a single `wait` step at `maximumWaitSeconds`
+    /// (30s) -- pinned there and asserted per step by `test_everyStep_...`,
+    /// so the premise this sum rests on is enforced in-suite rather than only
+    /// stated here -- and the derived
     /// floor here (~30.7s) already exceeds that cap on its own, so the
     /// journey has to split its floor wait across two (or more) consecutive,
     /// schema-compliant `wait` steps -- summing only the immediately
@@ -322,8 +356,9 @@ final class JourneyManifestTests: XCTestCase {
 
                 // Walk backwards over every contiguous "wait" step immediately
                 // preceding this wait_for_element and sum their "seconds".
-                // A journey may need more than one schema-compliant (<=30s)
-                // wait step to cover a floor above that per-step cap.
+                // A journey may need more than one schema-compliant wait step
+                // (each <= `maximumWaitSeconds`, which `test_everyStep_...`
+                // enforces per step) to cover a floor above that per-step cap.
                 var floorStartIndex = index
                 var summedSeconds: TimeInterval = 0
                 while floorStartIndex > 0,
