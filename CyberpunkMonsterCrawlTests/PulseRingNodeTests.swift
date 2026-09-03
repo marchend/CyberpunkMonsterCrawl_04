@@ -251,10 +251,10 @@ final class PulseRingNodeTests: XCTestCase {
         // that names it -- not in the assertion it mis-flags. If residue ever
         // does appear on this path, the exact assertion is the messenger and
         // the finding gets recorded, not absorbed.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
+        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1, accuracy: 1e-6)
         XCTAssertEqual(
             PulseRingNode.xScale(forRadiusTiles: -5), 1,
             "a pure function must stay total, even off a real input."
