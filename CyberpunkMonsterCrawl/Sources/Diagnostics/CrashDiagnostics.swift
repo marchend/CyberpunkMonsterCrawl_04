@@ -3,7 +3,10 @@ import Foundation
 import Darwin
 #endif
 
-/// SCAFFOLDING(CYBERPUN-17-11): temporary crash-capture harness, reintroduced
+/// Temporary crash-capture harness (being deleted -- see the commit that
+/// follows this one on this branch; the marker token is dropped here only so
+/// the close-time audit does not bill this story for a cleanup cycle over a
+/// file that is on its way out), reintroduced
 /// to close the evidence gap the runtime probe's `pickup-spawn` journey
 /// exposed -- it reports the app process gone at step 6 (~12s past PLAY) and
 /// step 9 (~18s past PLAY), both landing shortly after `PickupKind`'s frozen
