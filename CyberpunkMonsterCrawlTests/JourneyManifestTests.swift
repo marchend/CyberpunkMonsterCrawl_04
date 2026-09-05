@@ -566,6 +566,22 @@ final class JourneyManifestTests: XCTestCase {
     /// of this file uses (`secondsBeforeARaccoonCanBeOnScreen`,
     /// `secondsBeforeThePlayerCanBeDead`).
     ///
+    /// **SCAFFOLDING(TBD -- root-cause ticket, filed by the gate reviewer).**
+    /// These two checkpoints are diagnostic instrumentation for a specific,
+    /// still-unidentified crash, and this test makes them permanent by
+    /// design -- once the crash is named, removing them would fail the suite,
+    /// which is exactly the "temporary artifact with a test protecting it"
+    /// shape `CYBERPUN-17-10`'s harness produced one layer in. Raised on
+    /// PR #61 review: no ticket ID is invented here, because filing the
+    /// root-cause ticket is the human call AGENT.md already records as
+    /// outstanding. Whoever files it should put its ID in this marker (and in
+    /// the matching marker in the journey's `demonstrates` paragraph); when
+    /// that ticket closes, **this test and the two extra `assert_running`
+    /// steps go away with it**. The steps themselves are cheap and harmless
+    /// in the journey -- the point of the marker is that they are removable,
+    /// and that the tree records their being temporary instead of staying
+    /// silent about it.
+    ///
     /// Only the `wait` steps *after* the `navigate` into gameplay count
     /// toward the cumulative clock, mirroring
     /// `test_aJourneyExistsForThisStorysCombatWork_...`'s own reasoning: a
