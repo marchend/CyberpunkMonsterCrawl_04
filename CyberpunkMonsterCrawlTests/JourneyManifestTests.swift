@@ -524,4 +524,87 @@ final class JourneyManifestTests: XCTestCase {
                 + "longer binds on the walk-in time the journeys actually depend on."
         )
     }
+
+    /// `CYBERPUN-17-11`'s runtime probe has twice reported the app process
+    /// gone right around `PLAY+12s`/`PLAY+18s` -- shortly after
+    /// `PickupKind.medKit`/`.garbageCan`'s shared `firstSpawnDelay` (8s)
+    /// fires, the moment the first `Pickup` record is created and the first
+    /// `PickupNode` is mounted -- with two independent static audits of the
+    /// whole pickup path finding no reachable crash site. Rather than
+    /// re-adding an in-app signal-handler crash-capture harness (the
+    /// `CYBERPUN-17-10` pattern already tried once and removed at close-out
+    /// as un-owned scaffolding, with that crash still unidentified), this
+    /// bisects the death with the probe's own `assert_running` verb: one
+    /// checkpoint strictly before the delay can fire and one at-or-after it,
+    /// so the *next* "process gone" report narrows to "before pickups are
+    /// even touched", "right as the first pickup is created/mounted", or
+    /// "sometime after" -- instead of only "gone".
+    ///
+    /// Only the `wait` steps *after* the `navigate` into gameplay count
+    /// toward the cumulative clock, mirroring
+    /// `test_aJourneyExistsForThisStorysCombatWork_...`'s own reasoning: a
+    /// wait before PLAY cannot bear on when pickup code first runs.
+    func test_thePickupSpawnJourney_bisectsTheFirstSpawnDelayWithAssertRunningCheckpoints() {
+        let journeys = loadJourneys()
+
+        let pickupJourneys = journeys.filter { $0.stories.contains("CYBERPUN-17-11") }
+        XCTAssertFalse(
+            pickupJourneys.isEmpty,
+            "No journey names CYBERPUN-17-11 in its \"stories\", so product verification has "
+                + "nothing to run for the pickup-spawn work and falls back to a launch-only capture."
+        )
+
+        let firstSpawnDelay = PickupKind.medKit.tuning.firstSpawnDelay
+        XCTAssertEqual(
+            firstSpawnDelay, PickupKind.garbageCan.tuning.firstSpawnDelay,
+            "Both kinds are documented to share firstSpawnDelay; if that ever diverges this "
+                + "bisection needs to pick one deliberately rather than silently using medKit's."
+        )
+
+        for journey in pickupJourneys {
+            let file = journey.fileName
+
+            guard let navigateIndex = journey.steps.firstIndex(
+                where: { ($0["action"] as? String) == "navigate" }
+            ) else {
+                XCTFail("\(file): must navigate past the menu -- the pickup work is not on the menu.")
+                continue
+            }
+
+            var cumulativeSeconds: TimeInterval = 0
+            var sawCheckpointBeforeDelay = false
+            var sawCheckpointAtOrAfterDelay = false
+
+            for step in journey.steps.dropFirst(navigateIndex + 1) {
+                switch step["action"] as? String {
+                case "wait":
+                    cumulativeSeconds += (step["seconds"] as? NSNumber)?.doubleValue ?? 0
+                case "assert_running":
+                    if cumulativeSeconds < firstSpawnDelay {
+                        sawCheckpointBeforeDelay = true
+                    } else {
+                        sawCheckpointAtOrAfterDelay = true
+                    }
+                default:
+                    break
+                }
+            }
+
+            XCTAssertTrue(
+                sawCheckpointBeforeDelay,
+                "\(file): needs an assert_running checkpoint before "
+                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has elapsed "
+                    + "past PLAY, so a probe run that dies before the first spawn attempt is "
+                    + "distinguishable from one that dies at or after it."
+            )
+            XCTAssertTrue(
+                sawCheckpointAtOrAfterDelay,
+                "\(file): needs an assert_running checkpoint at or after "
+                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has elapsed "
+                    + "past PLAY -- right around when the first Pickup record is created and the "
+                    + "first PickupNode is mounted -- so a probe run that dies there is "
+                    + "distinguishable from one that dies earlier or survives it."
+            )
+        }
+    }
 }
