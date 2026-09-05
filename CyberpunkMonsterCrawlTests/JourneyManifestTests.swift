@@ -524,4 +524,145 @@ final class JourneyManifestTests: XCTestCase {
                 + "longer binds on the walk-in time the journeys actually depend on."
         )
     }
+
+    /// How far past `firstSpawnDelay` the *at-or-after* bisection checkpoint
+    /// may sit and still be a bisection checkpoint rather than an ordinary
+    /// liveness check.
+    ///
+    /// Raised on PR #61: without a window, "an `assert_running` exists at or
+    /// after the delay" passes vacuously against the `assert_running` steps
+    /// the journey already carried after each screenshot (12s and 18s past
+    /// PLAY, both `>= 8s`), so the tight checkpoint this gate exists to pin
+    /// could be deleted with the suite still green. 2s is the probe's own
+    /// coarse granularity -- waits are whole seconds and the journey budgets
+    /// ~10s of cumulative slop over the whole run -- so it admits a
+    /// checkpoint that brackets the delay while rejecting one that has
+    /// drifted out to the screenshot steps.
+    private static let checkpointWindowPastTheSpawnDelay: TimeInterval = 2
+
+    /// `CYBERPUN-17-11`'s runtime probe has twice reported the app process
+    /// gone right around `PLAY+12s`/`PLAY+18s` -- shortly after
+    /// `PickupKind.medKit`/`.garbageCan`'s shared `firstSpawnDelay` (8s)
+    /// fires, the moment the first `Pickup` record is created and the first
+    /// `PickupNode` is mounted -- with two independent static audits of the
+    /// whole pickup path finding no reachable crash site. Rather than
+    /// re-adding an in-app signal-handler crash-capture harness (the
+    /// `CYBERPUN-17-10` pattern already tried once and removed at close-out
+    /// as un-owned scaffolding, with that crash still unidentified), this
+    /// bisects the death with the probe's own `assert_running` verb: one
+    /// checkpoint strictly before the delay can fire and one in a narrow
+    /// window at or just past it
+    /// (`checkpointWindowPastTheSpawnDelay`), so the *next* "process gone"
+    /// report narrows to "before pickups are even touched", "right as the
+    /// first pickup is created/mounted", or "sometime after" -- instead of
+    /// only "gone".
+    ///
+    /// The at-or-after arm is bound to that window rather than to "a
+    /// checkpoint exists somewhere later" because the journey already
+    /// carried `assert_running` after each screenshot (12s/18s past PLAY),
+    /// which satisfies the looser form on its own -- the tight checkpoint
+    /// could then be deleted with this test still green. The window is what
+    /// makes the gate bind, in the same shape as the derived bounds the rest
+    /// of this file uses (`secondsBeforeARaccoonCanBeOnScreen`,
+    /// `secondsBeforeThePlayerCanBeDead`).
+    ///
+    /// **SCAFFOLDING(TBD -- root-cause ticket, filed by the gate reviewer).**
+    /// These two checkpoints are diagnostic instrumentation for a specific,
+    /// still-unidentified crash, and this test makes them permanent by
+    /// design -- once the crash is named, removing them would fail the suite,
+    /// which is exactly the "temporary artifact with a test protecting it"
+    /// shape `CYBERPUN-17-10`'s harness produced one layer in. Raised on
+    /// PR #61 review: no ticket ID is invented here, because filing the
+    /// root-cause ticket is the human call AGENT.md already records as
+    /// outstanding. Whoever files it should put its ID in this marker (and in
+    /// the matching marker in the journey's `demonstrates` paragraph); when
+    /// that ticket closes, **this test and the two extra `assert_running`
+    /// steps go away with it**. The steps themselves are cheap and harmless
+    /// in the journey -- the point of the marker is that they are removable,
+    /// and that the tree records their being temporary instead of staying
+    /// silent about it.
+    ///
+    /// Only the `wait` steps *after* the `navigate` into gameplay count
+    /// toward the cumulative clock, mirroring
+    /// `test_aJourneyExistsForThisStorysCombatWork_...`'s own reasoning: a
+    /// wait before PLAY cannot bear on when pickup code first runs.
+    func test_thePickupSpawnJourney_bisectsTheFirstSpawnDelayWithAssertRunningCheckpoints() {
+        let journeys = loadJourneys()
+
+        let pickupJourneys = journeys.filter { $0.stories.contains("CYBERPUN-17-11") }
+        XCTAssertFalse(
+            pickupJourneys.isEmpty,
+            "No journey names CYBERPUN-17-11 in its \"stories\", so product verification has "
+                + "nothing to run for the pickup-spawn work and falls back to a launch-only capture."
+        )
+
+        let firstSpawnDelay = PickupKind.medKit.tuning.firstSpawnDelay
+        XCTAssertEqual(
+            firstSpawnDelay, PickupKind.garbageCan.tuning.firstSpawnDelay,
+            "Both kinds are documented to share firstSpawnDelay; if that ever diverges this "
+                + "bisection needs to pick one deliberately rather than silently using medKit's."
+        )
+
+        for journey in pickupJourneys {
+            let file = journey.fileName
+
+            guard let navigateIndex = journey.steps.firstIndex(
+                where: { ($0["action"] as? String) == "navigate" }
+            ) else {
+                XCTFail("\(file): must navigate past the menu -- the pickup work is not on the menu.")
+                continue
+            }
+
+            var cumulativeSeconds: TimeInterval = 0
+            var sawCheckpointBeforeDelay = false
+            var firstCheckpointAtOrAfterDelay: TimeInterval?
+
+            for step in journey.steps.dropFirst(navigateIndex + 1) {
+                switch step["action"] as? String {
+                case "wait":
+                    cumulativeSeconds += (step["seconds"] as? NSNumber)?.doubleValue ?? 0
+                case "assert_running":
+                    if cumulativeSeconds < firstSpawnDelay {
+                        sawCheckpointBeforeDelay = true
+                    } else if firstCheckpointAtOrAfterDelay == nil {
+                        firstCheckpointAtOrAfterDelay = cumulativeSeconds
+                    }
+                default:
+                    break
+                }
+            }
+
+            XCTAssertTrue(
+                sawCheckpointBeforeDelay,
+                "\(file): needs an assert_running checkpoint before "
+                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has elapsed "
+                    + "past PLAY, so a probe run that dies before the first spawn attempt is "
+                    + "distinguishable from one that dies at or after it."
+            )
+
+            guard let tightCheckpoint = firstCheckpointAtOrAfterDelay else {
+                XCTFail(
+                    "\(file): needs an assert_running checkpoint at or after "
+                        + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has "
+                        + "elapsed past PLAY -- right around when the first Pickup record is "
+                        + "created and the first PickupNode is mounted -- so a probe run that "
+                        + "dies there is distinguishable from one that dies earlier or survives it."
+                )
+                continue
+            }
+            XCTAssertLessThan(
+                tightCheckpoint, firstSpawnDelay + Self.checkpointWindowPastTheSpawnDelay,
+                "\(file): the first assert_running at or after "
+                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) lands at "
+                    + "\(tightCheckpoint)s past PLAY, outside the "
+                    + "\(firstSpawnDelay)-\(firstSpawnDelay + Self.checkpointWindowPastTheSpawnDelay)s "
+                    + "window that makes it a bisection checkpoint rather than an ordinary "
+                    + "liveness check. The journey already carried assert_running after each "
+                    + "screenshot (12s and 18s past PLAY), both at-or-after the delay, so "
+                    + "'a checkpoint exists somewhere later' passes vacuously and the tight "
+                    + "checkpoint could be deleted with the suite still green -- this window is "
+                    + "what actually binds it."
+            )
+        }
+    }
 }

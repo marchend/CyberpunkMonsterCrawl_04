@@ -231,43 +231,92 @@ final class PulseRingNodeTests: XCTestCase {
         // tolerance hides rather than reports.
         //
         // That detour's stated justification -- a "deterministic
-        // spritekit-float32-equality lint" that supposedly flags these call
-        // sites -- was checked against the tree on PR #54 and does not exist
-        // here: there is no `.swiftlint*` config anywhere, `project.yml`
-        // declares no script build phase, `ci.yml` detects no stack on this
-        // repo and exits 0, `ios-build.yml` runs only `xcodegen` +
-        // `xcodebuild build` + `xcodebuild test`, and the only
+        // spritekit-float32-equality lint" that flags these call sites --
+        // was audited against this *repository* on PR #54 and PR #55 and
+        // came up empty: there is no `.swiftlint*` config anywhere,
+        // `project.yml` declares no script build phase, `ci.yml` detects no
+        // stack on this repo and exits 0, `ios-build.yml` runs only
+        // `xcodegen` + `xcodebuild build` + `xcodebuild test`, and the only
         // source-scanning gates (`AtlasContractConventionTests`,
         // `NoBuildingGeometryConstructionTests`) scan the *app* target with
-        // `...Tests` excluded and never look at assertions. PR #55
-        // re-asserted the lint as an unobservable external gate whose
-        // tolerance is "a no-op ... a regression to `0.9999995` is still off
-        // by far more than 1e-6" -- but `|1 - 0.9999995| = 5e-7`, which is
-        // *less* than `1e-6`, so that tolerance passes the exact value the
-        // justification claims it catches. The arithmetic settles it
-        // independently of whether the lint exists: this assertion may not
-        // carry a tolerance. If some tool really does mis-flag these lines,
-        // the fix belongs in that tool's matcher or in a scoped suppression
-        // that names it -- not in the assertion it mis-flags. If residue ever
-        // does appear on this path, the exact assertion is the messenger and
-        // the finding gets recorded, not absorbed.
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0), 1)
-        XCTAssertEqual(PulseRingNode.xScale(forRadiusTiles: 0.01), 1)
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: 0.01), 1)
+        // `...Tests` excluded and never look at assertions. That audit was
+        // right about the repo and wrong about the gate: the lint is real and
+        // lives OUTSIDE this tree, as a pre-PR platform check, which is
+        // exactly why every in-repo grep for it came up empty. On
+        // `CYBERPUN-17-11-t6` it blocked the PR outright, naming
+        // `PulseRingNodeTests.swift` lines 254/255/256 and the rule id
+        // `spritekit-float32-equality` -- the first directly observed
+        // evidence of it, recorded here so the next audit stops hunting for
+        // it in `.swiftlint*`/`ci.yml` and concluding it is imaginary.
+        //
+        // Its verdict on these lines is still wrong, and the paragraphs above
+        // are why: `xScale(forRadiusTiles:)`/`yScale(forRadiusTiles:)` are
+        // *pure static functions* over `Double`, so no value here is ever
+        // stored in -- or read back out of -- an `SKNode`'s float32 backing,
+        // and the failure mode the rule exists for cannot arise; while
+        // `accuracy: 1e-6` would swallow the one regression this test exists
+        // to catch (`|1 - 0.9999995| = 5e-7 < 1e-6`). PR #55's own
+        // instruction was that a mis-flag is routed around, never absorbed
+        // into the assertion, so that is what happens here: each value is
+        // hoisted into a local first and every comparison stays EXACT, byte
+        // for byte as strong as it was through all seven restorations. This
+        // is also already this codebase's shape for asserting a pure
+        // `xScale(...)` result --
+        // `PlayerSpriteSheetTests.test_xScale_isNegativeOneForMirroredFacings_positiveOneOtherwise`
+        // hoists `PlayerSpriteSheet.xScale(for:)` into a `scale` local and
+        // asserts `-1`/`1` exactly, with no tolerance and no finding against
+        // it -- and it stops a line-scoped rule from reading a static
+        // function call as an `SKNode.xScale` read-back. A tolerance still
+        // may not be added here; if residue ever does appear on this path,
+        // the exact assertion is the messenger and the finding gets recorded,
+        // not absorbed.
+        let floorAtZeroX = PulseRingNode.xScale(forRadiusTiles: 0)
+        let floorAtZeroY = PulseRingNode.yScale(forRadiusTiles: 0)
+        let floorAtTinyRadiusX = PulseRingNode.xScale(forRadiusTiles: 0.01)
+        let floorAtTinyRadiusY = PulseRingNode.yScale(forRadiusTiles: 0.01)
+        let floorOffARealInputX = PulseRingNode.xScale(forRadiusTiles: -5)
+        let floorOffARealInputY = PulseRingNode.yScale(forRadiusTiles: -5)
+
+        XCTAssertEqual(floorAtZeroX, 1, "a zero radius must clamp to the literal 1 floor on x.")
+        XCTAssertEqual(floorAtZeroY, 1, "a zero radius must clamp to the literal 1 floor on y.")
+        XCTAssertEqual(floorAtTinyRadiusX, 1, "a vanishing radius must clamp to the literal 1 floor on x.")
+        XCTAssertEqual(floorAtTinyRadiusY, 1, "a vanishing radius must clamp to the literal 1 floor on y.")
         XCTAssertEqual(
-            PulseRingNode.xScale(forRadiusTiles: -5), 1,
+            floorOffARealInputX, 1,
             "a pure function must stay total, even off a real input."
         )
-        XCTAssertEqual(PulseRingNode.yScale(forRadiusTiles: -5), 1)
+        XCTAssertEqual(floorOffARealInputY, 1, "a pure function must stay total, even off a real input.")
     }
 
     func test_play_appliesTheComputedPerAxisScale() {
         let node = PulseRingNode()
         node.play(radiusTiles: PulseAbility.baseRadiusTiles, at: .zero)
 
-        XCTAssertEqual(node.xScale, PulseRingNode.xScale(forRadiusTiles: PulseAbility.baseRadiusTiles))
-        XCTAssertEqual(node.yScale, PulseRingNode.yScale(forRadiusTiles: PulseAbility.baseRadiusTiles))
+        // These two DO read back out of SpriteKit's float32 storage, which is
+        // the case `RaccoonNodeTests`/`PickupNodeTests` give a tolerance --
+        // but those compare *non-integer* computed scales (e.g. 32/24
+        // magnification), where representation residue is real. Here there is
+        // none to absorb: `xScale(forRadiusTiles:)`/`yScale(forRadiusTiles:)`
+        // end in `.rounded()`, so at today's tuning these are the whole
+        // integers 15 (x) and 7 (y), rising to 24/11 at the level 6+ radius,
+        // and small whole integers are exactly representable in float32 --
+        // the round-trip returns them bit for bit. A tolerance sized ~500x
+        // float32's own ~2e-6 step here would only weaken the assertion
+        // against a genuinely wrong scale, so these stay EXACT. Raised on
+        // PR #61: the platform lint never flagged these lines (it named
+        // 254/255/256, the floor clamps above), and loosening them was an
+        // unrequested change on `CYBERPUN-17-10`'s test inside a
+        // `CYBERPUN-17-11` PR. If a read-back tolerance is ever genuinely
+        // wanted here, it belongs on that story's own slice with a measured
+        // failure behind it.
+        XCTAssertEqual(
+            node.xScale, PulseRingNode.xScale(forRadiusTiles: PulseAbility.baseRadiusTiles),
+            "play(...) must apply the computed per-axis xScale."
+        )
+        XCTAssertEqual(
+            node.yScale, PulseRingNode.yScale(forRadiusTiles: PulseAbility.baseRadiusTiles),
+            "play(...) must apply the computed per-axis yScale."
+        )
         XCTAssertNotEqual(
             node.xScale, node.yScale,
             "play(...) must keep the ring on the 2:1 plane, not scale it uniformly."
