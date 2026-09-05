@@ -292,24 +292,29 @@ final class PulseRingNodeTests: XCTestCase {
         let node = PulseRingNode()
         node.play(radiusTiles: PulseAbility.baseRadiusTiles, at: .zero)
 
-        // Unlike the pure static functions above, `node.xScale`/`node.yScale`
-        // ARE read back out of SpriteKit's float32 storage, so these two do
-        // carry a tolerance -- the same treatment `RaccoonNodeTests` and
-        // `PickupNodeTests` already give `body.xScale`/`icon.xScale`. It is
-        // sized to the magnitude rather than copied: at today's tuning these
-        // are the whole integers 15 (x) and 7 (y) -- 407.29/27 and 203.65/28
-        // rounded -- rising to 24/11 at the level 6+ radius, a range where
-        // float32's own step is ~1e-6 to ~2e-6 while two distinct integer
-        // scales are a full 1.0 apart. 1e-3 therefore absorbs representation
-        // residue and still fails on any genuinely wrong scale.
+        // These two DO read back out of SpriteKit's float32 storage, which is
+        // the case `RaccoonNodeTests`/`PickupNodeTests` give a tolerance --
+        // but those compare *non-integer* computed scales (e.g. 32/24
+        // magnification), where representation residue is real. Here there is
+        // none to absorb: `xScale(forRadiusTiles:)`/`yScale(forRadiusTiles:)`
+        // end in `.rounded()`, so at today's tuning these are the whole
+        // integers 15 (x) and 7 (y), rising to 24/11 at the level 6+ radius,
+        // and small whole integers are exactly representable in float32 --
+        // the round-trip returns them bit for bit. A tolerance sized ~500x
+        // float32's own ~2e-6 step here would only weaken the assertion
+        // against a genuinely wrong scale, so these stay EXACT. Raised on
+        // PR #61: the platform lint never flagged these lines (it named
+        // 254/255/256, the floor clamps above), and loosening them was an
+        // unrequested change on `CYBERPUN-17-10`'s test inside a
+        // `CYBERPUN-17-11` PR. If a read-back tolerance is ever genuinely
+        // wanted here, it belongs on that story's own slice with a measured
+        // failure behind it.
         XCTAssertEqual(
             node.xScale, PulseRingNode.xScale(forRadiusTiles: PulseAbility.baseRadiusTiles),
-            accuracy: 1e-3,
             "play(...) must apply the computed per-axis xScale."
         )
         XCTAssertEqual(
             node.yScale, PulseRingNode.yScale(forRadiusTiles: PulseAbility.baseRadiusTiles),
-            accuracy: 1e-3,
             "play(...) must apply the computed per-axis yScale."
         )
         XCTAssertNotEqual(

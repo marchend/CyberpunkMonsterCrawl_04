@@ -525,6 +525,21 @@ final class JourneyManifestTests: XCTestCase {
         )
     }
 
+    /// How far past `firstSpawnDelay` the *at-or-after* bisection checkpoint
+    /// may sit and still be a bisection checkpoint rather than an ordinary
+    /// liveness check.
+    ///
+    /// Raised on PR #61: without a window, "an `assert_running` exists at or
+    /// after the delay" passes vacuously against the `assert_running` steps
+    /// the journey already carried after each screenshot (12s and 18s past
+    /// PLAY, both `>= 8s`), so the tight checkpoint this gate exists to pin
+    /// could be deleted with the suite still green. 2s is the probe's own
+    /// coarse granularity -- waits are whole seconds and the journey budgets
+    /// ~10s of cumulative slop over the whole run -- so it admits a
+    /// checkpoint that brackets the delay while rejecting one that has
+    /// drifted out to the screenshot steps.
+    private static let checkpointWindowPastTheSpawnDelay: TimeInterval = 2
+
     /// `CYBERPUN-17-11`'s runtime probe has twice reported the app process
     /// gone right around `PLAY+12s`/`PLAY+18s` -- shortly after
     /// `PickupKind.medKit`/`.garbageCan`'s shared `firstSpawnDelay` (8s)
@@ -535,10 +550,21 @@ final class JourneyManifestTests: XCTestCase {
     /// `CYBERPUN-17-10` pattern already tried once and removed at close-out
     /// as un-owned scaffolding, with that crash still unidentified), this
     /// bisects the death with the probe's own `assert_running` verb: one
-    /// checkpoint strictly before the delay can fire and one at-or-after it,
-    /// so the *next* "process gone" report narrows to "before pickups are
-    /// even touched", "right as the first pickup is created/mounted", or
-    /// "sometime after" -- instead of only "gone".
+    /// checkpoint strictly before the delay can fire and one in a narrow
+    /// window at or just past it
+    /// (`checkpointWindowPastTheSpawnDelay`), so the *next* "process gone"
+    /// report narrows to "before pickups are even touched", "right as the
+    /// first pickup is created/mounted", or "sometime after" -- instead of
+    /// only "gone".
+    ///
+    /// The at-or-after arm is bound to that window rather than to "a
+    /// checkpoint exists somewhere later" because the journey already
+    /// carried `assert_running` after each screenshot (12s/18s past PLAY),
+    /// which satisfies the looser form on its own -- the tight checkpoint
+    /// could then be deleted with this test still green. The window is what
+    /// makes the gate bind, in the same shape as the derived bounds the rest
+    /// of this file uses (`secondsBeforeARaccoonCanBeOnScreen`,
+    /// `secondsBeforeThePlayerCanBeDead`).
     ///
     /// Only the `wait` steps *after* the `navigate` into gameplay count
     /// toward the cumulative clock, mirroring
@@ -573,7 +599,7 @@ final class JourneyManifestTests: XCTestCase {
 
             var cumulativeSeconds: TimeInterval = 0
             var sawCheckpointBeforeDelay = false
-            var sawCheckpointAtOrAfterDelay = false
+            var firstCheckpointAtOrAfterDelay: TimeInterval?
 
             for step in journey.steps.dropFirst(navigateIndex + 1) {
                 switch step["action"] as? String {
@@ -582,8 +608,8 @@ final class JourneyManifestTests: XCTestCase {
                 case "assert_running":
                     if cumulativeSeconds < firstSpawnDelay {
                         sawCheckpointBeforeDelay = true
-                    } else {
-                        sawCheckpointAtOrAfterDelay = true
+                    } else if firstCheckpointAtOrAfterDelay == nil {
+                        firstCheckpointAtOrAfterDelay = cumulativeSeconds
                     }
                 default:
                     break
@@ -597,13 +623,29 @@ final class JourneyManifestTests: XCTestCase {
                     + "past PLAY, so a probe run that dies before the first spawn attempt is "
                     + "distinguishable from one that dies at or after it."
             )
-            XCTAssertTrue(
-                sawCheckpointAtOrAfterDelay,
-                "\(file): needs an assert_running checkpoint at or after "
-                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has elapsed "
-                    + "past PLAY -- right around when the first Pickup record is created and the "
-                    + "first PickupNode is mounted -- so a probe run that dies there is "
-                    + "distinguishable from one that dies earlier or survives it."
+
+            guard let tightCheckpoint = firstCheckpointAtOrAfterDelay else {
+                XCTFail(
+                    "\(file): needs an assert_running checkpoint at or after "
+                        + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has "
+                        + "elapsed past PLAY -- right around when the first Pickup record is "
+                        + "created and the first PickupNode is mounted -- so a probe run that "
+                        + "dies there is distinguishable from one that dies earlier or survives it."
+                )
+                continue
+            }
+            XCTAssertLessThan(
+                tightCheckpoint, firstSpawnDelay + Self.checkpointWindowPastTheSpawnDelay,
+                "\(file): the first assert_running at or after "
+                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) lands at "
+                    + "\(tightCheckpoint)s past PLAY, outside the "
+                    + "\(firstSpawnDelay)-\(firstSpawnDelay + Self.checkpointWindowPastTheSpawnDelay)s "
+                    + "window that makes it a bisection checkpoint rather than an ordinary "
+                    + "liveness check. The journey already carried assert_running after each "
+                    + "screenshot (12s and 18s past PLAY), both at-or-after the delay, so "
+                    + "'a checkpoint exists somewhere later' passes vacuously and the tight "
+                    + "checkpoint could be deleted with the suite still green -- this window is "
+                    + "what actually binds it."
             )
         }
     }
