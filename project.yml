@@ -27,7 +27,16 @@ targets:
   CyberpunkMonsterCrawl:
     type: application
     platform: iOS
-    sources: [CyberpunkMonsterCrawl]
+    sources:
+      - path: CyberpunkMonsterCrawl
+        excludes:
+          # Superseded by `Sources/UI/HUD/HUDPulseButton.swift` (renamed to
+          # match its `HUDPulseButton` type, since a target cannot contain
+          # two files both named `PulseButton.swift` -- see that file's
+          # doc comment). This stub is left in place only because the
+          # tooling available for this fix has no file-delete primitive;
+          # it carries no declarations and must never be compiled.
+          - "Sources/UI/HUD/PulseButton.swift"
     settings:
       base:
         PRODUCT_NAME: $(TARGET_NAME)
