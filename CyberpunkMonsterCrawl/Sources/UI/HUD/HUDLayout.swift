@@ -57,9 +57,13 @@ enum HUDSlot: CaseIterable {
 /// own wording -- see the still-open placement note in `AGENT.md`'s
 /// `CYBERPUN-17-10` entry), and every other slot here hangs from the top of
 /// the safe area, so no slot this type produces can overlap that region by
-/// construction -- but only just, in landscape: see `swarmBannerSize`'s own
-/// doc comment for the 137pt vertical budget the whole top stack has to fit
-/// inside there. `HUDLayoutTests` still pins the non-overlap
+/// construction. The banner is the one slot for which "hangs from the top"
+/// is not enough on its own in landscape, so its placement is *derived*
+/// from that region rather than from a height hand-tuned against one
+/// device's insets -- see the `.swarmBanner` case in
+/// `frame(for:sceneSize:safeAreaInsets:)`, and `swarmBannerSize`'s own doc
+/// comment for the tightest-geometry defect that motivated it.
+/// `HUDLayoutTests` still pins the non-overlap
 /// directly (computed from `FloatingThumbstickNode`'s own geometry, so the
 /// two can never silently drift apart) rather than leaving it as an
 /// assumption about "top" and "bottom-left" never meeting.
@@ -73,15 +77,22 @@ enum HUDLayout {
     static let killCountSize = CGSize(width: 120, height: 32)
     static let pulseButtonSize = CGSize(width: 72, height: 72)
 
-    /// The banner is the one slot whose height is set by a *budget* rather
-    /// than by its own content (an 18pt `Menlo-Bold` line): it hangs below
-    /// both top columns, and in landscape the whole stack has to fit
-    /// between the safe area's top edge and `thumbstickReservedRegion`'s
-    /// top -- 137pt at the representative landscape insets
-    /// (`safeRect.maxY 195` down to `58`). `16 + 32 + 8 + 32 + 8 + 36 =
-    /// 132` fits with 5pt to spare; the 44pt this was until
-    /// `CYBERPUN-17-12` PR 2 did not (`140 > 137`), which pushed the banner
-    /// into the stick's reserved region in landscape.
+    /// The banner's own drawn size: 280x36 around an 18pt `Menlo-Bold`
+    /// line.
+    ///
+    /// This height is deliberately *not* a vertical budget in disguise any
+    /// more. PR 2's first cut tuned it (44 -> 36) against the top stack's
+    /// landscape budget computed at one hardcoded inset pair -- 844x390,
+    /// top 0 / bottom 21 -- which left 5pt of slack there and went ~10pt
+    /// **negative** on a 375pt-tall landscape carrying the same 21pt home
+    /// indicator (iPhone X/XS/11 Pro, 12/13 mini): the constraint
+    /// `H >= 364 + top + bottom` needs 385pt of height and that device
+    /// class has 375, so the banner landed inside
+    /// `thumbstickReservedRegion`. `frame(for:)`'s `.swarmBanner` case now
+    /// derives the banner's *placement* from that budget instead (see
+    /// there), so the tightest supported geometry pushes the banner up off
+    /// the stick's region rather than silently drawing into it, and
+    /// `HUDLayoutTests` exercises that geometry directly.
     static let swarmBannerSize = CGSize(width: 280, height: 36)
 
     /// Gap kept between the safe area's own edge and any slot's outer edge.
@@ -186,9 +197,44 @@ enum HUDLayout {
             let rightColumnBottom = frame(
                 for: .killCount, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
             ).minY
+            let hungBelowBothColumns =
+                min(leftColumnBottom, rightColumnBottom) - verticalSpacing - swarmBannerSize.height
+
+            // ... but never *into* the stick's region, and that floor wins.
+            //
+            // The banner is horizontally centred and 280pt wide, so on
+            // every supported geometry its x-range runs into
+            // `thumbstickReservedRegion`'s (that region reaches from the
+            // safe left edge to the screen's horizontal centre). The only
+            // separation available is vertical, and in landscape the whole
+            // top stack -- edge margin, run timer, spacing, kill count,
+            // spacing, banner -- has to fit between `safeRect.maxY` and
+            // that region's top. Deriving the banner's *height* from that
+            // budget is what PR 2 tried first, and it silently depended on
+            // one device's insets (see `swarmBannerSize`); deriving its
+            // *placement* from the budget instead is total: where the
+            // natural "hang it below both columns" position would intrude,
+            // the banner is lifted to sit clear of the region, and where
+            // there is room (every portrait geometry, and landscape
+            // without a home-indicator inset) the floor is inert and the
+            // natural position stands unchanged.
+            //
+            // Lifting is safe in the other direction because the gap the
+            // banner is lifted into is the one between the stick's region
+            // and the *lowest column that shares its x-range* -- 42pt at
+            // the tightest supported geometry (812x375, bottom 21) for a
+            // 36pt banner. `HUDLayoutTests`/`HUDRotationUITests`/
+            // `HUDThumbstickOverlapTests` all pin both invariants (clear of
+            // the stick, disjoint from every sibling slot) at that geometry
+            // as well as at the roomier one, so a future retune of any
+            // element's size cannot quietly consume that gap.
+            let clearOfTheStick = thumbstickReservedRegion(
+                sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
+            ).maxY + verticalSpacing
+
             return CGRect(
                 x: -swarmBannerSize.width / 2,
-                y: min(leftColumnBottom, rightColumnBottom) - verticalSpacing - swarmBannerSize.height,
+                y: max(hungBelowBothColumns, clearOfTheStick),
                 width: swarmBannerSize.width,
                 height: swarmBannerSize.height
             )

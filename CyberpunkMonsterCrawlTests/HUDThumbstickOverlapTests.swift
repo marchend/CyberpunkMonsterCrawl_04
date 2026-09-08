@@ -42,6 +42,16 @@ final class HUDThumbstickOverlapTests: XCTestCase {
     private let landscapeSize = CGSize(width: 844, height: 390)
     private let landscapeInsets = UIEdgeInsets(top: 0, left: 47, bottom: 21, right: 47)
 
+    /// The tightest supported landscape geometry -- 812x375 with the same
+    /// 21pt home indicator (iPhone X/XS/11 Pro, 12/13 mini). See
+    /// `HUDLayoutTests.compactLandscapeSize`: the top stack does not fit
+    /// above the stick's region there, so this is the geometry on which
+    /// the banner's *derived* placement (rather than a hand-tuned height)
+    /// is what keeps the region clear. Hardcoding only 844x390 here is
+    /// what let PR 2's first cut ship a banner ~10pt inside it.
+    private let compactLandscapeSize = CGSize(width: 812, height: 375)
+    private let compactLandscapeInsets = UIEdgeInsets(top: 0, left: 44, bottom: 21, right: 44)
+
     private func makeGameplayScene(size: CGSize) -> GameScene {
         let scene = GameScene(size: size)
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
@@ -123,6 +133,13 @@ final class HUDThumbstickOverlapTests: XCTestCase {
         )
     }
 
+    func test_noMountedHUDElement_overlapsTheRegionTheThumbstickOccupies_inTheTightestLandscape() throws {
+        let scene = makeGameplayScene(size: compactLandscapeSize)
+        try assertNoElementOverlapsTheStick(
+            scene: scene, sceneSize: compactLandscapeSize, safeAreaInsets: compactLandscapeInsets
+        )
+    }
+
     // MARK: - The HUD's interactive control clears the stick's acceptance box
 
     /// The stick must not be able to claim *any* point of the pulse
@@ -176,6 +193,13 @@ final class HUDThumbstickOverlapTests: XCTestCase {
         let scene = makeGameplayScene(size: landscapeSize)
         try assertThePulseButtonClearsTheSticksAcceptanceBox(
             scene: scene, sceneSize: landscapeSize, safeAreaInsets: landscapeInsets
+        )
+    }
+
+    func test_theHUDPulseButton_clearsTheSticksTouchAcceptanceBox_inTheTightestLandscape() throws {
+        let scene = makeGameplayScene(size: compactLandscapeSize)
+        try assertThePulseButtonClearsTheSticksAcceptanceBox(
+            scene: scene, sceneSize: compactLandscapeSize, safeAreaInsets: compactLandscapeInsets
         )
     }
 

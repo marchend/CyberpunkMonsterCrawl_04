@@ -29,6 +29,14 @@ final class HUDRotationUITests: XCTestCase {
     private let landscapeSize = CGSize(width: 844, height: 390)
     private let landscapeInsets = UIEdgeInsets(top: 0, left: 47, bottom: 21, right: 47)
 
+    /// The tightest supported landscape geometry (812x375, 21pt home
+    /// indicator -- iPhone X/XS/11 Pro, 12/13 mini). See
+    /// `HUDLayoutTests.compactLandscapeSize`: rotating into *this* one is
+    /// what exercises the banner's derived placement, and hardcoding only
+    /// 844x390 in this suite is part of why PR 2's first cut looked green.
+    private let compactLandscapeSize = CGSize(width: 812, height: 375)
+    private let compactLandscapeInsets = UIEdgeInsets(top: 0, left: 44, bottom: 21, right: 44)
+
     /// Retained for the lifetime of the test: `SKScene.view` is a
     /// back-reference into whatever presented it, and a view built and
     /// discarded inside a helper method (with nothing else holding it)
@@ -144,6 +152,39 @@ final class HUDRotationUITests: XCTestCase {
                 + scene.layerBandViolationReport().joined(separator: "; ")
         )
         XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)
+    }
+
+    /// The same two invariants after a rotation into the *tightest*
+    /// supported landscape, against the mounted layer: every element inside
+    /// the safe area, and no element overlapping the region the stick
+    /// occupies or a sibling slot. This is the geometry the banner's
+    /// budget-derived placement exists for -- the top stack does not fit
+    /// above the stick's region here, so the banner is lifted clear of it.
+    func test_rotatingIntoTheTightestSupportedLandscape_keepsEveryElementInsideTheSafeAreaAndDisjoint() throws {
+        let scene = makeLiveScene(size: portraitSize, insets: portraitInsets)
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount HUDLayer")
+
+        let sizeBeforeLandscape = scene.size
+        scene.size = compactLandscapeSize
+        presentedView.injectedSafeAreaInsets = compactLandscapeInsets
+        scene.didChangeSize(sizeBeforeLandscape)
+
+        XCTAssertEqual(hud.currentOrientation, .landscape, "the rotation must reach HUDLayer.applyLayout(...)")
+        assertEveryElementInsideTheSafeArea(
+            hud, sceneSize: compactLandscapeSize, safeAreaInsets: compactLandscapeInsets
+        )
+        assertNoTwoElementsOverlap(hud, sceneSize: compactLandscapeSize)
+
+        let occupied = HUDLayout.thumbstickReservedRegion(
+            sceneSize: compactLandscapeSize, safeAreaInsets: compactLandscapeInsets
+        )
+        let banner = elementFrame(hud.swarmBanner, size: HUDLayout.swarmBannerSize)
+        XCTAssertFalse(
+            banner.intersects(occupied),
+            "the mounted swarm banner \(banner) must stay clear of the stick's region \(occupied) "
+                + "on the tightest supported landscape geometry"
+        )
     }
 
     /// Nothing may be clipped by a *sibling* HUD element either: the six

@@ -1545,6 +1545,20 @@ final class GameScene: SKScene {
     /// element-driven tap aims at and the scene then refuses to route: the
     /// original defect wearing yet another hat. Nothing hides a button
     /// today; this keeps it from becoming a bug the day something does.
+    ///
+    /// **The in-run HUD (`CYBERPUN-17-12`) publishes exactly one element**,
+    /// its `HUDPulseButton`. Because this walk *descends* through anything
+    /// that has not opted in, the five passive elements
+    /// (`HPSegmentBar`, `LevelXPBar`, `RunTimerLabel`, `KillCountLabel`,
+    /// `SwarmBanner`) and every drawn child of theirs set
+    /// `isAccessibilityElement = false` explicitly -- the same deliberate
+    /// opt-out `FloatingThumbstickNode` documents at length, and for the
+    /// same reason: a published element becomes a real, interactive mirror
+    /// that wins UIKit's hit test for its rect, and the HP and level/XP
+    /// bars sit inside the floating stick's touch-acceptance box.
+    /// `AccessibleSKViewTests.test_duringARun_theHUDPublishesOnlyItsPulseButton`
+    /// pins that set during a real run rather than leaving it to whatever
+    /// SpriteKit's per-class defaults happen to be.
     func accessibleUINodes() -> [SKNode] {
         var accessible: [SKNode] = []
         collectAccessibleNodes(under: uiLayer, into: &accessible)
@@ -1593,6 +1607,12 @@ final class GameScene: SKScene {
     /// can see is a node nobody should be told to tap - and erring towards
     /// publishing *fewer* elements keeps "published implies routable" true
     /// in the safe direction.
+    ///
+    /// The one predicate both directions use: `isVisible(_:upTo:)` (the
+    /// visibility filter inside `routeTouch(at:)`'s own candidate walk)
+    /// applies exactly this test to every node on the chain, so the
+    /// accessibility walk and touch routing cannot disagree about what
+    /// "visible" means.
     private func isVisibleToTouchRouting(_ node: SKNode) -> Bool {
         !node.isHidden && node.alpha > 0
     }
@@ -1857,15 +1877,27 @@ final class GameScene: SKScene {
     }
 
     /// Whether `node` and every ancestor up to (but excluding) `container`
-    /// is unhidden. A node the player cannot see must never capture their
+    /// is visible. A node the player cannot see must never capture their
     /// touch — the rule that keeps a mounted-but-hidden `HUDLayer` (the
     /// `.menu` / `.death` / `.highScores` states) from shadowing the screen
     /// underneath it, without depending on whether SpriteKit's own
     /// hit-testing happens to skip hidden nodes.
+    ///
+    /// "Visible" is `isVisibleToTouchRouting(_:)`'s predicate, applied to
+    /// every node on the chain, rather than a second definition of the same
+    /// idea: that method is documented as having to agree with this walk,
+    /// and until `CYBERPUN-17-12` PR 2 review the two disagreed on
+    /// `alpha <= 0` — the accessibility walk refused to publish a fully
+    /// transparent node while routing still let it capture the touch.
+    /// `SwarmBanner` makes that concrete: it spends most of a run at
+    /// `alpha = 0` (it also hides itself, which is what covered for the
+    /// gap), and a transparent 280x36 plate hung over the middle of the
+    /// screen is precisely the "published implies routable, and nothing
+    /// invisible is either" contract this feature exists to keep.
     private func isVisible(_ node: SKNode, upTo container: SKNode) -> Bool {
         var current: SKNode? = node
         while let candidate = current, candidate !== container {
-            if candidate.isHidden { return false }
+            if !isVisibleToTouchRouting(candidate) { return false }
             current = candidate.parent
         }
         return true

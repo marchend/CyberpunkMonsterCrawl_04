@@ -53,6 +53,36 @@ final class HPSegmentBar: SKNode {
 
         name = "hpSegmentBar"
         plate.name = "hpSegmentBar.plate"
+
+        // Deliberately **not** an accessibility element -- on this node
+        // *and* on every drawn child of it, which is the part that
+        // actually binds.
+        //
+        // `GameScene.accessibleUINodes()` walks `uiLayer` and *descends*
+        // through any node that does not opt in, so leaving the plate and
+        // segments to SpriteKit's own defaults is not the same as opting
+        // out: that walk's own comment records that SpriteKit gives some
+        // node classes an implicit `isAccessibilityElement` of its own,
+        // which is exactly how a `ButtonNode`'s label once got published
+        // *above* the button and made PLAY report `isHittable == false`.
+        // `AccessibleSKView` publishes one real, interactive
+        // `SceneAccessibilityMirrorView` per published node, and a mirror
+        // wins UIKit's hit test for its rect while forwarding only the
+        // `.began` phase into `dispatchTouch(atScenePoint:)` (see
+        // `FloatingThumbstickNode`'s longer rationale for the same
+        // deliberate opt-out). This bar sits top-left, i.e. *inside*
+        // `FloatingThumbstickNode.leftRegion` -- the floating stick's
+        // touch-acceptance box, which passive read-outs are allowed to
+        // occupy precisely so no dead input patch appears there -- so a
+        // mirror over a 220x28 bar would create the one thing that
+        // allowance exists to prevent. This is a passive read-out with no
+        // activation of its own; it has nothing to publish.
+        //
+        // `AccessibleSKViewTests` asserts the published element set during
+        // a real run, so this stays a checked fact rather than a claim.
+        isAccessibilityElement = false
+        plate.isAccessibilityElement = false
+
         addChild(plate)
 
         let segmentWidth = (Self.barSize.width - Self.segmentSpacing * CGFloat(Self.segmentCount - 1))
@@ -63,6 +93,9 @@ final class HPSegmentBar: SKNode {
         for index in 0..<Self.segmentCount {
             let segment = SKSpriteNode(color: Self.emptySegmentColor, size: segmentSize)
             segment.name = "hpSegmentBar.segment.\(index)"
+            // ... and each segment, for the reason above: the walk would
+            // otherwise reach all ten of them individually.
+            segment.isAccessibilityElement = false
             segment.anchorPoint = CGPoint(x: 0, y: 0.5)
             segment.position = CGPoint(
                 x: leftEdge + CGFloat(index) * (segmentWidth + Self.segmentSpacing),

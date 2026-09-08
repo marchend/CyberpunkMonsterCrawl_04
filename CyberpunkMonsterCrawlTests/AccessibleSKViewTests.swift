@@ -416,6 +416,95 @@ final class AccessibleSKViewTests: XCTestCase {
         }
     }
 
+    // MARK: - The in-run HUD publishes only its one interactive control
+
+    /// `CYBERPUN-17-12` PR 2 mounts a six-element HUD as a direct `uiLayer`
+    /// child, and five of those elements are *passive* read-outs built from
+    /// plain `SKSpriteNode`/`SKLabelNode` children. `accessibleUINodes()`
+    /// descends through every node that does not opt in, and this file's own
+    /// history is why that matters: a `ButtonNode`'s label was published
+    /// above the button it belonged to and made PLAY report
+    /// `isHittable == false`.
+    ///
+    /// A mirror over the HP bar or the level/XP bar would be worse than
+    /// cosmetic. Both sit top-left -- inside
+    /// `FloatingThumbstickNode.leftRegion`, the floating stick's
+    /// touch-acceptance box, which `HUDThumbstickOverlapTests` documents
+    /// passive read-outs as being *allowed* to occupy precisely so no dead
+    /// input patch appears there. A mirror over a 220x28 bar wins UIKit's
+    /// hit test for that rect and forwards only the `.began` phase into
+    /// `dispatchTouch(atScenePoint:)`, never `beginTouch(at:)`, which is
+    /// exactly the dead patch that allowance exists to prevent.
+    ///
+    /// The scene-only HUD suites cannot see this (they call
+    /// `dispatchTouch`/`canBeginTouch` directly), so the published set
+    /// during a real run is asserted here rather than reasoned about.
+    func test_duringARun_theHUDPublishesOnlyItsPulseButton() throws {
+        let scene = makeMenuScene()
+        _ = makePresentedView(scene)
+        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount HUDLayer")
+
+        assertTheHUDPublishesOnlyItsPulseButton(scene: scene, hud: hud)
+
+        // The banner spends most of a run invisible (`isHidden`, `alpha 0`),
+        // so on its own this check would prove nothing about it: the walk's
+        // visibility filter would mask its opt-out. Show it and re-check.
+        hud.swarmBanner.show(
+            message: HUDLayer.swarmEscalationMessage,
+            duration: HUDLayer.swarmEscalationDuration
+        )
+        XCTAssertTrue(hud.swarmBanner.isShowing, "precondition: the banner is visible for this half of the check")
+
+        assertTheHUDPublishesOnlyItsPulseButton(scene: scene, hud: hud)
+    }
+
+    private func assertTheHUDPublishesOnlyItsPulseButton(
+        scene: GameScene,
+        hud: HUDLayer,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let published = scene.accessibleUINodes()
+
+        // The whole intended set for a run: the two ability-button mounts
+        // that ship together while `CYBERPUN-17-14` still owns retiring the
+        // older bottom-left one. Nothing passive, and nothing unidentified.
+        XCTAssertEqual(
+            Set(published.compactMap(\.accessibilityIdentifier)),
+            ["gameplay.pulseButton", "gameplay.hudPulseButton"],
+            "a run may publish only its ability buttons - anything else is a mirror over live gameplay",
+            file: file, line: line
+        )
+
+        let publishedInsideTheHUD = published.filter { $0 === hud || $0.inParentHierarchy(hud) }
+        XCTAssertEqual(
+            publishedInsideTheHUD.count, 1,
+            "the HUD must publish exactly one element, its pulse button - published: "
+                + publishedInsideTheHUD.map { $0.name ?? "<unnamed>" }.joined(separator: ", "),
+            file: file, line: line
+        )
+        XCTAssertTrue(
+            publishedInsideTheHUD.first === hud.pulseButton,
+            "the one element the HUD publishes must be its pulse button itself, not a child of it",
+            file: file, line: line
+        )
+
+        for (name, element) in [
+            ("hpBar", hud.hpBar as SKNode),
+            ("levelXPBar", hud.levelXPBar as SKNode),
+            ("runTimer", hud.runTimer as SKNode),
+            ("killCount", hud.killCount as SKNode),
+            ("swarmBanner", hud.swarmBanner as SKNode),
+        ] {
+            XCTAssertFalse(
+                published.contains { $0 === element || $0.inParentHierarchy(element) },
+                "\(name) is a passive read-out: neither it nor any child of it may be published as an element",
+                file: file, line: line
+            )
+        }
+    }
+
     // MARK: - The coordinate-agreement guard (the actual regression test)
 
     /// The centre of the frame an element-driven tap aims at must be a scene

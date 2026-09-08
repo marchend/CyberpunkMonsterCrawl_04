@@ -119,6 +119,47 @@ final class HUDRunModelBindingTests: XCTestCase {
         XCTAssertEqual(firstModel.triggerPulseCount, 0, "a press after rebinding must not reach the old model")
     }
 
+    /// The other half of a rebind, which the press-path test above cannot
+    /// see: `onSwarmEscalation` is a closure `bind(to:)` installs *on the
+    /// model*, so a rebind has to clear the old model's copy or that model
+    /// keeps a live hook straight into this layer's banner.
+    func test_rebinding_toADifferentModel_clearsTheOldModelsSwarmEscalationHook() {
+        let hud = HUDLayer()
+        let firstModel = MockHUDRunModel()
+        let secondModel = MockHUDRunModel()
+        hud.bind(to: firstModel)
+        XCTAssertNotNil(firstModel.onSwarmEscalation, "precondition: bind(to:) installs the hook")
+
+        hud.bind(to: secondModel)
+
+        XCTAssertNil(
+            firstModel.onSwarmEscalation,
+            "a rebind must leave the previous model inert, not holding a live hook into this layer"
+        )
+        firstModel.onSwarmEscalation?()
+        XCTAssertFalse(
+            hud.swarmBanner.isShowing,
+            "an escalation on a model this layer is no longer bound to must not show the banner"
+        )
+
+        secondModel.onSwarmEscalation?()
+        XCTAssertTrue(hud.swarmBanner.isShowing, "the currently bound model's escalation must still show it")
+    }
+
+    /// ... while rebinding to the *same* model (what `GameScene` does on
+    /// every `.gameplay` entry) must leave that model's hook installed.
+    func test_rebinding_toTheSameModel_keepsItsSwarmEscalationHookInstalled() {
+        let hud = HUDLayer()
+        let model = MockHUDRunModel()
+        hud.bind(to: model)
+
+        hud.bind(to: model)
+
+        XCTAssertNotNil(model.onSwarmEscalation)
+        model.onSwarmEscalation?()
+        XCTAssertTrue(hud.swarmBanner.isShowing)
+    }
+
     // MARK: - Rebinding never leaves a stale reading from the old model
 
     func test_rebinding_toADifferentModel_stopsForwardingFromTheOldOne() {

@@ -186,7 +186,22 @@ final class HUDLayer: SKNode {
     /// element immediately (`refresh()`) -- so a bind mid-run (a RUN AGAIN
     /// reusing this same `HUDLayer`) never leaves an element showing the
     /// previous binding's last-read values even for one frame.
+    ///
+    /// A rebind also leaves the *previously* bound model inert. The
+    /// trigger and the value-forwarding path both retarget on their own
+    /// (`pulseTriggerHandler` is replaced; `refresh()` reads
+    /// `self.runModel`), but `onSwarmEscalation` is a closure this layer
+    /// *installs on the model*, so without clearing it the old model would
+    /// keep a live hook that still shows this layer's banner -- a HUD
+    /// reporting a run it is no longer bound to. Production has exactly one
+    /// conformer (`GameScene` rebinds to *itself* every `.gameplay` entry,
+    /// which the identity check below deliberately leaves alone), so this
+    /// is latent rather than a live defect; it is cleared here so it stays
+    /// that way.
     func bind(to runModel: HUDRunModel) {
+        if let previousModel = self.runModel, previousModel !== runModel {
+            previousModel.onSwarmEscalation = nil
+        }
         self.runModel = runModel
         pulseTriggerHandler = { [weak runModel] in runModel?.triggerPulse() }
         runModel.onSwarmEscalation = { [weak self] in
