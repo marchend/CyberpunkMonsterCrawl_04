@@ -28,15 +28,14 @@ targets:
     type: application
     platform: iOS
     sources:
+      # No `excludes:` -- `Sources/UI/HUD/PulseButton.swift` (the empty stub
+      # left behind when that file was renamed to `HUDPulseButton.swift`,
+      # matching the `HUDPulseButton` type it declares) is deleted outright
+      # as of `CYBERPUN-17-12` PR 2, so there is nothing to exclude. A
+      # never-compiled file carrying a "do not compile me" note is debris,
+      # and an `excludes:` entry pointing at a path that no longer exists
+      # is worse: it silently outlives its reason.
       - path: CyberpunkMonsterCrawl
-        excludes:
-          # Superseded by `Sources/UI/HUD/HUDPulseButton.swift` (renamed to
-          # match its `HUDPulseButton` type, since a target cannot contain
-          # two files both named `PulseButton.swift` -- see that file's
-          # doc comment). This stub is left in place only because the
-          # tooling available for this fix has no file-delete primitive;
-          # it carries no declarations and must never be compiled.
-          - "Sources/UI/HUD/PulseButton.swift"
     settings:
       base:
         PRODUCT_NAME: $(TARGET_NAME)

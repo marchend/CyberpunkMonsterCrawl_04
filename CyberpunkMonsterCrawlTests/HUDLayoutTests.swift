@@ -108,6 +108,46 @@ final class HUDLayoutTests: XCTestCase {
         assertNoSlotOverlapsTheThumbstickRegion(sceneSize: landscapeSize, safeAreaInsets: landscapeInsets)
     }
 
+    // MARK: - No two slots overlap each other
+
+    /// `CYBERPUN-17-12` PR 2 found this the hard way: PR 1's slots each sat
+    /// inside the safe area and clear of the thumbstick, but three of them
+    /// sat on top of *each other* in portrait -- a 220pt HP bar anchored at
+    /// the left safe edge of a 390pt screen reaches +41, straight through a
+    /// centred 120pt run timer (-60...60), which in turn overlapped the
+    /// right-anchored kill count by a point, and the centred swarm banner
+    /// ran through the level/XP bar. Every existing gate stayed green,
+    /// because each only ever compared one slot against a *fixed* rect.
+    /// This compares the slots against one another.
+    private func assertNoTwoSlotsOverlap(
+        sceneSize: CGSize,
+        safeAreaInsets: UIEdgeInsets,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let slots = HUDSlot.allCases
+        for outer in slots.indices {
+            for inner in slots.indices where inner > outer {
+                let first = HUDLayout.frame(for: slots[outer], sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
+                let second = HUDLayout.frame(for: slots[inner], sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
+                XCTAssertFalse(
+                    first.intersects(second),
+                    "\(slots[outer]) frame \(first) overlaps \(slots[inner]) frame \(second)",
+                    file: file,
+                    line: line
+                )
+            }
+        }
+    }
+
+    func test_noTwoSlots_overlapEachOther_inPortrait() {
+        assertNoTwoSlotsOverlap(sceneSize: portraitSize, safeAreaInsets: portraitInsets)
+    }
+
+    func test_noTwoSlots_overlapEachOther_inLandscape() {
+        assertNoTwoSlotsOverlap(sceneSize: landscapeSize, safeAreaInsets: landscapeInsets)
+    }
+
     // MARK: - Stacking: HP sits directly above the level/XP bar
 
     func test_levelXPBar_sitsDirectlyBelowTheHPBar_withNoOverlap() {

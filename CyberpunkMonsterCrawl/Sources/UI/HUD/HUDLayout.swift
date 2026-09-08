@@ -37,15 +37,29 @@ enum HUDSlot: CaseIterable {
 /// portrait and a representative landscape input rather than branching
 /// logic here.
 ///
+/// **Two edge-anchored top columns, then the banner.** The top row is split
+/// into a left column (HP bar, then the level/XP bar under it) and a right
+/// column (run timer, then the kill count under it), each anchored to its
+/// own safe-area edge, with the transient swarm banner hung below both.
+/// That is a width constraint, not a taste call: portrait is 390pt wide, so
+/// a 220pt HP bar anchored left already reaches past the screen's centre
+/// and a *centred* 120pt run timer (which is where `CYBERPUN-17-12` PR 1
+/// put it) is drawn straight through it -- with the kill count overlapping
+/// the timer's other edge by a further point. `HUDLayoutTests` /
+/// `HUDRotationUITests` pin mutual disjointness in both orientations so a
+/// future retune of any element's size cannot silently reintroduce that.
+///
 /// **Stays clear of the thumbstick's bottom-left region.** The movement
 /// thumbstick (`FloatingThumbstickNode`) and the ability button it used to
 /// reserve a slot for both live in the bottom-left "thumb quadrant"
 /// (`FloatingThumbstickNode.leftRegion(forSize:safeAreaInsets:)`). This
 /// story's pulse-button slot is bottom-**right** instead (per this ticket's
 /// own wording -- see the still-open placement note in `AGENT.md`'s
-/// `CYBERPUN-17-10` entry), and every other slot here is anchored at the
-/// top of the safe area, so no slot this type produces can overlap that
-/// region by construction; `HUDLayoutTests` still pins the non-overlap
+/// `CYBERPUN-17-10` entry), and every other slot here hangs from the top of
+/// the safe area, so no slot this type produces can overlap that region by
+/// construction -- but only just, in landscape: see `swarmBannerSize`'s own
+/// doc comment for the 137pt vertical budget the whole top stack has to fit
+/// inside there. `HUDLayoutTests` still pins the non-overlap
 /// directly (computed from `FloatingThumbstickNode`'s own geometry, so the
 /// two can never silently drift apart) rather than leaving it as an
 /// assumption about "top" and "bottom-left" never meeting.
@@ -58,13 +72,23 @@ enum HUDLayout {
     static let runTimerSize = CGSize(width: 120, height: 32)
     static let killCountSize = CGSize(width: 120, height: 32)
     static let pulseButtonSize = CGSize(width: 72, height: 72)
-    static let swarmBannerSize = CGSize(width: 280, height: 44)
+
+    /// The banner is the one slot whose height is set by a *budget* rather
+    /// than by its own content (an 18pt `Menlo-Bold` line): it hangs below
+    /// both top columns, and in landscape the whole stack has to fit
+    /// between the safe area's top edge and `thumbstickReservedRegion`'s
+    /// top -- 137pt at the representative landscape insets
+    /// (`safeRect.maxY 195` down to `58`). `16 + 32 + 8 + 32 + 8 + 36 =
+    /// 132` fits with 5pt to spare; the 44pt this was until
+    /// `CYBERPUN-17-12` PR 2 did not (`140 > 137`), which pushed the banner
+    /// into the stick's reserved region in landscape.
+    static let swarmBannerSize = CGSize(width: 280, height: 36)
 
     /// Gap kept between the safe area's own edge and any slot's outer edge.
     static let edgeMargin: CGFloat = 16
 
-    /// Gap kept between two vertically stacked slots (HP -> XP, timer ->
-    /// swarm banner).
+    /// Gap kept between two vertically stacked slots (HP -> XP, run timer
+    /// -> kill count, and either column's bottom -> the swarm banner).
     static let verticalSpacing: CGFloat = 8
 
     // MARK: - Safe content area
@@ -123,16 +147,17 @@ enum HUDLayout {
 
         case .runTimer:
             return CGRect(
-                x: -runTimerSize.width / 2,
+                x: safeRect.maxX - edgeMargin - runTimerSize.width,
                 y: safeRect.maxY - edgeMargin - runTimerSize.height,
                 width: runTimerSize.width,
                 height: runTimerSize.height
             )
 
         case .killCount:
+            let timer = frame(for: .runTimer, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
             return CGRect(
                 x: safeRect.maxX - edgeMargin - killCountSize.width,
-                y: safeRect.maxY - edgeMargin - killCountSize.height,
+                y: timer.minY - verticalSpacing - killCountSize.height,
                 width: killCountSize.width,
                 height: killCountSize.height
             )
@@ -146,10 +171,24 @@ enum HUDLayout {
             )
 
         case .swarmBanner:
-            let timer = frame(for: .runTimer, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
+            // Hung below *both* columns, not just one: the banner is
+            // horizontally centred and 280pt wide, so on a 390pt-wide
+            // portrait screen its x-range overlaps the left column (the HP
+            // and level/XP bars run from the safe-area edge to +41) *and*
+            // the right column (the run timer and kill count start at +59).
+            // Clearing only one of them would put the banner straight
+            // through the other -- which is exactly what a top-centre run
+            // timer did to the HP bar before this layout split the top row
+            // into two edge-anchored columns.
+            let leftColumnBottom = frame(
+                for: .levelXPBar, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
+            ).minY
+            let rightColumnBottom = frame(
+                for: .killCount, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
+            ).minY
             return CGRect(
                 x: -swarmBannerSize.width / 2,
-                y: timer.minY - verticalSpacing - swarmBannerSize.height,
+                y: min(leftColumnBottom, rightColumnBottom) - verticalSpacing - swarmBannerSize.height,
                 width: swarmBannerSize.width,
                 height: swarmBannerSize.height
             )

@@ -1,0 +1,18 @@
+{
+  "name": "gameplay-hud",
+  "demonstrates": "CYBERPUN-17-12's gameplay HUD, live on a simulator: entering .gameplay mounts HUDLayer bound to the run, so the segmented HP bar and level/XP bar (top-left), the mm:ss run clock and KILLS counter (top-right) and the circular pulse button (bottom-right) are driven by the run model, not placeholders. The two captures are ~20s apart on purpose: the clock must read ADVANCED in the second, which is the per-frame binding this story proves. Landscape, the swarm banner and a rising KILLS count stay test-owned.",
+  "stories": ["CYBERPUN-17-12"],
+  "steps": [
+    {"action": "wait", "seconds": 4},
+    {"action": "assert_running"},
+    {"action": "screenshot", "label": "menu"},
+    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)", "expect": "the running game -- a playable city scene with a HUD over it: a health bar top-left, a mm:ss timer and kill counter top-right, a round ability button bottom-right; not a menu or title screen"},
+    {"action": "wait", "seconds": 3},
+    {"action": "assert_running"},
+    {"action": "screenshot", "label": "hud-at-run-start"},
+    {"action": "wait", "seconds": 20},
+    {"action": "assert_running"},
+    {"action": "screenshot", "label": "hud-live-during-run"},
+    {"action": "assert_running"}
+  ]
+}

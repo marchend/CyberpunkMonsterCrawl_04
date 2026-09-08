@@ -168,4 +168,114 @@ final class TouchRoutingTests: XCTestCase {
 
         XCTAssertTrue(hit === worldNode, "a UI node that does not cover the touch point must not block the world hit")
     }
+
+    // MARK: - Grouping nodes are transparent to routing (`CYBERPUN-17-12`)
+
+    /// The unit-level statement of what
+    /// `test_mountedGameplayScreen_doesNotBlockWorldTouches` caught against
+    /// the real scene: SpriteKit hit-tests a node that draws nothing of its
+    /// own against the *union* of its children's frames, so a group whose
+    /// children sit in opposite corners reports a hit across everything
+    /// between them. `HUDLayer` is exactly that shape (HP bar top-left,
+    /// pulse button bottom-right), so before the fix mounting the HUD
+    /// blanketed the viewport: `routeTouch(at:)` returned the group,
+    /// `dispatchTouch` found no `TouchResponder` above it, and the touch was
+    /// swallowed instead of reaching the world.
+    func test_groupingNodeWithFarApartChildren_doesNotCaptureATouchBetweenThem() {
+        let scene = makeScene()
+        let gapPoint = CGPoint(x: 200, y: 400)
+
+        let group = SKNode()
+        group.addChild(makeHitTestableNode(at: CGPoint(x: 40, y: 40)))
+        group.addChild(makeHitTestableNode(at: CGPoint(x: 360, y: 760)))
+        scene.uiLayer.addChild(group)
+
+        // Anti-vacuity: the group really does cover the point as far as
+        // SpriteKit's hit-testing is concerned - otherwise this test would
+        // pass for the wrong reason and the regression could walk straight
+        // back in.
+        XCTAssertTrue(
+            group.calculateAccumulatedFrame().contains(gapPoint),
+            "precondition: the grouping node's accumulated frame must span the gap point"
+        )
+
+        let worldNode = makeHitTestableNode(at: gapPoint)
+        scene.worldLayer.addChild(worldNode)
+
+        XCTAssertTrue(
+            scene.routeTouch(at: gapPoint) === worldNode,
+            "a UI group that paints nothing at the touch point must let the touch fall through to the world"
+        )
+    }
+
+    /// The other half of the rule above: skipping the group must not skip
+    /// the group's own children. A touch that lands *on* a grouped element
+    /// still routes to that element (this is how the HUD's pulse button
+    /// keeps working while its parent `HUDLayer` is transparent to routing).
+    func test_touchOnAGroupedChild_stillRoutesToThatChild() {
+        let scene = makeScene()
+        let childPoint = CGPoint(x: 360, y: 760)
+
+        let group = SKNode()
+        let child = makeHitTestableNode(at: childPoint)
+        group.addChild(makeHitTestableNode(at: CGPoint(x: 40, y: 40)))
+        group.addChild(child)
+        scene.uiLayer.addChild(group)
+
+        let worldNode = makeHitTestableNode(at: childPoint)
+        scene.worldLayer.addChild(worldNode)
+
+        let hit = scene.routeTouch(at: childPoint)
+
+        XCTAssertTrue(hit === child, "a touch on a grouped UI element must route to that element")
+        XCTAssertFalse(hit === worldNode, "UI-first routing still wins wherever the UI actually paints")
+    }
+
+    /// A painted UI node underneath a grouping node must still win, rather
+    /// than the touch falling through to the world: the group is skipped,
+    /// not treated as an opaque lid. This is what keeps `DeathScreenNode`'s
+    /// RUN AGAIN button reachable while the HUD - mounted but hidden
+    /// outside a run - overlaps it.
+    func test_paintedUINodeUnderAGroupingNode_stillWinsOverTheWorld() {
+        let scene = makeScene()
+        let point = CGPoint(x: 200, y: 400)
+
+        let worldNode = makeHitTestableNode(at: point)
+        scene.worldLayer.addChild(worldNode)
+
+        let uiNode = makeHitTestableNode(at: point)
+        scene.uiLayer.addChild(uiNode)
+
+        // Added last, so this group is the frontmost node over the point.
+        let group = SKNode()
+        group.addChild(makeHitTestableNode(at: CGPoint(x: 40, y: 40)))
+        group.addChild(makeHitTestableNode(at: CGPoint(x: 360, y: 760)))
+        scene.uiLayer.addChild(group)
+
+        let hit = scene.routeTouch(at: point)
+
+        XCTAssertTrue(hit === uiNode, "a painted UI node shadowed by a grouping node must still take the touch")
+        XCTAssertFalse(hit === worldNode, "the touch must not fall through past painted UI content")
+    }
+
+    /// A node the player cannot see must not capture their touch. Stated
+    /// directly rather than left to SpriteKit's own hit-testing, because
+    /// the HUD stays *mounted* over the menu / death / high-scores screens
+    /// and is only hidden.
+    func test_hiddenUINode_doesNotCaptureATouch() {
+        let scene = makeScene()
+        let point = CGPoint(x: 200, y: 400)
+
+        let hiddenUINode = makeHitTestableNode(at: point)
+        hiddenUINode.isHidden = true
+        scene.uiLayer.addChild(hiddenUINode)
+
+        let worldNode = makeHitTestableNode(at: point)
+        scene.worldLayer.addChild(worldNode)
+
+        XCTAssertTrue(
+            scene.routeTouch(at: point) === worldNode,
+            "a hidden UI node must not swallow a touch over live world content"
+        )
+    }
 }
