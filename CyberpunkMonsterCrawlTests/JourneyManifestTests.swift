@@ -665,4 +665,50 @@ final class JourneyManifestTests: XCTestCase {
             )
         }
     }
+
+    /// `CYBERPUN-17-14` PR 1's own journey (`first-launch-playable.json`),
+    /// covering the story with no journey named in its `stories` --
+    /// otherwise product verification falls back to a launch-only capture
+    /// for gate 1, the same gap `test_aJourneyExistsForThisStorysCombatWork_...`
+    /// exists to close for `CYBERPUN-17-9`.
+    ///
+    /// Deliberately a lighter gate than the combat/pickup ones above: this
+    /// journey has no derived spawn-timing floor to bind on (its screenshots
+    /// are gated on reachability, not on a swarm/pickup having had time to
+    /// appear), so this test only pins the structural shape a "no journey at
+    /// all" or "navigate with nothing captured after it" regression would
+    /// break -- a real journey navigates into gameplay and then captures at
+    /// least one more frame.
+    func test_aJourneyExistsForCYBERPUN1714sFirstLaunchGate_andCapturesAfterNavigating() {
+        let journeys = loadJourneys()
+
+        let gateOneJourneys = journeys.filter { $0.stories.contains("CYBERPUN-17-14") }
+        XCTAssertFalse(
+            gateOneJourneys.isEmpty,
+            "No journey names CYBERPUN-17-14 in its \"stories\", so product verification has "
+                + "nothing to run for the first-launch-playable gate and falls back to a "
+                + "launch-only capture."
+        )
+
+        for journey in gateOneJourneys {
+            let file = journey.fileName
+
+            guard let navigateIndex = journey.steps.firstIndex(
+                where: { ($0["action"] as? String) == "navigate" }
+            ) else {
+                XCTFail("\(file): must navigate past the menu -- gate 1 is about reaching gameplay.")
+                continue
+            }
+
+            let screenshotsAfterNavigate = journey.steps
+                .dropFirst(navigateIndex + 1)
+                .filter { ($0["action"] as? String) == "screenshot" }
+
+            XCTAssertFalse(
+                screenshotsAfterNavigate.isEmpty,
+                "\(file): navigates but never screenshots afterwards, so nothing after the menu "
+                    + "is ever captured for gate 1's review."
+            )
+        }
+    }
 }

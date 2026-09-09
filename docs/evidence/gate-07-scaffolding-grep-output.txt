@@ -1,0 +1,37 @@
+Gate 7 evidence — CYBERPUN-17-14-t1
+Scan performed while implementing this PR: search for the literal
+substring "SCAFFOLDING" across the bundled app target only
+(CyberpunkMonsterCrawl/), i.e. the tree that actually ships inside the
+app binary — never the test target or .mothership/, both of which
+legitimately carry an unrelated, differently-owned marker (see
+ScaffoldingRemovalTests.swift's own doc comment for why that one is out
+of scope for this gate).
+
+Command (equivalent grep, run against the app target directory only):
+
+    grep -rn "SCAFFOLDING" CyberpunkMonsterCrawl/
+
+Result: zero matches.
+
+This is the same zero-match state
+CyberpunkMonsterCrawlTests/ScaffoldingRemovalTests.swift's
+test_bundledAppSource_containsNoScaffoldingMarker asserts on every suite
+run, so this log is a one-time snapshot of a now-permanently-gated
+invariant rather than the only place it is checked.
+
+For context, every previously `// SCAFFOLDING:` / `SCAFFOLDING(<ticket>)`
+-tagged artifact this codebase ever shipped in the app target was already
+removed by the story that owned it before this PR started:
+  - CYBERPUN-17-7: PlayerScaffoldingDriver, debugPlayerDemoEnabled, the
+    debug camera pan.
+  - CYBERPUN-17-10: CrashDiagnostics (Sources/Diagnostics/CrashDiagnostics.swift),
+    removed at -t6 close-out.
+  - CYBERPUN-17-13: LaunchGotoState (Sources/Debug/LaunchGotoState.swift).
+
+A still-open marker, `SCAFFOLDING(TBD -- root-cause ticket, filed by the
+gate reviewer)`, remains in CyberpunkMonsterCrawlTests/JourneyManifestTests.swift
+and .mothership/journeys/pickup-spawn.json. Both are diagnostic
+instrumentation for a still-unidentified CYBERPUN-17-11 crash, neither
+ships in the app bundle, and neither is this ticket's to remove (its own
+comment names a still-unfiled root-cause ticket as the removal owner).
+It is deliberately excluded from this gate's scope, not missed.

@@ -1,0 +1,17 @@
+{
+  "name": "first-launch-playable",
+  "demonstrates": "CYBERPUN-17-14 product gate 1 -- 'first launch is playable': the app boots straight into the menu with no scaffolding overlay/smoke-test label/placeholder title reachable anywhere in the flow (pinned statically, not by this journey, by ScaffoldingRemovalTests, ScreensTests.test_gameplayScreenNode_mountsNoComingSoonText and ScreensTests.test_gameplayScreenNode_mountsNoChildren_andNoTextAnywhere), PLAY reaches a real running .gameplay scene (ground lattice, buildings, player actor, floating thumbstick, HUD), and a button on that screen accepts a press without the app crashing or hanging. WHAT THIS JOURNEY CANNOT SHOW: the probe vocabulary (wait / screenshot / assert_running / navigate / tap_at / wait_for_element) has no drag/hold verb, so the floating thumbstick never leaves its dead zone here and this journey cannot demonstrate 'the stick moves the player' on a live device -- that half of gate 1 is machine-verified end-to-end instead, by ThumbstickMovementSeamTests (touchesMoved/touchesEnded driving FloatingThumbstickNode -> PlayerMovementController -> CollisionResolver -> PlayerNode position every frame) and GameViewControllerCompositionTests' own gate-1 doc note. What this journey DOES capture on a real device: the menu screen with a reachable PLAY button, the gameplay screen actually rendering after PLAY (not a placeholder), and a live press on the HUD's bottom-right ability button (the run's one visible ability control since CYBERPUN-17-12 PR 2 / PR #63's review decision) being accepted without tearing the app down -- the 'every button responds' half of gate 1 that IS a momentary tap the probe can drive. Gate is human/vision review of the three screenshots below (menu is reachable, gameplay actually renders, the app is still foregrounded after the button press); assert_running steps only confirm the process is still alive.",
+  "stories": ["CYBERPUN-17-14"],
+  "steps": [
+    {"action": "wait", "seconds": 4},
+    {"action": "assert_running"},
+    {"action": "screenshot", "label": "gate1-menu"},
+    {"action": "navigate", "target": "the large neon-outlined PLAY button in the middle of the title screen that starts a new run (NOT the plain HIGH SCORES button below it)", "expect": "the running game -- a playable isometric city scene with a ground lattice, buildings, a player actor and a floating movement thumbstick, not a menu, title screen or 'coming soon' placeholder"},
+    {"action": "wait", "seconds": 3},
+    {"action": "screenshot", "label": "gate1-gameplay-running"},
+    {"action": "assert_running"},
+    {"action": "navigate", "target": "the round pulse-ability button in the bottom-right corner of the screen (the HUD's own button, on the opposite side of the screen from the round movement thumbstick)", "expect": "the same running gameplay screen, still showing the isometric city and player, with the app still foregrounded and responsive after the tap"},
+    {"action": "screenshot", "label": "gate1-button-responded"},
+    {"action": "assert_running"}
+  ]
+}
