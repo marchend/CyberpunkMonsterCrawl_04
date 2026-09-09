@@ -3,12 +3,13 @@ import SpriteKit
 import XCTest
 @testable import CyberpunkMonsterCrawl
 
-/// `CYBERPUN-17-10-t3`: the pulse ability's *scene* wiring -- `PulseButton`
-/// press -> `PulseAbility.trigger(...)` -> applied positions/damage on live
-/// `RaccoonNode`s -> `PulseRingNode` spawn/replay -> per-frame cooldown
-/// display. Mirrors the shape `PlayerCombatSceneWiringTests` established
-/// for the auto-fire weapon: assert on the scene's own mounted state
-/// (`pulseButton`, `pulseRing`, `pulseAbility`) and drive
+/// `CYBERPUN-17-10-t3`: the pulse ability's *scene* wiring -- a press on the
+/// HUD's `HUDPulseButton` -> `PulseAbility.trigger(...)` -> applied
+/// positions/damage on live `RaccoonNode`s -> `PulseRingNode` spawn/replay ->
+/// per-frame cooldown display. Mirrors the shape
+/// `PlayerCombatSceneWiringTests` established for the auto-fire weapon:
+/// assert on the scene's own mounted state
+/// (`hudLayer`, `pulseRing`, `pulseAbility`) and drive
 /// `applyPulseTrigger(raccoons:)` directly against a hand-built swarm
 /// rather than waiting on `RaccoonSpawnDirector`'s own spawn timing/
 /// randomness, exactly the "test the wiring, not the spawn director's
@@ -33,36 +34,6 @@ final class PulseSceneWiringTests: XCTestCase {
 
     // MARK: - Mount / layout / visibility
 
-    func test_pulseButton_isMountedAtTheReservedSlotsCentre() {
-        let scene = GameScene(size: sceneSize)
-        let slot = FloatingThumbstickNode.reservedPulseButtonSlot(forSize: scene.size, safeAreaInsets: .zero)
-        XCTAssertEqual(scene.pulseButton.position, CGPoint(x: slot.midX, y: slot.midY))
-    }
-
-    /// PR #63's review decision (`CYBERPUN-17-12` PR 2): this older
-    /// bottom-left mount is hidden in **every** state, `.gameplay`
-    /// included, because the HUD's bottom-right `HUDPulseButton` is the
-    /// run's one visible ability control -- the placement the ticket asks
-    /// for. Until this test that expectation was the opposite ("the button
-    /// must be visible during a run"), so it is restated here rather than
-    /// deleted: the node stays mounted and wired (the press tests below
-    /// still drive its real `onPress`), it is simply never shown.
-    /// Retiring it outright is `CYBERPUN-17-14`'s.
-    func test_pulseButton_isHiddenInEveryState_sinceTheHUDOwnsTheVisibleAbilityControl() {
-        let scene = GameScene(size: sceneSize)
-        XCTAssertTrue(scene.pulseButton.isHidden, "no run is active before the first .gameplay entry")
-
-        XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
-        XCTAssertTrue(
-            scene.pulseButton.isHidden,
-            "the older bottom-left mount must stay hidden during a run - the HUD's bottom-right button is the "
-                + "only visible ability control"
-        )
-
-        XCTAssertTrue(scene.stateMachine.transition(to: .death))
-        XCTAssertTrue(scene.pulseButton.isHidden, "and it must still be hidden once the run has ended")
-    }
-
     func test_pulseRing_startsHidden_underEffectsLayer() {
         let scene = GameScene(size: sceneSize)
         XCTAssertTrue(scene.pulseRing.isHidden)
@@ -86,15 +57,16 @@ final class PulseSceneWiringTests: XCTestCase {
 
     // MARK: - Pressing the real button fires the real ability
 
-    func test_pressingThePulseButton_firesTheAbility_evenWithNoRaccoonsInRange() {
+    func test_pressingThePulseButton_firesTheAbility_evenWithNoRaccoonsInRange() throws {
         let scene = makeGameplayScene()
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount the HUD")
         XCTAssertFalse(scene.pulseAbility.isOnCooldown, "a fresh ability is ready immediately")
 
-        scene.pulseButton.handleTouch()
+        hud.pulseButton.handleTouch()
 
         XCTAssertTrue(
             scene.pulseAbility.isOnCooldown,
-            "PulseButton.onPress must actually invoke PulseAbility.trigger(...) in a real build."
+            "HUDPulseButton.onPress must actually invoke PulseAbility.trigger(...) in a real build."
         )
         XCTAssertFalse(
             scene.pulseRing.isHidden,
@@ -107,10 +79,8 @@ final class PulseSceneWiringTests: XCTestCase {
     /// The half `handleTouch()` alone cannot prove (PR #48 review): that a
     /// touch landing on the button's own slot actually *resolves* to
     /// `pulseButton` rather than being swallowed by another `uiLayer` node
-    /// or handed to `thumbstick` -- the slot sits inside
-    /// `FloatingThumbstickNode.leftRegion`, and only
-    /// `canBeginTouch(at:)`'s reserved-slot exclusion keeps the stick off
-    /// it. `dispatchTouch(atScenePoint:)` is the documented seam for this
+    /// or handed to `thumbstick`. `dispatchTouch(atScenePoint:)` is the
+    /// documented seam for this
     /// (`UITouch` cannot be constructed with a location in a unit test),
     /// and is also what `SceneAccessibilityContainerView.forwardTouch`
     /// funnels the journey's vision-driven tap into.
@@ -139,39 +109,36 @@ final class PulseSceneWiringTests: XCTestCase {
         XCTAssertFalse(scene.pulseRing.isHidden, "a routed press must play the ring.")
     }
 
-    /// The flip side of that decision: the older bottom-left mount must be
-    /// unreachable by touch for as long as it is invisible, or a player
-    /// would be firing a control they cannot see (and
-    /// `AccessibleSKView` would publish a mirror over it -- pinned in
-    /// `AccessibleSKViewTests.test_duringARun_theHUDPublishesOnlyItsPulseButton`).
-    func test_aTouchAtTheHiddenOlderMountsSlot_doesNotReachIt() {
+    /// `CYBERPUN-17-14` PR 1, at the scene level: the older bottom-left
+    /// mount and the 72x72 hole the movement stick kept refusing for it are
+    /// both deleted. PR #63 hid that button but left the reservation, so the
+    /// tree shipped a patch of the thumb quadrant where neither the stick
+    /// nor any visible button took the touch (recorded as outstanding in
+    /// AGENT.md, and raised again on PR #64 as live input degraded by a
+    /// placeholder). This pins the resolution from both directions: nothing
+    /// claims that point as a button any more, and the stick does claim it.
+    /// `FloatingThumbstickNodeTests` pins the node's own predicate.
+    func test_aTouchWhereTheRemovedButtonSatIsClaimedByTheThumbstick() {
         let scene = makeGameplayScene()
+        let rest = FloatingThumbstickNode.restingPosition(forSize: scene.size, safeAreaInsets: .zero)
+        // The deleted slot's own centre: 16pt of gap above the stick's drag
+        // radius, then half of the 72pt-tall slot.
+        let formerSlotCentre = CGPoint(
+            x: rest.x,
+            y: rest.y + FloatingThumbstickNode.maxRadius + 16 + 36
+        )
 
-        let responder = scene.dispatchTouch(atScenePoint: scene.pulseButton.position)
-
-        XCTAssertFalse(
-            responder === scene.pulseButton,
-            "the hidden older bottom-left mount must not claim touches during a run"
+        XCTAssertNil(
+            scene.dispatchTouch(atScenePoint: scene.convert(formerSlotCentre, from: scene.uiLayer)),
+            "no UI responder may sit where the deleted bottom-left pulse button used to be"
+        )
+        XCTAssertTrue(
+            scene.thumbstick.canBeginTouch(at: formerSlotCentre),
+            "the stick must accept that touch now, rather than refusing it for a control that no longer exists"
         )
         XCTAssertFalse(
             scene.pulseAbility.isOnCooldown,
-            "and nothing may fire the ability from that slot while no visible control sits there"
-        )
-    }
-
-    /// The other side of the same seam: the movement stick must refuse the
-    /// older button's slot, so a press could never be stolen mid-routing by
-    /// the thumbstick that surrounds it. The reservation outlives the
-    /// visible button on purpose -- retiring both together is
-    /// `CYBERPUN-17-14`'s -- so for now that slot is a 72x72 patch where
-    /// neither the stick nor any button takes the touch, recorded as
-    /// outstanding in AGENT.md rather than silently traded away here.
-    func test_theThumbstick_refusesATouchOnThePulseButtonsSlot() {
-        let scene = makeGameplayScene()
-
-        XCTAssertFalse(
-            scene.thumbstick.canBeginTouch(at: scene.uiLayer.convert(scene.pulseButton.position, from: scene)),
-            "the stick must exclude the reserved pulse-button slot, or a press would start a drag instead."
+            "and nothing may fire the ability from a slot with no button in it"
         )
     }
 
