@@ -1,0 +1,90 @@
+CYBERPUN-17-14-t4 (PR 4) -- gate 5 audit trace: pickup visibility
+==================================================================
+
+Scope: "pickups visible in normal play -- first spawn within the window,
+surviving a camera excursion, icons legible, never on or adjacent to a
+building" (gate 5).
+
+Method
+------
+Re-read `PickupManager`/`PickupKind`/`PickupNode` (CYBERPUN-17-11, all
+three PRs) and the existing test coverage against each of gate 5's four
+named claims:
+
+1. First spawn within the window: `PickupKind.Tuning.firstSpawnDelay`
+   (8s) gates every kind's very first spawn attempt
+   (`PickupManagerTests.test_firstSpawn_occursAtOrBeforeEightSeconds`,
+   `test_noSpawnOccurs_beforeTheFirstSpawnDelayElapses`), and the same
+   window reaches a mounted `PickupNode` on the production scene-wiring
+   path (`PickupIntegrationTests
+   .test_pickupsAppearAsMountedPickupNodes_withinTheExpectedTimeWindow`).
+   The *visible* half of "visible in normal play" is a separate question
+   from the timing half (PR #67 review): `visibleRect` is only the
+   axis-aligned bounding box of the visible diamond, ~70% of which is off
+   camera at a phone viewport, so a spawn inside it is not yet a spawn the
+   player can see. `PickupVisibilityTests` (new, this PR) therefore drives
+   `PickupManager` with the production `isVisibleOnScreen` predicate --
+   `RaccoonSpawnDirector.isOnScreen(tile:cameraPosition:viewportSize:)`,
+   the closure `GameScene.commonInit()` hands over -- and
+   `test_everySpawnAgainstARealGeneratedCity_landsWhereTheCameraCanActuallySeeIt`
+   asserts every spawn against a real generated city is genuinely on
+   camera, alongside the existing scene-level
+   `PickupIntegrationTests.test_everyPickupMounted_spawnsWhereTheCameraCanSeeIt`.
+   No offender found.
+
+2. Surviving a camera excursion: `Pickup.age` advances strictly by real
+   `deltaTime`, never by anything derived from `visibleRect`
+   (`PickupManager.update`'s own doc comment and
+   `PickupManagerTests.test_largeVisibleRectJumpBetweenUpdates_doesNotAffectPickupAging`),
+   and the production scene-wiring path confirms a not-yet-expired pickup
+   survives the camera actually moving far away and back
+   (`PickupIntegrationTests
+   .test_notYetExpiredPickup_survives_theCameraMovingFarAwayAndBack`). No
+   offender found.
+
+3. Icons legible: `PickupNode`'s pickup icon is drawn at a fixed 32pt over
+   an accent-tinted pad, a documented and pinned non-integer magnification
+   (`PixelCrispnessSweepTests`' named exception list, `24/24 -> 32/32`,
+   `1.333x`) -- an accepted departure from the whole-integer-scale rule
+   recorded there, not a legibility defect. No offender found.
+
+4. Never on or adjacent to a building: `PickupManager.isLegalPlacement`
+   checks the candidate tile *and* all 8 neighbours against
+   `BuildingObstruction.isObstructed(_:byAnyOf:)`
+   (`PickupManagerTests.test_obstructedNeighbourTile_preventsSpawningAtAnOtherwiseLegalStreetTile`,
+   `test_obstructionOnTheCandidateTileItself_preventsSpawning`). Every one
+   of those existing tests, however, drives the check against a single
+   hand-built `BuildingPlacementRecord` fixture, never a real generated
+   chunk's actual footprint shapes (a 2x2 building's four tiles, several
+   buildings in one block whose 3x3 neighbour rings overlap each other).
+   `PickupVisibilityTests.swift` (new, this PR) closes that gap: it drives
+   the same placement-validation logic against buildings `BuildingPlacement
+   .generate` itself produces over a wide swept region, confirming across
+   many spawn attempts that no pickup ever lands on or adjacent to a real
+   generated building. That assertion's oracle is deliberately *not*
+   `BuildingObstruction.isObstructed(_:byAnyOf:)` (PR #67 review) -- using
+   the production predicate over the production records would prove only
+   that the neighbour loop ran, and a mis-derived `footprintTiles` would
+   read the same wrong set on both sides. The occupied-tile set is rebuilt
+   independently from each record's `lotTile` plus its catalog entry's
+   `footprintSize.tileSpan`, and asserted to agree with `footprintTiles`
+   outright. No offender found -- the fixture-driven coverage generalizes
+   correctly to real generated shapes, and the two derivations agree.
+
+Finding: no offender
+---------------------
+All four of gate 5's named claims hold, confirmed both by the existing
+`PickupManagerTests`/`PickupIntegrationTests` suites and by this PR's new
+`PickupVisibilityTests.swift`, which specifically closes the
+real-generated-geometry gap the existing fixture-driven tests left open.
+No production code change was needed for gate 5.
+
+What this audit does NOT evidence
+-----------------------------------
+This is a code-level/in-suite check, run headlessly against `PickupManager`
+directly and through `GameScene`'s composed wiring in existing suites -- it
+is not a recording of a real simulator run. A human (or the platform's
+runtime-probe pipeline) still needs to capture `gate-05-pickups-visible.mov`
+from a running simulator: a full normal-play run showing the first pickup
+spawn, a camera excursion away and back with the pickup still present, and
+a legible icon never sitting on or beside a building.
