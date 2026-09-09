@@ -103,6 +103,26 @@ final class PickupNode: SKNode {
             return cached
         }
         let texture = cachedSheet.texture(col: column, row: 0)
+        // `SpriteSheet.texture(col:row:)` crops a *new* `SKTexture` instance
+        // via its rect-cropping initializer, which does not inherit the sheet
+        // texture's own `.nearest`/no-mipmap settings (`TextureLoading`
+        // stamps those on the whole-sheet texture, not on a rect crop of
+        // it) -- so each cropped texture needs the same stamp applied to it
+        // directly, exactly as `PlayerNode.texture(row:column:)` /
+        // `RaccoonNode.texture(state:row:column:)` / `BulletNode.texture
+        // (forTier:)` / `HitEffects.texture(forColumn:)` /
+        // `WeaponOverlayRenderer.texture(tier:direction:)` /
+        // `PulseRingNode.texture(forColumn:)` all already do at their own
+        // cache-population sites. This one was the sweep's one real
+        // offender (CYBERPUN-17-14-t3, gate 9): it happened not to blur in
+        // practice only because `PickupNode.init` always calls
+        // `PixelCrispness.apply(to: icon)` immediately afterward, which
+        // mutates this very texture object (a class, held by reference) in
+        // place -- so the cache still ended up nearest-filtered, but only
+        // as a side effect of the caller's own finalization pass rather
+        // than as a guarantee this factory itself provides.
+        texture.filteringMode = .nearest
+        texture.usesMipmaps = false
         textureCache[column] = texture
         return texture
     }

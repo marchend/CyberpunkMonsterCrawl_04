@@ -178,3 +178,72 @@ Xcode access.
 The three gate-1 JPGs referenced in PR 1's section above remain deleted
 and gate 1's literal recording remains outstanding, as recorded there.
 This PR adds no new claim about gate 1.
+
+## `CYBERPUN-17-14-t3` (PR 3: pixel-crispness + actor-facing/animation audit)
+
+This PR's plan calls for three evidence artifacts:
+
+- `gate-03-actor-facing-animation.mov` -- a recording of an actor turning
+  through all 8 facings with a visibly cycling walk animation.
+- `gate-09-pixel-crispness-2x.png` / `gate-09-pixel-crispness-3x.png` --
+  crisp, non-blurred screenshots at `@2x` and `@3x`.
+
+None of the three is fabricated here, for the same reason PR 1/2's
+sections above give: this implementation step has no Xcode/simulator/
+screen-capture tool, and a placeholder file at any of those exact names
+would be indistinguishable from real evidence until opened.
+
+| gate | state after this PR |
+| --- | --- |
+| 3 -- actor turns through all 8 facings, walk animation visibly cycles | **audited, code-verified, regression-tested -- literal recording still outstanding.** See `gate-03-actor-facing-animation.txt` and `CyberpunkMonsterCrawlTests/ActorFacingAnimationTests.swift`. |
+| 9 -- no blurred/half-pixel-placed sprite at `@2x`/`@3x`; filtering/scale/position swept | **one real offender found and fixed; audited and regression-tested otherwise -- literal `@2x`/`@3x` screenshots still outstanding.** See `gate-09-pixel-crispness-sweep.txt` and `CyberpunkMonsterCrawlTests/PixelCrispnessSweepTests.swift`. |
+
+### Gate 3 -- actor-facing/animation audit
+
+Re-driving both `PlayerNode` and `RaccoonNode` through every `Direction8`
+facing and a full walk (and, for the raccoon, attack) cycle reproduced
+exactly the row/mirror/frame sequence each actor's own row-mapping table
+and frame-timing module already document -- no offender found. See
+`gate-03-actor-facing-animation.txt` for the full trace.
+`CyberpunkMonsterCrawlTests/ActorFacingAnimationTests.swift` is new: it
+is the one file that exercises both actors' *live, driven* facing +
+frame-cycling behaviour side by side against their production texture
+accessors, closing a gap `AtlasSlicingTests` (PR 2, static row/column
+tables only) and the per-actor suites (`PlayerNodeTests`/
+`RaccoonNodeTests`/`RaccoonAnimationControllerTests`, each scoped to one
+actor) did not individually cover together.
+
+### Gate 9 -- pixel-crispness sweep
+
+The sweep (re-reading every texture-load path, every node scale
+assignment and every node position assignment reachable from a
+production sprite consumer) found one real offender:
+`PickupNode.texture(forColumn:)` cached a texture crop that had never
+itself been stamped `.nearest`/no-mipmap -- unlike every sibling
+factory (`PlayerNode`, `RaccoonNode`, `BulletNode`, `HitEffects`,
+`WeaponOverlayRenderer`, `PulseRingNode`), which all stamp the crop
+directly at cache-population time. It happened not to blur on a device
+only because `PickupNode.init`'s own `PixelCrispness.apply(to: icon)`
+call mutated the very same cached texture instance (a class, held by
+reference) as a side effect -- fixed at the cache-population site
+(`CyberpunkMonsterCrawl/Sources/Pickups/PickupNode.swift`) so the
+guarantee no longer depends on that side effect. No offender was found
+in scale (every non-1x magnification in the codebase already routes
+through `SKSpriteNode.size`, never `xScale`/`yScale`) or position (every
+world-space node derives its position from `IsometricProjection`'s
+integer-in/integer-out arithmetic or `PixelCrispness.snappedPosition`,
+and `CameraController` already snaps the one per-frame moving world
+container to the live device pixel grid). See
+`gate-09-pixel-crispness-sweep.txt` for the full per-consumer trace.
+`CyberpunkMonsterCrawlTests/PixelCrispnessSweepTests.swift` is new: it
+constructs a production-shaped node from every audited consumer and
+asserts `PixelCrispness`'s invariants directly, including a dedicated
+case proving `PickupNode.texture(forColumn:)` now provides the
+filtering guarantee itself rather than relying on a caller's follow-up
+`apply(to:)` call.
+
+## Outstanding, carried over from PR 1 and PR 2
+
+Gate 1's literal recording (PR 1) and gate 2/10's literal recording/
+screenshot (PR 2) remain outstanding, as recorded in their own sections
+above. This PR adds no new claim about any of them.

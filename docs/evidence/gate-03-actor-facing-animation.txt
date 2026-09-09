@@ -1,0 +1,70 @@
+CYBERPUN-17-14-t3 (PR 3) -- gate 3 audit trace: actor-facing/animation
+=======================================================================
+
+Scope: "an actor turning through all 8 facings with visibly cycling walk
+animation" (gate 3), for both actors this codebase renders (`PlayerNode`,
+`RaccoonNode`).
+
+Method
+------
+`AtlasSlicingTests` (CYBERPUN-17-14-t2) already consolidates every
+actor's *static* `Direction8 -> (row, mirrored)` table as hand-typed
+literals in one file. That does not, on its own, prove the *live* node
+drives the correct row/frame off that table when actually turned and
+animated over real elapsed time -- a regression in `PlayerNode.update(
+deltaTime:movementVector:)` or `RaccoonNode.update(deltaTime:)`'s own
+wiring (as opposed to the table itself) would not necessarily show up
+there. `CyberpunkMonsterCrawlTests/ActorFacingAnimationTests.swift` is
+the new file that closes that gap: it drives real `PlayerNode`/
+`RaccoonNode` instances through every `Direction8` case and a full walk
+(and, for the raccoon, attack) cycle, and asserts the produced
+`body.texture` identity against the exact cached production accessor
+(`PlayerNode.texture(row:column:)` / `RaccoonNode.texture(state:row:
+column:)`) at each step.
+
+Finding: no offender
+---------------------
+Re-driving both actors reproduced exactly the row/mirror/frame sequence
+each actor's own row-mapping table and frame-timing module already
+document:
+
+- Player: 8 facings -> rows 0-4 direct (south..north), 3 mirrored
+  (southwest/west/northwest from southeast/east/northeast), confirmed via
+  `PlayerNode.update(deltaTime:movementVector:)` for every SpriteKit-space
+  vector in the compass, both per-direction (fresh node) and turning
+  through the full compass on one node in sequence. Walk cycle: 0 -> 1 ->
+  2 -> 3 -> 0 at the documented 8fps (0.125s/frame, a binary-exact
+  fraction so no floating-point boundary risk), confirmed by stepping
+  `deltaTime` in exact `PlayerAnimator.secondsPerFrame` increments and
+  matching the produced texture identity at every step. Idle freezes to
+  frame 0 and never cycles further, confirmed directly.
+
+- Raccoon (both tiers): identical row/mirror table, confirmed via
+  `RaccoonNode.setDirection(_:)` + `update(deltaTime:)` for every
+  direction, both tiers. Walk cycle (10fps) and attack cycle (12fps,
+  its own `sprite_raccoon_attack` sheet) both confirmed to cycle 0 -> 1
+  -> 2 -> 3 -> 0 and beyond. Neither 1/10s nor 1/12s is a binary-exact
+  fraction (unlike the player's 1/8s), so -- per the precaution
+  `RaccoonAnimationControllerTests` already documents for this exact
+  risk ("0.3 / 0.1 == 2.9999999999999996" in IEEE754) -- the test drives
+  elapsed time to the *midpoint* of each frame window rather than to an
+  exact frame-boundary multiple, so the assertions are robust to
+  floating-point accumulation noise rather than coincidentally passing
+  or flaking on it.
+
+No code fix was needed for this gate; the new test file is a regression
+guard proving the finding, not a change to production behaviour.
+
+What this audit does NOT evidence
+-----------------------------------
+This is a code-level/in-suite check (`ActorFacingAnimationTests.swift`),
+run headlessly against constructed nodes -- it is not a recording of a
+real simulator run. This task runs in a container with no Xcode/
+simulator/screen-capture tool (see docs/evidence/README.md's PR 1/2
+sections for the same limitation), so no
+`gate-03-actor-facing-animation.mov` is fabricated here. Gate 3 remains
+open in the sense the story's acceptance criterion means it: a human
+(or the platform's runtime-probe pipeline) still needs to capture a real
+recording of an actor turning through all 8 facings with a visibly
+cycling walk animation on a running simulator, and attach it under this
+directory.

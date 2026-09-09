@@ -1,0 +1,118 @@
+CYBERPUN-17-14-t3 (PR 3) -- gate 9 audit trace: pixel-crispness sweep
+======================================================================
+
+Scope: every texture-load path, every node scale assignment, and every
+node position assignment reachable from a production sprite consumer in
+CyberpunkMonsterCrawl/Sources/**, re-read against PixelCrispness's own
+three invariants (nearest filtering, no mipmaps, whole-integer scale) plus
+whole-point placement.
+
+Method
+------
+1. Grepped every call site of `SpriteSheet.texture(col:row:)` /
+   `.texture(forPixelRect:)` (the only two atlas-cropping entry points
+   `AtlasContractConventionTests` permits) and read each caller's
+   cache-population / node-finalization code by hand.
+2. Grepped every `.xScale =` / `.yScale =` assignment outside
+   `PixelCrispness` itself.
+3. Read `IsometricProjection.tileToScreen` (integer tile inputs always
+   produce integer screen outputs: `(tileX - tileY) * 48`,
+   `(tileX + tileY) * 24`) and every position assignment derived from it.
+4. Wrote `CyberpunkMonsterCrawlTests/PixelCrispnessSweepTests.swift`, which
+   constructs a live, production-shaped node from every consumer this
+   sweep covers and asserts the three invariants + whole-point placement
+   directly -- so this trace is backed by an in-suite, re-runnable check,
+   not only by this file's prose.
+
+Consumers audited (file -> production entry point)
+----------------------------------------------------
+- Sources/Actors/PlayerNode.swift            -> PlayerNode.texture(row:column:)
+- Sources/Actors/Raccoon/RaccoonNode.swift    -> RaccoonNode.texture(state:row:column:)
+- Sources/Combat/BulletNode.swift             -> BulletNode.texture(forTier:)
+- Sources/Combat/HitEffects.swift             -> HitEffects.texture(forColumn:)
+- Sources/Rendering/WeaponOverlayRenderer.swift -> WeaponOverlayRenderer.texture(tier:direction:)
+- Sources/Rendering/PulseRingNode.swift       -> PulseRingNode.texture(forColumn:)
+- Sources/Pickups/PickupNode.swift            -> PickupNode.texture(forColumn:)
+- Sources/World/GroundTileRenderer.swift      -> GroundTileRenderer.configure(_:for:at:)
+- Sources/World/TileFieldRenderer.swift       -> TileFieldRenderer.configure(_:for:)
+- Sources/Rendering/RooftopSignRenderer.swift -> RooftopSignRenderer.makeSignNode(for:parent:)
+
+Finding: one real offender, fixed
+---------------------------------
+`SpriteSheet.texture(col:row:)` / `.texture(forPixelRect:)` cut a *new*
+`SKTexture` out of the sheet texture via `SKTexture(rect:in:)`. That
+crop does NOT inherit the sheet texture's own `.nearest`/no-mipmap
+settings (`TextureLoading.texture(named:)` stamps those onto the
+*whole-sheet* texture only) -- so every cache-population site that slices
+a texture must stamp `.filteringMode = .nearest` / `.usesMipmaps = false`
+onto the *cropped* result itself, not assume it carries over.
+
+Every consumer already did this except one:
+  PlayerNode.texture(row:column:)                 -- stamps explicitly. OK.
+  RaccoonNode.texture(state:row:column:)           -- stamps explicitly. OK.
+  BulletNode.texture(forTier:)                     -- stamps explicitly. OK.
+  HitEffects.texture(forColumn:)                   -- stamps explicitly. OK.
+  WeaponOverlayRenderer.texture(tier:direction:)    -- stamps explicitly. OK.
+  PulseRingNode.texture(forColumn:)                -- stamps explicitly. OK.
+  PickupNode.texture(forColumn:)                   -- DID NOT stamp. OFFENDER.
+  GroundTileRenderer.configure / TileFieldRenderer.configure /
+  RooftopSignRenderer.makeSignNode                 -- no cache at all; each
+    calls PixelCrispness.apply(to: node) immediately after assigning the
+    fresh crop, which is an equally sound (if less obviously named)
+    pattern. Not offenders.
+
+`PickupNode.texture(forColumn:)` cached a raw, unstamped crop. This did
+NOT actually blur on a device: `PickupNode.init` always calls
+`PixelCrispness.apply(to: icon)` immediately after assigning the texture,
+and `SKTexture` is a reference type, so that `apply` call mutated the
+very same object the cache was holding -- the cache ended up correctly
+filtered as a side effect of the *caller's* finalization, not as a
+guarantee the factory itself provided. Fixed at the cache-population
+site (CyberpunkMonsterCrawl/Sources/Pickups/PickupNode.swift) to match
+every sibling factory's pattern, so the guarantee no longer depends on
+every future caller remembering to call `apply(to:)` first.
+`PixelCrispnessSweepTests.test_pickupNode_textureForColumn_
+isNearestFilteredAndMipmapFree_directlyFromTheFactory` asserts the
+factory now provides this directly.
+
+Scale: no offender found
+-------------------------
+Every `SKSpriteNode.xScale`/`yScale` assignment in the audited files sets
+either `+1`/`-1` (a mirror flip) or is finalized through
+`PixelCrispness.apply(to:)`'s own `wholeScale(_:)` rounding. The two
+documented non-1x *magnification* cases in this codebase
+(`RaccoonNode.scaledSize(forTier:deviceScale:)`'s 1.6x elite,
+`PickupNode.iconSize`'s 32/24 icon) both route the magnification through
+`SKSpriteNode.size`, never through `xScale`/`yScale` -- so
+`PixelCrispness`'s integer-scale rule is never bypassed by either
+already-documented opt-out. `PixelCrispnessSweepTests` asserts
+`PixelCrispness.isIntegerScale(node.xScale/yScale)` directly on every
+constructed node, elites and pickups included.
+
+Position: no offender found
+-----------------------------
+Every world-space node's position is derived from
+`IsometricProjection.tileToScreen` (integer tile coordinates in, integer
+screen points out by construction) or from
+`PixelCrispness.snappedPosition(for:scale:)` (`CameraController`,
+`PlayerNode`, `PickupNode`, `RaccoonNode`'s size snap), and every sprite
+factory finishes with `PixelCrispness.apply(to:)`'s own whole-point
+rounding. `CameraController` -- the one place a world container moves
+every frame -- already snaps its offset to the live device pixel grid
+(landed with CYBERPUN-17-7; see that type's own doc comment), closing
+the one gap earlier CLAUDE.md/AGENT.md revisions recorded as open
+("cameraNode.position is not snapped anywhere").
+
+What this audit does NOT evidence
+-----------------------------------
+This is a code-level trace plus an in-suite regression test
+(`PixelCrispnessSweepTests.swift`), run headlessly (deviceScale
+defaulted to 1, i.e. a whole-point grid) -- it is not a screenshot of a
+real `@2x`/`@3x` simulator frame. This task runs in a container with no
+Xcode/simulator/screen-capture tool (see docs/evidence/README.md's PR
+1/2 sections for the same limitation), so no `gate-09-pixel-crispness-
+2x.png` / `gate-09-pixel-crispness-3x.png` is fabricated here. Gate 9
+remains open in the sense the story's acceptance criterion means it: a
+human (or the platform's runtime-probe pipeline) still needs to capture
+real `@2x`/`@3x` frames of the running app and attach them under this
+directory.
