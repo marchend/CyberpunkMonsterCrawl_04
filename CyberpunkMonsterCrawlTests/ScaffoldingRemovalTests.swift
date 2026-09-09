@@ -10,20 +10,35 @@ import XCTest
 /// `"SCAFFOLDING"` so either spelling trips it; the marker's exact
 /// punctuation is never load-bearing, only its presence.
 ///
-/// **Scope is deliberately the bundled app target only**
-/// (`CyberpunkMonsterCrawl/`), never the whole repository. A still-open
-/// marker -- `SCAFFOLDING(TBD -- root-cause ticket, filed by the gate
-/// reviewer)`, the `CYBERPUN-17-11` pickup-spawn crash-bisection
-/// instrumentation -- legitimately lives in
+/// **Scope is the bundled app target only** (`CyberpunkMonsterCrawl/`),
+/// never the whole repository -- and PR #64's review was right that an
+/// earlier revision of this file used that scope to *exclude* the one live
+/// marker in the tree, which would have let the story's acceptance criterion
+/// ("a grep for the marker returns nothing, across the whole codebase") be
+/// reported as met by a gate that never looked at it.
+///
+/// That marker is gone rather than excluded now. It tagged the
+/// `CYBERPUN-17-11` pickup-spawn crash-bisection instrumentation in
 /// `CyberpunkMonsterCrawlTests/JourneyManifestTests.swift` and
-/// `.mothership/journeys/pickup-spawn.json`. Neither file ships inside the
-/// app binary, and neither marker is this story's to remove: its own
-/// comment names a still-unfiled root-cause ticket as the removal owner, not
-/// `CYBERPUN-17-14` (see `AGENT.md`'s `CYBERPUN-17-11` history). Scanning
-/// only the shipped app source keeps "no debug overlay/placeholder title
-/// reachable in the build" (this PR's own acceptance criterion) honest
-/// without failing this gate on scaffolding a different, later ticket still
-/// owns.
+/// `.mothership/journeys/pickup-spawn.json`, named a root-cause ticket that
+/// was never filed as its removal owner, and was held in place by a passing
+/// test that failed if the instrumentation was deleted -- a temporary
+/// artifact with a test protecting it, which is the shape this story exists
+/// to end. This PR removed the two bracketing `assert_running` checkpoints
+/// and that test; what is known about the still-unidentified crash is
+/// recorded in `AGENT.md`'s `CYBERPUN-17-11` entry instead.
+///
+/// With that done, no artifact anywhere in the tree carries the marker, so
+/// the app-target scope no longer hides anything. The scan stays scoped
+/// there because the occurrences that remain in the repository are the ones
+/// that *describe* the convention rather than tag anything: this file's own
+/// `marker` constant and its anti-vacuity fixtures, `docs/bootstrap.md`'s
+/// statement of the convention, `ScreensTests`' reference to it, and
+/// `docs/evidence/`'s gate log. A whole-repository scan would fail on the
+/// gate's own definition of what it scans for -- a vacuous red, not a real
+/// one -- so the honest division is: this test enforces the shipped app
+/// source, and `docs/evidence/gate-07-scaffolding-grep-output.txt` records
+/// the full-tree state, including that list, for the human reviewer.
 ///
 /// As of this PR, a full-tree grep for the marker inside
 /// `CyberpunkMonsterCrawl/` (the app target) already returns zero matches --
