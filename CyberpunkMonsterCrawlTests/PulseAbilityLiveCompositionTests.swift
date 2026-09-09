@@ -393,10 +393,10 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         //
         // The button pressed here is the HUD's bottom-right
         // `HUDPulseButton`, because since PR #63's review decision that is
-        // the run's only *visible* ability control (the older bottom-left
-        // `scene.pulseButton` mount is hidden for the whole run, hence
-        // unroutable). The journey is unchanged in substance: the same
-        // `handlePulsePress()` fires behind either button.
+        // the run's only ability control -- and since `CYBERPUN-17-14`
+        // PR 1 the older bottom-left mount is deleted outright, not merely
+        // hidden. The journey is unchanged in substance: the same
+        // `handlePulsePress()` still fires behind the press.
         XCTAssertFalse(scene.pulseAbility.isOnCooldown, "precondition: a fresh ability is ready")
         let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount the HUD")
         let pulseFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: hud.pulseButton))
@@ -432,7 +432,7 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
     /// `didChangeSize(_:)` -- unlike the startup race above, this path was
     /// already wired before this task, so this pins it rather than fixing
     /// it.
-    func test_rotationDuringAGameplayRun_reLaysOutThePulseButton_fromTheNewLiveInsets() {
+    func test_rotationDuringAGameplayRun_reLaysOutThePulseButton_fromTheNewLiveInsets() throws {
         let scene = makeComposedScene()
         let view = makeLiveView(scene, insets: liveInsets)
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
@@ -445,12 +445,21 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         view.injectedSafeAreaInsets = landscapeInsets
         scene.didChangeSize(oldSize)
 
-        let expectedSlot = FloatingThumbstickNode.reservedPulseButtonSlot(
-            forSize: landscapeSize,
+        // `CYBERPUN-17-14` PR 1: the button a rotation must re-lay out is
+        // the HUD's own bottom-right `HUDPulseButton` -- the older
+        // bottom-left mount and the thumbstick slot it was placed into are
+        // deleted -- so the expected geometry comes from the layout spec
+        // that owns it now (`HUDLayer.applyLayout(...)` anchors each
+        // element at its slot frame's centre, driven from
+        // `didChangeSize(_:)` -> `layoutSafeAreaDependentContent()`).
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount the HUD")
+        let expectedSlot = HUDLayout.frame(
+            for: .pulseButton,
+            sceneSize: landscapeSize,
             safeAreaInsets: landscapeInsets
         )
-        XCTAssertEqual(scene.pulseButton.position.x, expectedSlot.midX, accuracy: 1e-6)
-        XCTAssertEqual(scene.pulseButton.position.y, expectedSlot.midY, accuracy: 1e-6)
+        XCTAssertEqual(hud.pulseButton.position.x, expectedSlot.midX, accuracy: 1e-6)
+        XCTAssertEqual(hud.pulseButton.position.y, expectedSlot.midY, accuracy: 1e-6)
 
         XCTAssertTrue(scene.nodesEscapingTheirLayerBand().isEmpty)
         XCTAssertTrue(scene.nodesBypassingSceneTouchDispatch().isEmpty)

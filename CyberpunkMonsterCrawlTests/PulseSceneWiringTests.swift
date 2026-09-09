@@ -181,6 +181,16 @@ final class PulseSceneWiringTests: XCTestCase {
     func test_applyPulseTrigger_whileOnCooldown_doesNothingObservable_whileTheButtonShowsCooldown() throws {
         let scene = makeGameplayScene()
         let origin = try XCTUnwrap(scene.playerWorldPosition)
+        // `CYBERPUN-17-14` PR 1: the cooldown *display* this test checks is
+        // the HUD's own `HUDPulseButton` (refreshed from
+        // `HUDRunModel.pulseCooldownFraction`/`isPulseReady` by
+        // `hudLayer?.refresh()` every `.gameplay` frame). The older
+        // bottom-left `scene.pulseButton` mount this used to read is
+        // deleted, so the same two halves are asserted through the button
+        // that is actually on screen: `isReady == false` is the old
+        // `isOnCooldown`, and `cooldownFraction` carries the old
+        // `cooldownProgress` scale unchanged (`1` == fully recovered).
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount the HUD")
 
         // Burn the cooldown with an empty swarm.
         XCTAssertNotNil(scene.applyPulseTrigger(raccoons: []))
@@ -203,15 +213,15 @@ final class PulseSceneWiringTests: XCTestCase {
         // long enough for it to fully elapse.
         var now: TimeInterval = 1
         scene.update(now)
-        XCTAssertTrue(scene.pulseButton.isOnCooldown, "the button must show cooldown once a frame has run.")
-        XCTAssertLessThan(scene.pulseButton.cooldownProgress, 1)
+        XCTAssertFalse(hud.pulseButton.isReady, "the button must show cooldown once a frame has run.")
+        XCTAssertLessThan(hud.pulseButton.cooldownFraction, 1)
 
         while now < 1 + PulseAbility.cooldownSeconds + 1 {
             now += 0.5
             scene.update(now)
         }
-        XCTAssertFalse(
-            scene.pulseButton.isOnCooldown,
+        XCTAssertTrue(
+            hud.pulseButton.isReady,
             "the button must read ready again once PulseAbility's cooldown has fully elapsed."
         )
     }
