@@ -39,15 +39,28 @@ final class PulseSceneWiringTests: XCTestCase {
         XCTAssertEqual(scene.pulseButton.position, CGPoint(x: slot.midX, y: slot.midY))
     }
 
-    func test_pulseButton_isHiddenBeforeAnyRun_shownDuringGameplay_hiddenAgainOutsideIt() {
+    /// PR #63's review decision (`CYBERPUN-17-12` PR 2): this older
+    /// bottom-left mount is hidden in **every** state, `.gameplay`
+    /// included, because the HUD's bottom-right `HUDPulseButton` is the
+    /// run's one visible ability control -- the placement the ticket asks
+    /// for. Until this test that expectation was the opposite ("the button
+    /// must be visible during a run"), so it is restated here rather than
+    /// deleted: the node stays mounted and wired (the press tests below
+    /// still drive its real `onPress`), it is simply never shown.
+    /// Retiring it outright is `CYBERPUN-17-14`'s.
+    func test_pulseButton_isHiddenInEveryState_sinceTheHUDOwnsTheVisibleAbilityControl() {
         let scene = GameScene(size: sceneSize)
         XCTAssertTrue(scene.pulseButton.isHidden, "no run is active before the first .gameplay entry")
 
         XCTAssertTrue(scene.stateMachine.transition(to: .gameplay))
-        XCTAssertFalse(scene.pulseButton.isHidden, "the button must be visible during a run")
+        XCTAssertTrue(
+            scene.pulseButton.isHidden,
+            "the older bottom-left mount must stay hidden during a run - the HUD's bottom-right button is the "
+                + "only visible ability control"
+        )
 
         XCTAssertTrue(scene.stateMachine.transition(to: .death))
-        XCTAssertTrue(scene.pulseButton.isHidden, "the button must hide again once the run has ended")
+        XCTAssertTrue(scene.pulseButton.isHidden, "and it must still be hidden once the run has ended")
     }
 
     func test_pulseRing_startsHidden_underEffectsLayer() {
@@ -101,15 +114,23 @@ final class PulseSceneWiringTests: XCTestCase {
     /// (`UITouch` cannot be constructed with a location in a unit test),
     /// and is also what `SceneAccessibilityContainerView.forwardTouch`
     /// funnels the journey's vision-driven tap into.
-    func test_aTouchAtThePulseButtonsSlot_routesToTheButton_andFiresTheAbility() {
+    /// Since PR #63's review decision the *visible* ability control is the
+    /// HUD's bottom-right `HUDPulseButton`, so that is the button this
+    /// gate now routes to: the older bottom-left mount is hidden for the
+    /// whole run and hidden nodes are excluded from routing by
+    /// construction. The ability behind both is the same
+    /// `handlePulsePress()`, so the gate itself is unchanged -- a touch
+    /// where the player sees a button must fire the real pulse.
+    func test_aTouchAtTheVisibleAbilityButtonsSlot_routesToIt_andFiresTheAbility() throws {
         let scene = makeGameplayScene()
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount the HUD")
         XCTAssertFalse(scene.pulseAbility.isOnCooldown, "precondition: a fresh ability is ready.")
 
-        let responder = scene.dispatchTouch(atScenePoint: scene.pulseButton.position)
+        let responder = scene.dispatchTouch(atScenePoint: hud.pulseButton.position)
 
         XCTAssertTrue(
-            responder === scene.pulseButton,
-            "a touch on the reserved slot must resolve to PulseButton, not to another uiLayer node."
+            responder === hud.pulseButton,
+            "a touch on the HUD button's slot must resolve to HUDPulseButton, not to another uiLayer node."
         )
         XCTAssertTrue(
             scene.pulseAbility.isOnCooldown,
@@ -118,9 +139,33 @@ final class PulseSceneWiringTests: XCTestCase {
         XCTAssertFalse(scene.pulseRing.isHidden, "a routed press must play the ring.")
     }
 
+    /// The flip side of that decision: the older bottom-left mount must be
+    /// unreachable by touch for as long as it is invisible, or a player
+    /// would be firing a control they cannot see (and
+    /// `AccessibleSKView` would publish a mirror over it -- pinned in
+    /// `AccessibleSKViewTests.test_duringARun_theHUDPublishesOnlyItsPulseButton`).
+    func test_aTouchAtTheHiddenOlderMountsSlot_doesNotReachIt() {
+        let scene = makeGameplayScene()
+
+        let responder = scene.dispatchTouch(atScenePoint: scene.pulseButton.position)
+
+        XCTAssertFalse(
+            responder === scene.pulseButton,
+            "the hidden older bottom-left mount must not claim touches during a run"
+        )
+        XCTAssertFalse(
+            scene.pulseAbility.isOnCooldown,
+            "and nothing may fire the ability from that slot while no visible control sits there"
+        )
+    }
+
     /// The other side of the same seam: the movement stick must refuse the
-    /// button's slot, so a press can never be stolen mid-routing by the
-    /// thumbstick that surrounds it.
+    /// older button's slot, so a press could never be stolen mid-routing by
+    /// the thumbstick that surrounds it. The reservation outlives the
+    /// visible button on purpose -- retiring both together is
+    /// `CYBERPUN-17-14`'s -- so for now that slot is a 72x72 patch where
+    /// neither the stick nor any button takes the touch, recorded as
+    /// outstanding in AGENT.md rather than silently traded away here.
     func test_theThumbstick_refusesATouchOnThePulseButtonsSlot() {
         let scene = makeGameplayScene()
 

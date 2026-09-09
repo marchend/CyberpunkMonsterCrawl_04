@@ -506,13 +506,17 @@ final class AccessibleSKViewTests: XCTestCase {
     ) {
         let published = scene.accessibleUINodes()
 
-        // The whole intended set for a run: the two ability-button mounts
-        // that ship together while `CYBERPUN-17-14` still owns retiring the
-        // older bottom-left one. Nothing passive, and nothing unidentified.
+        // The whole intended set for a run: the HUD's bottom-right pulse
+        // button, and nothing else. Since PR #63's review decision the
+        // older bottom-left `gameplay.pulseButton` mount is hidden for the
+        // whole run (`GameScene.updateWorldContent(for:)`), so the walk's
+        // own visibility filter drops it -- which is exactly the property
+        // worth pinning: one visible ability control means one published
+        // element. Nothing passive, and nothing unidentified.
         XCTAssertEqual(
             Set(published.compactMap(\.accessibilityIdentifier)),
-            ["gameplay.pulseButton", "gameplay.hudPulseButton"],
-            "a run may publish only its ability buttons - anything else is a mirror over live gameplay",
+            ["gameplay.hudPulseButton"],
+            "a run may publish only the HUD's pulse button - anything else is a mirror over live gameplay",
             file: file, line: line
         )
 

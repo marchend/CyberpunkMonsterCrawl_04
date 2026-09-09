@@ -300,10 +300,15 @@ final class GameScene: SKScene {
     /// `FloatingThumbstickNode.reservedPulseButtonSlot(forSize:
     /// safeAreaInsets:)`, positioned from the slot's *centre*
     /// (`layoutPulseButton()`) per that method's own mount instructions.
-    /// Hidden outside `.gameplay` by `updateWorldContent(for:)`, the same
-    /// way `thumbstick.isRunActive` gates the movement stick -- this node
-    /// has no `isRunActive`-style gate of its own (see its own doc
-    /// comment), so the scene owns hiding it. `private(set)` so
+    /// This node has no `isRunActive`-style gate of its own (see its own
+    /// doc comment), so the scene owns hiding it -- and since PR #63's
+    /// review decision `updateWorldContent(for:)` keeps it hidden in
+    /// **every** state, `.gameplay` included: the HUD's bottom-right
+    /// `HUDPulseButton` is the run's only visible ability control (see
+    /// `hudLayer` below). It is still constructed, laid out and wired to
+    /// the same `handlePulsePress()`, so nothing here is a placeholder;
+    /// retiring the mount outright belongs to `CYBERPUN-17-14`.
+    /// `private(set)` so
     /// scene-wiring tests can drive a real press via
     /// `pulseButton.handleTouch()`, the same way `groundPlane`/`playerCombat`
     /// are exposed for theirs.
@@ -322,20 +327,22 @@ final class GameScene: SKScene {
     /// reused -- never rebuilt -- across a RUN AGAIN, the same "mount once,
     /// reuse across restarts" convention `player`/`playerCombat` follow.
     ///
-    /// **This coexists, for now, with the older bottom-left `pulseButton`
-    /// above.** `HUDPulseButton`'s own doc comment records that a later
-    /// wiring PR is expected to retire that mount once nothing references
-    /// it; consolidating the two ability buttons into one is out of this
-    /// PR's stated scope (`CYBERPUN-17-12` PR 2 is HUD composition/binding,
-    /// not a `CYBERPUN-17-10` cleanup), and the bottom-left-versus-
-    /// bottom-right placement question is itself still an open human call
-    /// recorded on `CYBERPUN-17-10` in AGENT.md. Retiring the older mount
-    /// (and, with it, `FloatingThumbstickNode.reservedPulseButtonSlot`'s
-    /// now-empty hole in the stick's own region) is left for
-    /// `CYBERPUN-17-14` ("Clear all scaffolding and prove the ten product
-    /// gates on a running simulator"), which is explicitly positioned to do
-    /// exactly that. Both buttons drive the *same* ability through the same
-    /// `handlePulsePress()`, so neither is a dead or placeholder path.
+    /// **Its `HUDPulseButton` is the run's only visible ability control.**
+    /// PR #63's review raised the interim "two on-screen pulse buttons for
+    /// a whole run" state as a human decision rather than a doc note, and
+    /// the answer was to hide the older bottom-left `pulseButton` above
+    /// now: bottom-right is the placement the ticket asks for, and both
+    /// buttons drove the *same* `handlePulsePress()`, so nothing is lost by
+    /// showing one. `updateWorldContent(for:)` therefore sets
+    /// `pulseButton.isHidden = true` in every state, `.gameplay` included.
+    /// The older node stays constructed and wired (not a placeholder, and
+    /// still driven by scene-wiring tests through `handleTouch()`);
+    /// *deleting* it -- and with it
+    /// `FloatingThumbstickNode.reservedPulseButtonSlot`'s now-empty hole in
+    /// the stick's own touch-acceptance region, which still refuses touches
+    /// for a control nobody can see -- is left for `CYBERPUN-17-14`
+    /// ("Clear all scaffolding and prove the ten product gates on a running
+    /// simulator"), which is explicitly positioned to do exactly that.
     ///
     /// `private(set)` so scene-wiring tests can assert on it directly, the
     /// same reason `groundPlane`/`playerCombat`/`pickupManager` are exposed
@@ -670,15 +677,27 @@ final class GameScene: SKScene {
             thumbstick.isRunActive = true
             // `PulseButton` has no `isRunActive`-style gate of its own
             // (see that type's own "Mount instructions" doc note), so the
-            // scene owns hiding it outside `.gameplay` -- otherwise a
-            // live `AccessibleSKView` mirror would sit over the menu's
+            // scene owns its visibility -- otherwise a live
+            // `AccessibleSKView` mirror would sit over the menu's
             // bottom-left quadrant and forward touches into
-            // `dispatchTouch`. Its cooldown-derived visual is refreshed
-            // every `.gameplay` frame from `advanceMovementAndCamera(
-            // currentTime:)` -- but not before the *first* such frame runs,
-            // so the button is snapped to "ready" here too rather than
-            // opening RUN AGAIN still wearing last run's dimmed wedge.
-            pulseButton.isHidden = false
+            // `dispatchTouch`.
+            //
+            // **It now stays hidden inside `.gameplay` too** (PR #63
+            // review decision, `CYBERPUN-17-12` PR 2): the HUD's
+            // bottom-right `HUDPulseButton` is the run's one *visible*
+            // ability control, which is the placement the ticket asks for,
+            // so shipping two on-screen buttons driving the same
+            // `handlePulsePress()` is not a product state anybody chose.
+            // The node stays constructed, laid out and wired (its `onPress`
+            // still fires the real ability, which scene-wiring tests drive
+            // directly via `pulseButton.handleTouch()`); deleting it, and
+            // with it `FloatingThumbstickNode.reservedPulseButtonSlot`'s
+            // now-empty 72x72 refusal hole in the stick's acceptance box,
+            // remains `CYBERPUN-17-14`'s scaffolding-clearing work rather
+            // than this PR's. Hidden means unroutable and unpublished --
+            // `isVisibleToTouchRouting(_:)`/`isVisible(_:upTo:)` filter
+            // `isHidden`, so no mirror and no touch can reach it.
+            pulseButton.isHidden = true
             // ... and a fresh ability for a fresh run, the same reason
             // `raccoonSpawnDirector.reset()` / `startPickups()` /
             // `runStats.reset()` above exist: without this, a run that
@@ -687,6 +706,12 @@ final class GameScene: SKScene {
             // a dropped input, which is exactly what this ability's "must
             // respond to every press" product gate forbids.
             pulseAbility.reset()
+            // The older mount is hidden, but it is still kept in step with
+            // the ability it is wired to (rather than left wearing last
+            // run's dimmed wedge), so `CYBERPUN-17-14` inherits a correct
+            // node to delete instead of a stale one. The visible HUD
+            // button gets the same snap from `hud.bind(to:)`'s own
+            // `refresh()` below.
             pulseButton.setCooldownProgress(pulseCooldownProgress())
             // `CYBERPUN-17-12` PR 2: mount the HUD composition root the
             // first time a run starts (reused, never rebuilt, across a RUN

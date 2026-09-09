@@ -373,14 +373,22 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         // Journey steps 6/7: press the pulse button through the real
         // dispatch path, at its live, insets-aware scene-space position --
         // the same `accessibilityFrameInScene(for:)` conversion as above,
-        // now exercised for `pulseButton` (a node that becomes accessible
-        // only once `.gameplay` is entered, so this is the first time this
-        // suite resolves *its* frame rather than only a menu button's).
+        // now exercised for a node that becomes accessible only once
+        // `.gameplay` is entered, so this is the first time this suite
+        // resolves *its* frame rather than only a menu button's.
+        //
+        // The button pressed here is the HUD's bottom-right
+        // `HUDPulseButton`, because since PR #63's review decision that is
+        // the run's only *visible* ability control (the older bottom-left
+        // `scene.pulseButton` mount is hidden for the whole run, hence
+        // unroutable). The journey is unchanged in substance: the same
+        // `handlePulsePress()` fires behind either button.
         XCTAssertFalse(scene.pulseAbility.isOnCooldown, "precondition: a fresh ability is ready")
-        let pulseFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: scene.pulseButton))
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount the HUD")
+        let pulseFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: hud.pulseButton))
         let responder = scene.dispatchTouch(atScenePoint: CGPoint(x: pulseFrame.midX, y: pulseFrame.midY))
 
-        XCTAssertTrue(responder === scene.pulseButton, "the live press must resolve to the pulse button")
+        XCTAssertTrue(responder === hud.pulseButton, "the live press must resolve to the HUD's pulse button")
         XCTAssertTrue(scene.pulseAbility.isOnCooldown, "the live press must actually fire the ability")
         XCTAssertFalse(scene.pulseRing.isHidden, "a fired pulse must play the ring")
 
@@ -490,9 +498,13 @@ final class PulseAbilityLiveCompositionTests: XCTestCase {
         renderRealFrames(12)
         XCTAssertNotNil(view.window, "the view must still be presented after real rendering has started")
 
-        let pulseFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: scene.pulseButton))
+        // The HUD's bottom-right button: the run's only visible ability
+        // control since PR #63's review decision (the older bottom-left
+        // mount is hidden, so it is unroutable by construction).
+        let hud = try XCTUnwrap(scene.hudLayer, "entering .gameplay must mount the HUD")
+        let pulseFrame = try XCTUnwrap(scene.accessibilityFrameInScene(for: hud.pulseButton))
         let responder = scene.dispatchTouch(atScenePoint: CGPoint(x: pulseFrame.midX, y: pulseFrame.midY))
-        XCTAssertTrue(responder === scene.pulseButton, "the live press must resolve to the pulse button")
+        XCTAssertTrue(responder === hud.pulseButton, "the live press must resolve to the HUD's pulse button")
         XCTAssertTrue(scene.pulseAbility.isOnCooldown, "the live press must actually fire the ability")
 
         // The ring's own full play-through is 8 * PulseRingNode.frameDuration
