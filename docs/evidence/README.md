@@ -196,7 +196,7 @@ would be indistinguishable from real evidence until opened.
 | gate | state after this PR |
 | --- | --- |
 | 3 -- actor turns through all 8 facings, walk animation visibly cycles | **audited, code-verified, regression-tested -- literal recording still outstanding.** See `gate-03-actor-facing-animation.txt` and `CyberpunkMonsterCrawlTests/ActorFacingAnimationTests.swift`. |
-| 9 -- no blurred/half-pixel-placed sprite at `@2x`/`@3x`; filtering/scale/position swept | **one real offender found and fixed; audited and regression-tested otherwise -- literal `@2x`/`@3x` screenshots still outstanding.** See `gate-09-pixel-crispness-sweep.txt` and `CyberpunkMonsterCrawlTests/PixelCrispnessSweepTests.swift`. |
+| 9 -- no blurred/half-pixel-placed sprite at `@2x`/`@3x`; filtering/scale/position swept | **one consistency deviation found and fixed (not a live blur -- see the correction below); three story-accepted exceptions named (elite 1.604x, pickup icon 1.333x, bullets placed sub-pixel + rotated off-axis in flight); audited and regression-tested otherwise -- literal `@2x`/`@3x` screenshots still outstanding.** See `gate-09-pixel-crispness-sweep.txt` and `CyberpunkMonsterCrawlTests/PixelCrispnessSweepTests.swift`. |
 
 ### Gate 3 -- actor-facing/animation audit
 
@@ -217,30 +217,55 @@ actor) did not individually cover together.
 
 The sweep (re-reading every texture-load path, every node scale
 assignment and every node position assignment reachable from a
-production sprite consumer) found one real offender:
+production sprite consumer) found one deviation from the house pattern:
 `PickupNode.texture(forColumn:)` cached a texture crop that had never
 itself been stamped `.nearest`/no-mipmap -- unlike every sibling
 factory (`PlayerNode`, `RaccoonNode`, `BulletNode`, `HitEffects`,
 `WeaponOverlayRenderer`, `PulseRingNode`), which all stamp the crop
-directly at cache-population time. It happened not to blur on a device
-only because `PickupNode.init`'s own `PixelCrispness.apply(to: icon)`
-call mutated the very same cached texture instance (a class, held by
-reference) as a side effect -- fixed at the cache-population site
-(`CyberpunkMonsterCrawl/Sources/Pickups/PickupNode.swift`) so the
-guarantee no longer depends on that side effect. No offender was found
-in scale (every non-1x magnification in the codebase already routes
-through `SKSpriteNode.size`, never `xScale`/`yScale`) or position (every
-world-space node derives its position from `IsometricProjection`'s
-integer-in/integer-out arithmetic or `PixelCrispness.snappedPosition`,
-and `CameraController` already snaps the one per-frame moving world
-container to the live device pixel grid). See
-`gate-09-pixel-crispness-sweep.txt` for the full per-consumer trace.
+directly at cache-population time. Fixed at the cache-population site
+(`CyberpunkMonsterCrawl/Sources/Pickups/PickupNode.swift`).
+
+**Correction (PR #66 review).** This section originally billed that as
+"one real offender", on the premise that a `SKTexture(rect:in:)` crop
+does not inherit its parent sheet's filtering. The review asked for the
+premise to be pinned by a test rather than asserted in prose; doing so
+falsified it. Measured on a real run, a fresh crop out of a
+`TextureLoading`-stamped sheet already reads back `.nearest` with mipmaps
+off (`PixelCrispnessSweepTests.test_aRawSheetCrop_carriesTheSheetsNearest`
+`Filtering_measuredNotAssumed`). Nothing was blurred on a device. The
+stamp is kept as consistency plus a guard against undocumented `SKTexture`
+crop behaviour changing, and the claim is downgraded accordingly here and
+in the trace rather than left standing.
+
+Scale and position are **not** clean sweeps, and this section said they
+were until PR #66's review; three departures from gate 9's wording are
+accepted by the story and named rather than netted out:
+
+- the elite raccoon draws its 48x28 cell at 77x45 (1.604x/1.607x) and the
+  pickup icon draws its 24x24 cell at 32x32pt (1.333x) -- both non-integer
+  magnifications, routed through `SKSpriteNode.size` where
+  `PixelCrispness`'s integer-scale rule never sees them, each already
+  documented as an opt-out on the property that owns it;
+- in-flight bullets are placed at arbitrary sub-pixel positions
+  (`Player.handleFire` projects a fractional mid-walk tile and
+  `Player.advanceInFlightBullets` interpolates every frame without
+  rounding) and are rotated off-axis by `atan2` per AC5, so snapping their
+  position would not make them pixel-exact anyway.
+
+Everything else is clean: every other world-space node derives its
+position from `IsometricProjection`'s integer-in/integer-out arithmetic or
+`PixelCrispness.snappedPosition`, and `CameraController` already snaps the
+one per-frame moving world container to the live device pixel grid. See
+`gate-09-pixel-crispness-sweep.txt` for the full per-consumer trace and
+the derivation of each exception.
 `CyberpunkMonsterCrawlTests/PixelCrispnessSweepTests.swift` is new: it
 constructs a production-shaped node from every audited consumer and
-asserts `PixelCrispness`'s invariants directly, including a dedicated
-case proving `PickupNode.texture(forColumn:)` now provides the
-filtering guarantee itself rather than relying on a caller's follow-up
-`apply(to:)` call.
+asserts `PixelCrispness`'s invariants directly -- effective magnification
+(`size / texture.size()`) rather than the `xScale` the code under test
+just rounded, each accepted exception asserted by name, and a dedicated
+case (with a cache-reset test seam, so it can actually fail) proving
+`PickupNode.texture(forColumn:)` now provides the filtering guarantee
+itself rather than relying on a caller's follow-up `apply(to:)` call.
 
 ## Outstanding, carried over from PR 1 and PR 2
 
