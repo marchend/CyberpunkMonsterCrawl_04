@@ -1,0 +1,79 @@
+CYBERPUN-17-14-t4 (PR 4) -- gate 8 audit trace: pulse mechanic
+================================================================
+
+Scope: "the pulse works and is visible -- a screenshot at the moment of
+the pulse, raccoons mid-shove, the ring drawn, a raccoon pinned against a
+building" (gate 8).
+
+Method
+------
+Re-read `PulseAbility` (CYBERPUN-17-10 PR 1), `PulseRingNode` (PR 3) and
+`GameScene.applyPulseTrigger(raccoons:)`/`applyPulseHit(_:)` (the
+production scene wiring) against gate 8's four named visual claims:
+
+1. The ring drawn: `applyPulseTrigger` calls `pulseRing.play(radiusTiles:
+   at:)` on every successful trigger -- even when `hits` is empty, since
+   the pulse still fires visually with nobody in range
+   (`PulseAbility.Result.hits`'s own doc comment). Covered by
+   `PulseSceneWiringTests
+   .test_pressingThePulseButton_firesTheAbility_evenWithNoRaccoonsInRange`
+   and `.test_applyPulseTrigger_whenOffCooldown_pushesAndDamagesRaccoons_andSpawnsTheRing_inOneCall`
+   (asserts the ring's own animation action is actually running, not just
+   unhidden). No offender found.
+
+2. Raccoons mid-shove: `PulseAbility.trigger` computes each in-radius
+   living raccoon's `pushTarget` (along the ray from the player through the
+   raccoon's original position, at radius + a small overshoot) and
+   `applyPulseHit` applies the resolved position to the live `RaccoonNode`
+   in the same call that plays the ring -- push and ring are one atomic
+   scene update, so a captured frame at trigger time genuinely shows both
+   together. Covered directly by
+   `PulseSceneWiringTests.test_applyPulseTrigger_whenOffCooldown_...`
+   (asserts the raccoon's on-screen position reflects the pushed tile
+   position in the same call that plays the ring). No offender found.
+
+3. The ring drawn at the moment of pulse specifically (not delayed/stale):
+   `pulseRing.play(...)` runs synchronously inside `applyPulseTrigger`,
+   called directly from `handlePulsePress()`, which is the HUD pulse
+   button's production `onPress` target
+   (`PulseSceneWiringTests.test_aTouchAtTheVisibleAbilityButtonsSlot_routesToIt_andFiresTheAbility`
+   drives this through the real touch-dispatch path, not just a direct
+   method call). No offender found.
+
+4. A raccoon pinned against a building: `PulseAbility.trigger` receives
+   `obstructions` and pushes each candidate through
+   `CollisionResolver.resolve`, scoring `wasCrushed` when the *resolved*
+   position still lands inside the pulse radius (a building blocked the
+   push). Critically, `GameScene.applyPulseTrigger` passes
+   `groundPlane?.residentObstructions` -- the same real, currently-streamed
+   building footprints `RaccoonSpawnDirector`'s own steering already
+   avoids, not an empty/synthetic list -- so a raccoon pinned against a
+   *real* building is reachable in a live run, not only under a
+   hand-built fixture. `wasCrushed`'s pure logic is exhaustively covered by
+   `PulseAbilityTests` (clear push vs. crushed vs. deflected-but-still-clear,
+   across multiple height classes -- crush detection is footprint-only and
+   must not vary with a building's rendered height). No offender found.
+
+Two items already recorded as outstanding by earlier stories, unchanged by
+this audit and not reopened here (both from the `CYBERPUN-17-10` entry in
+AGENT.md/CLAUDE.md): the level-6 pulse radius bonus ships *compounding*
+(1.5625x, not additive 1.5x) pending a human tuning call, and the crash the
+runtime probe twice reported near this ability remains genuinely
+unidentified -- both are named there, not re-litigated here, since this
+PR's scope is the pulse's *visual* gate-8 claims, all four of which hold.
+
+Finding: no offender
+---------------------
+All four of gate 8's named visual claims hold, confirmed by the existing
+`PulseAbilityTests`/`PulseSceneWiringTests`/`PulseRingNodeTests` suites and
+by direct re-reading of the scene-wiring call chain (`handlePulsePress`
+-> `applyPulseTrigger` -> `applyPulseHit`/`pulseRing.play`). No production
+code change was needed for gate 8.
+
+What this audit does NOT evidence
+-----------------------------------
+This is a code-level/in-suite check -- it is not a recording of a real
+simulator run. A human (or the platform's runtime-probe pipeline) still
+needs to capture `gate-08-pulse.png`: a screenshot at the moment of a real
+pulse press showing the ring drawn, raccoons visibly mid-shove, and at
+least one raccoon pinned against a building.

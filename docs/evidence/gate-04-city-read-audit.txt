@@ -1,0 +1,80 @@
+CYBERPUN-17-14-t4 (PR 4) -- gate 4 audit trace: city read vs the mocks
+=======================================================================
+
+Scope: "the city reads as a city -- lattice, whole buildings spanning
+1-4 storeys, rooftop signs, compared to the mock" (gate 4), read against
+the five screen mocks named in the design brief.
+
+This implementation step runs in a container with no Xcode/simulator/
+screen-capture tool and the mocks themselves are not attached to this
+story's ticket as files this task can open -- see docs/evidence/README.md's
+PR 1 section for the same limitation stated once for the whole story. So
+this is a code-level audit against the *written* gate-4 claims (lattice
+connectivity, 1-4 storey building spans, rooftop signs), not a pixel
+comparison against the mock images. The literal side-by-side screenshot
+comparison against the five mocks remains a human/runtime-probe task, named
+under "Outstanding" below.
+
+Method
+------
+Re-read the three systems gate 4 names, each already implemented and
+extensively tested by earlier stories (CYBERPUN-17-3, CYBERPUN-17-5):
+
+1. Lattice connectivity: `CityLatticeGenerator.classify` -- every
+   intersection tile is street *structurally* (decided from the tile
+   coordinate's position in the 6-tile period alone, never consulting
+   `SeedMixer`), which is what makes the street lattice one connected
+   navmesh under every seed. Already exhaustively covered by
+   `CityLatticeGeneratorTests` (period/intersection/ratio/determinism) and
+   `ConnectivityTests` (flood-fill reaching every intersection tile across
+   >=20 seeds and a 12x12-block region). No offender found; no new coverage
+   needed for the lattice claim itself.
+
+2. Building storey spans: `BuildingSprite.HeightClass` / `BuildingCatalog
+   .HeightClass` document five height buckets (`lowest` ~1 storey,
+   `low` ~2, `mid` ~2-3, `tall` ~4, `large` -- a landmark 2x2-footprint
+   tower with no storey count of its own). The gate's own wording is
+   "spanning 1-4 storeys". `CityReadComparisonTests.swift` (new, this PR)
+   turns that prose claim into a checked fact: a linear storey-count
+   estimate anchored at the two classes with an explicit count
+   (`.lowest` ~1, `.tall` ~4) is computed from every `BuildingSprite`'s own
+   *measured/declared* pixel height, and every one of the 12 buildings --
+   `.large`'s `building_11` included -- estimates inside the 1-4 storey
+   span (`building_11` measures 192px tall against `building_05`'s 240px
+   `.tall` anchor, estimating to ~3.1 storeys: its "large" distinction is
+   its 2x2 footprint *width*, not an extra storey tier past the gate's
+   stated range). No accepted deviation is needed here; the claim holds by
+   direct measurement rather than by name alone.
+
+3. Rooftop signs: `RooftopSignPlacement.generate` -- already covered by
+   `RooftopSignPlacementTests`, including the ~1-in-3-of-building-blocks
+   ratio measured over a ~12,000-block sample and the "never signs an
+   empty block" guard. No offender found; no new coverage needed.
+
+One additional structural claim this PR's new test file adds, not
+previously pinned in one place: a generated sample must actually contain a
+*mix* of height classes (a "reads as a city" claim a single-building-
+repeated city would violate even though every existing placement test
+stays green), and every building placement's footprint tiles must classify
+`.buildingFootprint` -- never a street sub-kind -- across a wide seed/block
+sweep, restating the connectivity guarantee against real `BuildingPlacement`
+*output* rather than only `CityLatticeGenerator.classify` in isolation.
+
+Finding: no offender
+---------------------
+Every one of the three named systems already behaves per the mock's
+described city read, confirmed both by existing suites and by this PR's
+new structural checks in `CityReadComparisonTests.swift`. No production
+code change was needed for gate 4.
+
+What this audit does NOT evidence
+-----------------------------------
+This is a code-level/in-suite check, run headlessly against pure
+generation functions -- it is not a side-by-side screenshot comparison
+against the five screen mocks (portrait and landscape variants), which is
+what the story's acceptance criterion for gate 4 actually asks for. A human
+(or the platform's runtime-probe pipeline) still needs to capture
+`gate-04-city-read-portrait.png` and `gate-04-city-read-landscape.png` from
+a running simulator, place the five mocks alongside them, and record either
+"matches" or an explicitly accepted deviation in
+`docs/evidence/GATE_EVIDENCE_INDEX.md`.

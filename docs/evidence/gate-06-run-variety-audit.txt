@@ -1,0 +1,64 @@
+CYBERPUN-17-14-t4 (PR 4) -- gate 6 audit trace: run-to-run variety
+===================================================================
+
+Scope: "every run differs -- two consecutive RUN AGAIN runs with different
+cities and start junctions" (gate 6).
+
+Method
+------
+Re-read `GameScene.startNewRun()` (CYBERPUN-17-13 PR 3) and
+`RunSpawnSelector` against gate 6's two named claims:
+
+1. A different starting junction per run: `startNewRun()` draws a fresh
+   `WorldSeed` via `UInt64.random(in:)` before every RUN AGAIN, and
+   `RunSpawnSelector.selectSpawnTile(seed:)` is a pure function of that
+   seed, so a fresh seed lands on a different street-intersection junction.
+   Already covered by `GameStateMachineTests
+   .test_startNewRun_drawsADifferentSeed_everyConsecutiveInvocation` and
+   `.test_startNewRun_spawnsAtADifferentStreetIntersection_everyConsecutiveInvocation`
+   (20 consecutive invocations, junction set size > 1). No offender found.
+
+2. A different city: this is the claim neither of those two existing
+   tests actually checks. Both assert on the *seed* (a `Set<UInt64>` of
+   size 20) or the *junction tile* (`RunSpawnSelector.selectSpawnTile`'s
+   own output) -- a hypothetical bug confined entirely to
+   `RunSpawnSelector`'s own hash stream (wrong junction, but the same city
+   everywhere else, e.g. an accidentally-fixed salt) would still pass both
+   existing tests while failing gate 6 outright, since the *city* the
+   player actually walks through would not have changed.
+   `RunVarietyTests.swift` (new, this PR) closes that gap directly:
+   `test_consecutiveRunAgainInvocations_produceGenuinelyDifferentCityLayouts_notJustADifferentJunction`
+   classifies a real tile neighbourhood (13x13 tiles) around each run's own
+   spawn junction via `CityLatticeGenerator.classify` and asserts the
+   classification differs across 10 consecutive RUN AGAIN invocations, not
+   merely the junction coordinate. The existing junction-only claim is also
+   restated in the same file
+   (`test_consecutiveRunAgainInvocations_produceADifferentStartJunction_everyTime`)
+   so both halves of gate 6's wording live together.
+
+One deliberate accepted carve-out, unchanged by this PR and recorded
+before this story began (AGENT.md/CLAUDE.md's own `CYBERPUN-17-13` entry):
+the very first PLAY of a process launch still reaches `.gameplay` through
+the seed-neutral `transition(to:)`, not `startNewRun()`, so a player who
+launches, plays one run, dies and force-quits gets the identical city and
+junction on every fresh launch. Gate 6's wording ("every run differs")
+covers RUN AGAIN, which this PR's own scope is limited to auditing; the
+first-PLAY carve-out is a pre-existing, explicitly-recorded, not-yet-human-
+accepted product question this PR does not reopen or resolve.
+
+Finding: no offender
+---------------------
+Both of gate 6's named claims hold for RUN AGAIN, confirmed by the
+existing `GameStateMachineTests` coverage plus this PR's new
+`RunVarietyTests.swift`, which is the first test in this codebase to
+classify the actual generated tile layout (not just the seed or the
+junction coordinate) across consecutive runs. No production code change
+was needed for gate 6.
+
+What this audit does NOT evidence
+-----------------------------------
+This is a code-level/in-suite check -- it is not a recording of a real
+simulator run. A human (or the platform's runtime-probe pipeline) still
+needs to capture `gate-06-run-variety.png`: two consecutive RUN AGAIN runs,
+side by side, visibly showing a different city layout and a different
+starting junction.
