@@ -300,14 +300,74 @@ final class GameScene: SKScene {
     /// `FloatingThumbstickNode.reservedPulseButtonSlot(forSize:
     /// safeAreaInsets:)`, positioned from the slot's *centre*
     /// (`layoutPulseButton()`) per that method's own mount instructions.
-    /// Hidden outside `.gameplay` by `updateWorldContent(for:)`, the same
-    /// way `thumbstick.isRunActive` gates the movement stick -- this node
-    /// has no `isRunActive`-style gate of its own (see its own doc
-    /// comment), so the scene owns hiding it. `private(set)` so
+    /// This node has no `isRunActive`-style gate of its own (see its own
+    /// doc comment), so the scene owns hiding it -- and since PR #63's
+    /// review decision `updateWorldContent(for:)` keeps it hidden in
+    /// **every** state, `.gameplay` included: the HUD's bottom-right
+    /// `HUDPulseButton` is the run's only visible ability control (see
+    /// `hudLayer` below). It is still constructed, laid out and wired to
+    /// the same `handlePulsePress()`, so nothing here is a placeholder;
+    /// retiring the mount outright belongs to `CYBERPUN-17-14`.
+    /// `private(set)` so
     /// scene-wiring tests can drive a real press via
     /// `pulseButton.handleTouch()`, the same way `groundPlane`/`playerCombat`
     /// are exposed for theirs.
     private(set) var pulseButton: PulseButton!
+
+    // MARK: - HUD (`CYBERPUN-17-12` PR 2)
+
+    /// The composition root for the six passive/interactive HUD elements
+    /// (`CYBERPUN-17-12` PR 1: `HPSegmentBar`, `LevelXPBar`, `RunTimerLabel`,
+    /// `KillCountLabel`, `HUDPulseButton`, `SwarmBanner`) -- mounted directly
+    /// under `uiLayer`, independent of the state-driven screen registry, the
+    /// same convention `thumbstick`/`pulseButton` above already follow (see
+    /// `GameplayScreenNode`'s own doc note: this screen mounts nothing of its
+    /// own, and the real HUD lives here instead). Built lazily, the first
+    /// time a run enters `.gameplay` (`updateWorldContent(for:)`), and
+    /// reused -- never rebuilt -- across a RUN AGAIN, the same "mount once,
+    /// reuse across restarts" convention `player`/`playerCombat` follow.
+    ///
+    /// **Its `HUDPulseButton` is the run's only visible ability control.**
+    /// PR #63's review raised the interim "two on-screen pulse buttons for
+    /// a whole run" state as a human decision rather than a doc note, and
+    /// the answer was to hide the older bottom-left `pulseButton` above
+    /// now: bottom-right is the placement the ticket asks for, and both
+    /// buttons drove the *same* `handlePulsePress()`, so nothing is lost by
+    /// showing one. `updateWorldContent(for:)` therefore sets
+    /// `pulseButton.isHidden = true` in every state, `.gameplay` included.
+    /// The older node stays constructed and wired (not a placeholder, and
+    /// still driven by scene-wiring tests through `handleTouch()`);
+    /// *deleting* it -- and with it
+    /// `FloatingThumbstickNode.reservedPulseButtonSlot`'s now-empty hole in
+    /// the stick's own touch-acceptance region, which still refuses touches
+    /// for a control nobody can see -- is left for `CYBERPUN-17-14`
+    /// ("Clear all scaffolding and prove the ten product gates on a running
+    /// simulator"), which is explicitly positioned to do exactly that.
+    ///
+    /// `private(set)` so scene-wiring tests can assert on it directly, the
+    /// same reason `groundPlane`/`playerCombat`/`pickupManager` are exposed
+    /// for theirs.
+    private(set) var hudLayer: HUDLayer?
+
+    /// The swarm-escalation notification `HUDLayer.bind(to:)` wires to
+    /// `SwarmBanner.show(...)` -- part of this scene's `HUDRunModel`
+    /// conformance (see the extension at the end of this file). Fired from
+    /// `evaluateSwarmEscalation()`, at most once per
+    /// `swarmEscalationRaccoonStep`-sized band of live raccoons.
+    var onSwarmEscalation: (() -> Void)?
+
+    /// How many `raccoonSpawnDirector.swarmCount`-sized "escalation tiers"
+    /// have already been announced this run -- so a swarm that stays above
+    /// a threshold does not re-fire `onSwarmEscalation` every frame, only
+    /// once per newly crossed threshold. Reset to `0` on every fresh
+    /// `.gameplay` entry, beside `raccoonSpawnDirector.reset()`.
+    private var lastSwarmEscalationTier: Int = 0
+
+    /// How many concurrently-live raccoons make up one "escalation tier" --
+    /// an initial tuning constant, like every other named constant in this
+    /// codebase (`RaccoonSpawnDirector`'s own spawn-cadence numbers),
+    /// expected to move in a later playtesting pass.
+    static let swarmEscalationRaccoonStep = 10
 
     /// The touch currently engaging `thumbstick`, if any -- tracked so
     /// `touchesMoved`/`touchesEnded`/`touchesCancelled` can tell the stick's
@@ -617,15 +677,27 @@ final class GameScene: SKScene {
             thumbstick.isRunActive = true
             // `PulseButton` has no `isRunActive`-style gate of its own
             // (see that type's own "Mount instructions" doc note), so the
-            // scene owns hiding it outside `.gameplay` -- otherwise a
-            // live `AccessibleSKView` mirror would sit over the menu's
+            // scene owns its visibility -- otherwise a live
+            // `AccessibleSKView` mirror would sit over the menu's
             // bottom-left quadrant and forward touches into
-            // `dispatchTouch`. Its cooldown-derived visual is refreshed
-            // every `.gameplay` frame from `advanceMovementAndCamera(
-            // currentTime:)` -- but not before the *first* such frame runs,
-            // so the button is snapped to "ready" here too rather than
-            // opening RUN AGAIN still wearing last run's dimmed wedge.
-            pulseButton.isHidden = false
+            // `dispatchTouch`.
+            //
+            // **It now stays hidden inside `.gameplay` too** (PR #63
+            // review decision, `CYBERPUN-17-12` PR 2): the HUD's
+            // bottom-right `HUDPulseButton` is the run's one *visible*
+            // ability control, which is the placement the ticket asks for,
+            // so shipping two on-screen buttons driving the same
+            // `handlePulsePress()` is not a product state anybody chose.
+            // The node stays constructed, laid out and wired (its `onPress`
+            // still fires the real ability, which scene-wiring tests drive
+            // directly via `pulseButton.handleTouch()`); deleting it, and
+            // with it `FloatingThumbstickNode.reservedPulseButtonSlot`'s
+            // now-empty 72x72 refusal hole in the stick's acceptance box,
+            // remains `CYBERPUN-17-14`'s scaffolding-clearing work rather
+            // than this PR's. Hidden means unroutable and unpublished --
+            // `isVisibleToTouchRouting(_:)`/`isVisible(_:upTo:)` filter
+            // `isHidden`, so no mirror and no touch can reach it.
+            pulseButton.isHidden = true
             // ... and a fresh ability for a fresh run, the same reason
             // `raccoonSpawnDirector.reset()` / `startPickups()` /
             // `runStats.reset()` above exist: without this, a run that
@@ -634,7 +706,39 @@ final class GameScene: SKScene {
             // a dropped input, which is exactly what this ability's "must
             // respond to every press" product gate forbids.
             pulseAbility.reset()
+            // The older mount is hidden, but it is still kept in step with
+            // the ability it is wired to (rather than left wearing last
+            // run's dimmed wedge), so `CYBERPUN-17-14` inherits a correct
+            // node to delete instead of a stale one. The visible HUD
+            // button gets the same snap from `hud.bind(to:)`'s own
+            // `refresh()` below.
             pulseButton.setCooldownProgress(pulseCooldownProgress())
+            // `CYBERPUN-17-12` PR 2: mount the HUD composition root the
+            // first time a run starts (reused, never rebuilt, across a RUN
+            // AGAIN -- the same convention `player`/`playerCombat` follow),
+            // lay it out from the live safe-area insets this very moment
+            // (not only from `didMove(to:)`, the same "the run becoming
+            // interactive is a layout point in its own right" reasoning
+            // `refreshLayoutForCurrentSafeArea()` above already established
+            // for the thumbstick/pulse button), and (re)bind it to this
+            // scene's own `HUDRunModel` conformance so every element reads
+            // this run's live state from the very first `.gameplay` frame.
+            let hud: HUDLayer
+            if let existingHUD = hudLayer {
+                hud = existingHUD
+            } else {
+                hud = HUDLayer()
+                uiLayer.addChild(hud)
+                hudLayer = hud
+            }
+            hud.isHidden = false
+            hud.applyLayout(
+                for: size,
+                safeAreaInsets: currentSafeAreaInsets,
+                orientation: HUDOrientation.current(forSceneSize: size)
+            )
+            hud.bind(to: self)
+            lastSwarmEscalationTier = 0
             cameraController.update(focus: spawn, viewportSize: size)
             #if DEBUG
             assertSceneInvariants()
@@ -642,6 +746,10 @@ final class GameScene: SKScene {
         case .menu, .death, .highScores:
             thumbstick.isRunActive = false
             pulseButton.isHidden = true
+            // The HUD reports a *run's* live state, so it hides with the
+            // run's other controls rather than sitting over the death/
+            // high-scores/menu screens' own full-bleed backdrops.
+            hudLayer?.isHidden = true
         }
     }
 
@@ -939,6 +1047,16 @@ final class GameScene: SKScene {
             pulseAbility.update(deltaTime: deltaTime)
             pulseButton.setCooldownProgress(pulseCooldownProgress())
 
+            // `CYBERPUN-17-12` PR 2: forward this frame's live run state
+            // into every mounted HUD element, and check whether the swarm
+            // has just crossed a fresh escalation threshold -- both gated
+            // on the same `.gameplay` check pickups/combat/pulse already
+            // share, for the reason `raccoonSpawnDirector`'s own per-frame
+            // call documents (nothing may keep updating behind an opaque
+            // death/high-scores/menu backdrop).
+            hudLayer?.refresh()
+            evaluateSwarmEscalation()
+
             // `CYBERPUN-17-13-t5`: the real HP-zero -> `.death` trigger.
             // Checked once per frame, only while `.gameplay` is still the
             // current state, and only after every HP-affecting update this
@@ -1056,6 +1174,32 @@ final class GameScene: SKScene {
     /// raw world-space point.
     private func effectsSpacePoint(fromWorldSpace point: CGPoint) -> CGPoint {
         effectsLayer.convert(point, from: worldLayer)
+    }
+
+    // MARK: - HUD swarm escalation (`CYBERPUN-17-12` PR 2)
+
+    /// Re-derives the current escalation tier from `raccoonSpawnDirector
+    /// .swarmCount` and fires `onSwarmEscalation` exactly once per newly
+    /// crossed `swarmEscalationRaccoonStep`-sized band -- never once per
+    /// frame the swarm merely stays above one already announced this run.
+    private func evaluateSwarmEscalation() {
+        let tier = Self.swarmEscalationTier(forSwarmCount: raccoonSpawnDirector.swarmCount)
+        guard tier > lastSwarmEscalationTier else { return }
+        lastSwarmEscalationTier = tier
+        onSwarmEscalation?()
+    }
+
+    /// The pure escalation-tier function `evaluateSwarmEscalation()` drives:
+    /// `0` for anything below the first `swarmEscalationRaccoonStep`
+    /// raccoons, `1` for the first band, `2` for the second, and so on.
+    /// Exposed as a `static` function (rather than folded into
+    /// `evaluateSwarmEscalation()`) so a test can pin the banding directly
+    /// without needing a live swarm to actually grow -- the same "test the
+    /// pure decision, not the spawn director's own randomness/timing" shape
+    /// `RaccoonSpawnDirector.spawnInterval(atElapsedTime:)` already
+    /// establishes for its own ramp curve.
+    static func swarmEscalationTier(forSwarmCount swarmCount: Int) -> Int {
+        swarmCount / swarmEscalationRaccoonStep
     }
 
     // MARK: - Pickups (`CYBERPUN-17-11` PR 3)
@@ -1329,6 +1473,15 @@ final class GameScene: SKScene {
         activeScreen?.layout(for: size, safeAreaInsets: insets)
         thumbstick.layout(for: size, safeAreaInsets: insets)
         layoutPulseButton()
+        // `CYBERPUN-17-12` PR 2: re-lays out every mounted HUD element on
+        // every safe-area-dependent layout pass (rotation included) --
+        // `nil` before the first `.gameplay` entry, the same "no-op until
+        // mounted" shape `activeScreen?.layout(...)` above already has.
+        hudLayer?.applyLayout(
+            for: size,
+            safeAreaInsets: insets,
+            orientation: HUDOrientation.current(forSceneSize: size)
+        )
     }
 
     /// `CYBERPUN-17-10-t4`: re-runs the safe-area-dependent layout pass when
@@ -1417,6 +1570,24 @@ final class GameScene: SKScene {
     /// element-driven tap aims at and the scene then refuses to route: the
     /// original defect wearing yet another hat. Nothing hides a button
     /// today; this keeps it from becoming a bug the day something does.
+    ///
+    /// **The in-run HUD (`CYBERPUN-17-12`) publishes exactly one element**,
+    /// its `HUDPulseButton`. Because this walk *descends* through anything
+    /// that has not opted in, the five passive elements (`HPSegmentBar`,
+    /// `LevelXPBar`, `RunTimerLabel`, `KillCountLabel`, `SwarmBanner`)
+    /// declare their whole subtrees opaque by conforming to
+    /// `AccessibilityOpaqueNode`, and this walk skips a conformer outright.
+    /// A per-node `isAccessibilityElement = false` on each of them was
+    /// tried first and measured *not* to hold: SpriteKit still published
+    /// the three visible `SKLabelNode`s inside them (see that protocol's
+    /// own doc comment for the measurement). The subtree rule never
+    /// consults a descendant's flag, so no per-class default and no later
+    /// text mutation can reintroduce an interactive mirror over a passive
+    /// read-out -- which matters most for the HP and level/XP bars, sitting
+    /// inside the floating stick's touch-acceptance box.
+    /// `AccessibleSKViewTests.test_duringARun_theHUDPublishesOnlyItsPulseButton`
+    /// pins the published set during a real run rather than leaving it to
+    /// whatever SpriteKit's per-class defaults happen to be.
     func accessibleUINodes() -> [SKNode] {
         var accessible: [SKNode] = []
         collectAccessibleNodes(under: uiLayer, into: &accessible)
@@ -1429,6 +1600,15 @@ final class GameScene: SKScene {
             // hiding a parent hides everything under it, so its descendants
             // are equally unreachable by `atPoint(_:)`.
             guard isVisibleToTouchRouting(child) else { continue }
+            // A node that declares its whole subtree accessibility-opaque
+            // publishes nothing at all - itself included - so neither it
+            // nor any descendant is considered. This is the deliberate
+            // opt-out for a passive read-out (the HUD's five non-button
+            // elements), and it is a *subtree* rule rather than a per-node
+            // flag because an explicit `isAccessibilityElement = false` on
+            // each drawn child was measured not to hold for `SKLabelNode`
+            // (see `AccessibilityOpaqueNode`).
+            if child is AccessibilityOpaqueNode { continue }
             if child.isAccessibilityElement {
                 // An accessibility element is a **leaf**, so its subtree is
                 // not walked. That is UIKit's own rule
@@ -1465,6 +1645,12 @@ final class GameScene: SKScene {
     /// can see is a node nobody should be told to tap - and erring towards
     /// publishing *fewer* elements keeps "published implies routable" true
     /// in the safe direction.
+    ///
+    /// The one predicate both directions use: `isVisible(_:upTo:)` (the
+    /// visibility filter inside `routeTouch(at:)`'s own candidate walk)
+    /// applies exactly this test to every node on the chain, so the
+    /// accessibility walk and touch routing cannot disagree about what
+    /// "visible" means.
     private func isVisibleToTouchRouting(_ node: SKNode) -> Bool {
         !node.isHidden && node.alpha > 0
     }
@@ -1633,15 +1819,171 @@ final class GameScene: SKScene {
     /// `worldLayer`; otherwise `nil`. Pure and independently testable —
     /// `TouchRoutingTests` calls it directly with overlapping UI/world nodes
     /// to prove the UI wins.
+    ///
+    /// **Only a node that actually presents something at the point counts
+    /// as a UI hit** (`frontmostPresentingNode(under:at:)`), which is why
+    /// this does not simply return `uiLayer.atPoint(uiPoint)` any more.
+    /// SpriteKit hit-tests a *grouping* node — one that draws nothing of
+    /// its own — against the union of its children's frames, so it reports
+    /// that group for points where none of its children is anywhere near
+    /// the finger. `HUDLayer` (`CYBERPUN-17-12`) is exactly such a node:
+    /// its elements sit in the top-left, top-right and bottom-right
+    /// corners, so its accumulated frame is very nearly the whole viewport
+    /// while it paints only at the edges. Returning that group blanketed
+    /// the screen the moment the HUD was mounted — the very failure this
+    /// scene's "a screen must not mount a full-bleed backdrop over live
+    /// world content" convention exists to prevent, arriving through a
+    /// node that paints no backdrop at all — and
+    /// `TouchRoutingTests.test_mountedGameplayScreen_doesNotBlockWorldTouches`
+    /// caught it: `dispatchTouch(atScenePoint:)` finds no `TouchResponder`
+    /// above such a group, so the touch is swallowed rather than falling
+    /// through to the world, and a real button sitting *under* a mounted
+    /// HUD (the death / high-scores screens keep it mounted, merely
+    /// hidden) would stop receiving touches altogether.
+    ///
+    /// A backdrop that genuinely *paints* over the viewport still swallows
+    /// every touch it covers, exactly as before — that contract is about
+    /// painted content, and this restores it to meaning precisely that.
     func routeTouch(at scenePoint: CGPoint) -> SKNode? {
         let uiPoint = uiLayer.convert(scenePoint, from: self)
-        let uiHit = uiLayer.atPoint(uiPoint)
-        if uiHit !== uiLayer {
+        if let uiHit = frontmostPresentingNode(under: uiLayer, at: uiPoint) {
             return uiHit
         }
 
         let worldPoint = worldLayer.convert(scenePoint, from: self)
         let worldHit = worldLayer.atPoint(worldPoint)
         return worldHit !== worldLayer ? worldHit : nil
+    }
+
+    /// The frontmost node in `container`'s subtree that presents something
+    /// to the player at `point` (in `container`'s own coordinate space), or
+    /// `nil` when nothing there does.
+    ///
+    /// "Frontmost" is resolved the way SpriteKit renders: greatest
+    /// cumulative `zPosition` first, and for equal cumulative z the node
+    /// drawn last (later sibling, and a child over its own parent), which a
+    /// single depth-first walk in child order records. The whole candidate
+    /// list is considered rather than only `atPoint(_:)`'s single answer,
+    /// so a grouping node that is skipped cannot hide a real, painted node
+    /// underneath it — the case that keeps `DeathScreenNode`'s RUN AGAIN
+    /// button reachable while the (hidden, but still mounted) `HUDLayer`
+    /// overlaps it.
+    private func frontmostPresentingNode(under container: SKNode, at point: CGPoint) -> SKNode? {
+        let candidates = container.nodes(at: point).filter {
+            $0 !== container && presentsContent($0) && isVisible($0, upTo: container)
+        }
+        guard candidates.count > 1 else { return candidates.first }
+
+        var renderRank: [ObjectIdentifier: (z: CGFloat, order: Int)] = [:]
+        var order = 0
+        func walk(_ node: SKNode, accumulatedZ: CGFloat) {
+            let z = accumulatedZ + node.zPosition
+            renderRank[ObjectIdentifier(node)] = (z, order)
+            order += 1
+            for child in node.children {
+                walk(child, accumulatedZ: z)
+            }
+        }
+        for child in container.children {
+            walk(child, accumulatedZ: 0)
+        }
+
+        return candidates.max { lhs, rhs in
+            let left = renderRank[ObjectIdentifier(lhs)] ?? (z: 0, order: 0)
+            let right = renderRank[ObjectIdentifier(rhs)] ?? (z: 0, order: 0)
+            return left.z == right.z ? left.order < right.order : left.z < right.z
+        }
+    }
+
+    /// Whether `node` puts something of its own under the player's finger:
+    /// it draws its own content, or it is a `TouchResponder` (a button is
+    /// allowed to be a plain container — `ButtonNode`, `PulseButton` and
+    /// `HUDPulseButton` all are — because it explicitly claims its whole
+    /// extent as a touch target).
+    ///
+    /// A plain grouping node (`HUDLayer`, a `ScreenNode`, an actor
+    /// container) is deliberately *not* presenting: whatever it "covers" is
+    /// covered by its children, each of which is hit-tested on its own.
+    private func presentsContent(_ node: SKNode) -> Bool {
+        if node is TouchResponder { return true }
+        return node is SKSpriteNode
+            || node is SKLabelNode
+            || node is SKShapeNode
+            || node is SKEmitterNode
+            || node is SKTileMapNode
+            || node is SKVideoNode
+    }
+
+    /// Whether `node` and every ancestor up to (but excluding) `container`
+    /// is visible. A node the player cannot see must never capture their
+    /// touch — the rule that keeps a mounted-but-hidden `HUDLayer` (the
+    /// `.menu` / `.death` / `.highScores` states) from shadowing the screen
+    /// underneath it, without depending on whether SpriteKit's own
+    /// hit-testing happens to skip hidden nodes.
+    ///
+    /// "Visible" is `isVisibleToTouchRouting(_:)`'s predicate, applied to
+    /// every node on the chain, rather than a second definition of the same
+    /// idea: that method is documented as having to agree with this walk,
+    /// and until `CYBERPUN-17-12` PR 2 review the two disagreed on
+    /// `alpha <= 0` — the accessibility walk refused to publish a fully
+    /// transparent node while routing still let it capture the touch.
+    /// `SwarmBanner` makes that concrete: it spends most of a run at
+    /// `alpha = 0` (it also hides itself, which is what covered for the
+    /// gap), and a transparent 280x36 plate hung over the middle of the
+    /// screen is precisely the "published implies routable, and nothing
+    /// invisible is either" contract this feature exists to keep.
+    private func isVisible(_ node: SKNode, upTo container: SKNode) -> Bool {
+        var current: SKNode? = node
+        while let candidate = current, candidate !== container {
+            if !isVisibleToTouchRouting(candidate) { return false }
+            current = candidate.parent
+        }
+        return true
+    }
+}
+
+// MARK: - HUDRunModel (`CYBERPUN-17-12` PR 2)
+
+/// `GameScene`'s own conformance to `HUDLayer`'s `HUDRunModel` protocol:
+/// every reading is a computed property straight off this scene's existing
+/// state (`player`, `playerCombat`, `runElapsedSeconds`, `runStats`,
+/// `pulseAbility`) -- no intermediate cached copy lives on `GameScene`
+/// either, so `HUDLayer.refresh()` always reads this run's current values,
+/// never a stale snapshot.
+extension GameScene: HUDRunModel {
+    var currentHP: Int { player?.hp ?? 0 }
+    var maxHP: Int { player?.maxHP ?? 1 }
+
+    var level: Int { playerCombat?.xpLevelSystem.level ?? 1 }
+
+    /// XP progress *within the current level*, not the raw cumulative
+    /// total `XPLevelSystem.xp` tracks -- `LevelXPBar`'s own doc comment
+    /// documents that a level-up must arrive as a lower `currentXP`
+    /// alongside a higher `level`, and the flat `XPLevelSystem.xpPerLevel`
+    /// curve makes that a plain remainder.
+    var currentXP: Int {
+        guard let playerCombat else { return 0 }
+        let system = playerCombat.xpLevelSystem
+        return system.xp - (system.level - 1) * XPLevelSystem.xpPerLevel
+    }
+
+    var xpForNextLevel: Int { XPLevelSystem.xpPerLevel }
+
+    var elapsedSeconds: TimeInterval { runElapsedSeconds }
+
+    var kills: Int { runStats.killCount }
+
+    /// `1.0` == fully ready, `0.0` == a cooldown was just started -- the
+    /// same scale the older, bottom-left `pulseButton.setCooldownProgress(_:)`
+    /// already consumes this value at.
+    var pulseCooldownFraction: CGFloat { pulseCooldownProgress() }
+
+    var isPulseReady: Bool { !pulseAbility.isOnCooldown }
+
+    /// `HUDLayer`'s pulse button's `onPress`, forwarded to the exact same
+    /// production trigger the older bottom-left button's `onPress` already
+    /// calls -- one ability, one decision layer, driven by either button.
+    func triggerPulse() {
+        handlePulsePress()
     }
 }

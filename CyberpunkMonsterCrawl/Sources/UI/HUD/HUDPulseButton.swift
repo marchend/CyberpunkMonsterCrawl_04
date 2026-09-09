@@ -19,11 +19,14 @@ import UIKit
 /// not `PulseButton.swift` -- Swift's module-internal file-scoped
 /// declarations use the filename to disambiguate, so a target cannot
 /// contain two files sharing a basename regardless of the class names
-/// declared inside them. A later wiring PR is expected to replace
-/// `Sources/UI/PulseButton.swift`'s mount with this type (its bottom-**right**
-/// slot, from `HUDLayout`, is also what settles the still-open
-/// bottom-left-vs-bottom-right placement note recorded on `CYBERPUN-17-10`
-/// in `AGENT.md`) and delete the old file once nothing references it.
+/// declared inside them. **This type is now the visible one.** PR #63's
+/// review decision (`CYBERPUN-17-12` PR 2) made this button's bottom-right
+/// slot -- the placement the ticket asks for, settling the old
+/// bottom-left-vs-bottom-right note recorded on `CYBERPUN-17-10` -- the
+/// run's only visible ability control, and `GameScene` now hides the older
+/// `PulseButton` mount in every state. That older type is still
+/// constructed and wired to the same `handlePulsePress()`; *deleting* it
+/// once nothing references it is `CYBERPUN-17-14`'s work.
 ///
 /// Construct + `update(cooldownFraction:isReady:)` only -- no positioning
 /// logic (`HUDLayout` owns where this mounts). Conforms to `TouchResponder`

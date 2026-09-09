@@ -5,7 +5,7 @@ import UIKit
 /// Level label + XP fill bar: construct + `update(level:currentXP:
 /// xpForNextLevel:)` only -- no positioning logic (`HUDLayout` owns where
 /// this mounts).
-final class LevelXPBar: SKNode {
+final class LevelXPBar: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Tunables
 
@@ -50,6 +50,17 @@ final class LevelXPBar: SKNode {
         name = "levelXPBar"
         plate.name = "levelXPBar.plate"
         fill.name = "levelXPBar.fill"
+
+        // Deliberately **not** an accessibility element, on this node and
+        // on each of its drawn children -- see `HPSegmentBar`'s own
+        // rationale (same top-left position inside the floating stick's
+        // touch-acceptance box, same "a published mirror wins the hit test
+        // for its rect" consequence). A passive read-out publishes nothing.
+        isAccessibilityElement = false
+        plate.isAccessibilityElement = false
+        fill.isAccessibilityElement = false
+        levelLabel.isAccessibilityElement = false
+
         fill.anchorPoint = CGPoint(x: 0, y: 0.5)
         fill.position = CGPoint(x: -Self.barSize.width / 2, y: 0)
 

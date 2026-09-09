@@ -4,7 +4,7 @@ import UIKit
 
 /// Elapsed-run-time label: construct + `update(elapsedSeconds:)` only -- no
 /// positioning logic (`HUDLayout` owns where this mounts).
-final class RunTimerLabel: SKNode {
+final class RunTimerLabel: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Nodes
 
@@ -33,6 +33,15 @@ final class RunTimerLabel: SKNode {
         super.init()
 
         name = "runTimerLabel"
+
+        // Deliberately **not** an accessibility element, on this node and
+        // on its label child -- see `HPSegmentBar`'s own rationale. The
+        // label child matters most here: an `SKLabelNode` published in its
+        // own right is exactly how a `ButtonNode`'s label once stole its
+        // button's activation point.
+        isAccessibilityElement = false
+        label.isAccessibilityElement = false
+
         addChild(label)
     }
 

@@ -4,7 +4,7 @@ import UIKit
 
 /// Kill counter: construct + `update(kills:)` only -- no positioning logic
 /// (`HUDLayout` owns where this mounts).
-final class KillCountLabel: SKNode {
+final class KillCountLabel: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Nodes
 
@@ -32,6 +32,14 @@ final class KillCountLabel: SKNode {
         super.init()
 
         name = "killCountLabel"
+
+        // Deliberately **not** an accessibility element, on this node and
+        // on its label child -- see `HPSegmentBar`'s own rationale (and
+        // `RunTimerLabel` for why the `SKLabelNode` child is the part that
+        // matters).
+        isAccessibilityElement = false
+        label.isAccessibilityElement = false
+
         addChild(label)
 
         update(kills: 0)

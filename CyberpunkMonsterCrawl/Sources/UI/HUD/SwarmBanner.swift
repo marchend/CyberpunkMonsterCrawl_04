@@ -14,7 +14,7 @@ import UIKit
 /// if that ever flipped, but the explicit set-to-`false` here is what makes
 /// "this banner cannot ever swallow a touch" a stated fact of this file
 /// rather than a property of whatever the graph-wide default happens to be.
-final class SwarmBanner: SKNode {
+final class SwarmBanner: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Tunables
 
@@ -49,6 +49,19 @@ final class SwarmBanner: SKNode {
         super.init()
 
         name = "swarmBanner"
+
+        // Deliberately **not** an accessibility element, on this node and
+        // on both drawn children -- see `HPSegmentBar`'s own rationale.
+        // The same reasoning as `isUserInteractionEnabled = false` below,
+        // one layer up: a published element becomes a real, interactive
+        // `SceneAccessibilityMirrorView` over this banner's rect, which
+        // would swallow touches over the middle of the screen for the
+        // whole of the `swarmEscalationDuration` a transient notification
+        // is up. This banner is a notification, not a control.
+        isAccessibilityElement = false
+        plate.isAccessibilityElement = false
+        label.isAccessibilityElement = false
+
         addChild(plate)
         addChild(label)
 

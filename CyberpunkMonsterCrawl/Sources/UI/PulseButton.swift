@@ -33,6 +33,17 @@ import UIKit
 ///   `AccessibleSKView` mirror sits over the menu's bottom-left quadrant
 ///   and forwards touches into `dispatchTouch`.
 ///
+/// **This mount is currently hidden in `.gameplay` too, and is on its way
+/// out.** Per PR #63's review decision (`CYBERPUN-17-12` PR 2), the run's
+/// one *visible* ability control is the HUD's bottom-right
+/// `HUDPulseButton` -- the placement the ticket asks for -- so
+/// `GameScene.updateWorldContent(for:)` keeps this node hidden in every
+/// state. It stays constructed and wired to the same
+/// `GameScene.handlePulsePress()` (scene-wiring tests still drive its real
+/// `onPress` through `handleTouch()`); deleting this type, its mount and
+/// `FloatingThumbstickNode.reservedPulseButtonSlot`'s now-empty hole in the
+/// stick's touch-acceptance box is `CYBERPUN-17-14`'s work.
+///
 /// **Product gate 1 -- "must respond to every press."** `handleTouch()`
 /// unconditionally invokes `onPress`, on cooldown or not: this node never
 /// gates a press on its own cooldown state. Deciding whether a press while
