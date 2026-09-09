@@ -117,3 +117,13 @@ WHAT IS STILL OUTSTANDING (named explicitly, not silently skipped):
     exactly gate 2's "no placeholder texture from menu to death screen"
     claim, captured on a real simulator by the platform's own pipeline
     rather than a fabricated recording authored here.
+
+    Each of those three journeys' `demonstrates` brief now names the gate-2
+    review explicitly ("ALSO REVIEWED FOR CYBERPUN-17-14 GATE 2: every
+    drawn sprite in this frame is real art, not a placeholder ...", stated
+    as a second, separate verdict from the journey's original claim). PR
+    #65's review caught that the tag alone was not enough: `demonstrates`
+    is the only thing the human/vision gate is judged against, so a
+    reviewer handed `raccoon-contact.png` briefed only to look for contact
+    on the standoff ring would sign off contact without ever having judged
+    gate 2, and the artifact would not record the difference.

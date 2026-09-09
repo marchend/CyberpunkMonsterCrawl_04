@@ -119,7 +119,7 @@ from real evidence until opened.
 | gate | state after this PR |
 | --- | --- |
 | 2 -- every asset resolves, no placeholder textures | **audited, code-verified, evidence mechanism wired -- literal recording still outstanding.** See `gate-02-catalog-completeness-teeth.txt` for the code-level trace of why `AtlasCatalogTests`/`BuildingCatalogTests` fail on a deliberately-removed imageset and recover on restore (the "verify the test's teeth" half of AC 3), and for which real journeys now carry the `"CYBERPUN-17-14"` tag so the runtime probe captures genuine full-run frames. |
-| 10 -- atlas sheets slice correctly, buildings render whole and transparent | **audited, no offender found, newly pinned in one place.** See `gate-10-atlas-slicing.txt` and `CyberpunkMonsterCrawlTests/AtlasSlicingTests.swift`. |
+| 10 -- atlas sheets slice correctly, buildings render whole and transparent | **audited, no offender found, newly pinned in one place -- literal screenshot still outstanding, so this gate is NOT closed.** See `gate-10-atlas-slicing.txt` and `CyberpunkMonsterCrawlTests/AtlasSlicingTests.swift` for the audit and the in-suite pins; the `gate-10-atlas-slicing.png` slice-boundary capture is complementary to those pins, not replaced by them, and the story requires it on a running simulator (PR #65 review). |
 
 ### Gate 2 -- asset-resolution audit
 
@@ -161,7 +161,17 @@ per-family trace. `CyberpunkMonsterCrawlTests/AtlasSlicingTests.swift` is
 new: it exercises every named animation state and every building id
 against each family's own production texture accessor in one
 consolidated file, so a future regression in any one family's table is
-now also caught here.
+now also caught here. Every expectation in that file is a hand-typed
+literal (direction -> row/mirror, direction -> weapon column, tier ->
+row) rather than a re-derivation of the accessor under test, and the one
+claim no index comparison can settle -- that the raccoon's walk and
+attack sheets are two different images -- is measured off the decoded
+PNGs (PR #65 review).
+
+**Gate 10 remains outstanding regardless**: those pins are a regression
+guard, not the running-simulator demonstration the story requires. The
+`gate-10-atlas-slicing.png` capture is still owed by a reviewer with
+Xcode access.
 
 ## Outstanding, carried over from PR 1
 

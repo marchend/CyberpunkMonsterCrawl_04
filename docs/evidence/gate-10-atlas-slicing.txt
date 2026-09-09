@@ -11,10 +11,18 @@ real one until someone opened it (the same reasoning
 docs/evidence/README.md's CYBERPUN-17-14-t1 section already records for
 this project's other unrecorded gates).
 
-What this file records instead is *why* the in-suite verification this PR
-adds and re-confirms is a stronger, continuously-re-checked form of the
-same claim a static screenshot would only assert once, at authoring time,
-and never again.
+What this file records instead is the code-level audit behind gate 10 and
+the in-suite verification this PR adds. That verification is a better
+*regression* guard than a one-off image, but it is NOT the artifact the
+ship criterion asks for, and it does not close this gate: CYBERPUN-17-14's
+own text is explicit that these gates "must each be DEMONSTRATED on a
+running simulator with a screenshot or recording ... green unit tests
+alone do not satisfy them." The two are complementary, and gate 10 stays
+OUTSTANDING until the capture exists -- see "Still outstanding" at the
+bottom. That framing is deliberate (PR #65 review): the whole reason this
+story exists is that v1 shipped green and unplayable, so a green suite
+standing in for a demonstration is exactly the substitution this feature
+is meant to end.
 
 ## What was audited (and found already correct)
 
@@ -37,9 +45,16 @@ existing pixel-measurement test in this PR:
   `RaccoonSpriteSheetPixelTests.test_theRowsTheTableNeverReads_carryNoArtBeyondTheMirrorOfTheirSourceRow_onBothSheets`.
   `RaccoonNode.texture(state:row:column:)` keeps one cache per sheet, so a
   walk cell and an attack cell at the identical (row, column) can never
-  collide on the same `SKTexture` -- pinned freshly in this PR by
-  `AtlasSlicingTests
-  .test_raccoonWalkAndAttack_everyDirectionAndFrame_resolveANonZeroCell_andTheTwoSheetsNeverCollide`.
+  collide on the same `SKTexture` -- that *cache isolation* is pinned
+  freshly in this PR by `AtlasSlicingTests
+  .test_raccoonWalkAndAttack_everyDirectionAndFrame_resolveANonZeroCell_andEachSheetKeepsItsOwnCache`.
+  PR #65's review noted that an `SKTexture`-identity comparison cannot, by
+  itself, show the two cells carry different *art* (two crops of the same
+  sheet are still two distinct objects), so the "two distinct sheets"
+  half is now measured off the decoded PNGs by the same file's
+  `.test_theTwoRaccoonSheets_shipDistinctArt_onEveryAuthoredRow`, which
+  requires each authored row to differ between the two imagesets in at
+  least one of its four frames.
 - **Weapon overlay**: `sprite_player_weapons`' 8-column (direction) x
   3-row (tier) grid, indexed via `WeaponOverlayRenderer.column(for:)` /
   `WeaponTier.weaponSheetRow`.
@@ -50,7 +65,16 @@ existing pixel-measurement test in this PR:
   cannot see). `AtlasSlicingTests
   .test_weaponOverlay_everyTierAndDirection_resolvesANonZeroCell_atTheDesignTableRowAndColumn`
   re-confirms every one of the 24 `(tier, direction)` cells resolves a
-  real texture through the production accessor.
+  real texture through the production accessor, and pins each direction's
+  column as a **literal** (south 0 ... southwest 7) rather than
+  recomputing it with the same `Direction8.allCases.firstIndex(of:)` call
+  `WeaponOverlayRenderer.column(for:)` uses -- PR #65's review caught that
+  the derived form compared the implementation against itself and could
+  never fail. Same treatment for the row/mirror tables: both families'
+  `Direction8 -> (row, mirrored)` mappings are now asserted against a
+  hand-typed copy of the documented convention, including which facings
+  may share a row, so pointing `.north` at row 0 fails in this file
+  instead of passing an occupant-count scan.
 - **Ground diamonds**: the six non-uniform `tileset_ground` sub-rects,
   measured (not assumed) against the shipped 592x60px PNG by
   `AtlasGroundDiamondTests` -- five 96px cells plus one 112px overhang
@@ -77,23 +101,36 @@ each family's own *production* texture accessor in one place, so a future
 regression in any one family's table is caught here too rather than only
 in that family's own scattered test file.
 
-## Why this is stronger evidence than a static screenshot
+## How the in-suite verification relates to the screenshot
 
-A screenshot of "each sheet's slice boundaries" is correct exactly once,
-at the moment it is captured, against whatever the art happened to be
-that day. `AtlasSlicingTests` (and the measurement tests it complements)
-re-decode the shipped PNGs and re-check every declared index against them
-on every single test run -- so a future art re-export that shifts a row,
-a renamed imageset, or an accidentally-reordered `Direction8` case is
-caught the next time the suite runs, not only if someone remembers to
-re-capture and re-review a screenshot. The static image is not fabricated
-here; the stronger, continuously-verified equivalent is what ships in its
-place.
+The two artifacts answer different questions, and neither substitutes for
+the other:
 
-## Still outstanding
+- The screenshot answers "does the shipped art, sliced by the shipped
+  indices, LOOK right on a running simulator today?" -- a whole-frame,
+  human judgement no assertion in this repo makes. It is what gate 10
+  asks for, and it is still missing.
+- The suite answers "has any declared index drifted from the art since?"
+  -- `AtlasSlicingTests` (and the measurement tests it complements)
+  re-decode the shipped PNGs and re-check every declared index against
+  them on every run, so a future art re-export that shifts a row, a
+  renamed imageset, or an accidentally-reordered `Direction8` case is
+  caught the next time the suite runs rather than only if someone
+  remembers to re-capture and re-review an image.
 
-A human reviewer with simulator access may still wish to visually confirm
-the slice boundaries by eye (e.g. via Xcode's asset-catalog preview or a
-debug crop overlay) -- that literal `.png` capture is not produced by this
-implementation step and is named here explicitly so it is never mistaken
-for having already happened.
+So the suite is the better regression guard and the screenshot is the
+demonstration; the story requires the demonstration. This file does not
+claim gate 10 closed, and it is not a licence to skip the capture -- an
+earlier revision of this section read as if the "stronger,
+continuously-verified equivalent ... ships in its place", which PR #65's
+review correctly flagged as reading like a pass. It isn't one.
+
+## Still outstanding -- GATE 10 IS NOT CLOSED
+
+- `gate-10-atlas-slicing.png` itself: the slice-boundary capture, taken
+  on a running simulator (or via Xcode's asset-catalog preview / a debug
+  crop overlay) by someone with Xcode access, and reviewed by eye. Not
+  produced by this implementation step, not fabricated here, and named
+  explicitly so it is never mistaken for having already happened. Gate 10
+  stays marked outstanding in `docs/evidence/README.md`'s table until that
+  image exists and has been reviewed.
