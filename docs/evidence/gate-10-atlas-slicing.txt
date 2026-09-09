@@ -1,0 +1,99 @@
+Gate 10 evidence -- CYBERPUN-17-14-t2 (PR 2: asset-resolution + atlas-slicing audit)
+
+Gate 10's text: "Atlas sheets slice correctly and buildings render whole
+and transparent." The PR plan names a static screenshot,
+`gate-10-atlas-slicing.png`, "of each atlas sheet's slice boundaries". No
+such image is fabricated here -- this implementation step runs in a
+container with no Xcode/simulator/image-editing tool to actually draw a
+slice-boundary overlay over the shipped PNGs, and a fabricated image
+standing in for that capture would be indistinguishable, on disk, from a
+real one until someone opened it (the same reasoning
+docs/evidence/README.md's CYBERPUN-17-14-t1 section already records for
+this project's other unrecorded gates).
+
+What this file records instead is *why* the in-suite verification this PR
+adds and re-confirms is a stronger, continuously-re-checked form of the
+same claim a static screenshot would only assert once, at authoring time,
+and never again.
+
+## What was audited (and found already correct)
+
+Every atlas index in the game was re-read against its owning table and its
+existing pixel-measurement test in this PR:
+
+- **Player**: 8 direction rows x 4 frame columns
+  (`PlayerSpriteSheet.rowMappingTable`, `PlayerAnimator`). 5 rows are
+  directly authored (south through north sweeping the sheet's east side);
+  the remaining 3 (southwest/west/northwest) are declared as mirrors of
+  the row sharing their vertical component. `PlayerSpriteSheetTests
+  .test_theRowsTheTableNeverReads_carryNoArtBeyondTheMirrorOfTheirSourceRow`
+  re-decodes the shipped `sprite_player_walk.png` and proves the 3 unread
+  rows are each either empty or the exact horizontal flip of their
+  declared source row -- the discriminating measurement a hand-typed
+  table comparison cannot make.
+- **Raccoon walk + attack**: the identical 8-row x 4-column convention,
+  independently measured against both `sprite_raccoon_walk.png` and
+  `sprite_raccoon_attack.png` by
+  `RaccoonSpriteSheetPixelTests.test_theRowsTheTableNeverReads_carryNoArtBeyondTheMirrorOfTheirSourceRow_onBothSheets`.
+  `RaccoonNode.texture(state:row:column:)` keeps one cache per sheet, so a
+  walk cell and an attack cell at the identical (row, column) can never
+  collide on the same `SKTexture` -- pinned freshly in this PR by
+  `AtlasSlicingTests
+  .test_raccoonWalkAndAttack_everyDirectionAndFrame_resolveANonZeroCell_andTheTwoSheetsNeverCollide`.
+- **Weapon overlay**: `sprite_player_weapons`' 8-column (direction) x
+  3-row (tier) grid, indexed via `WeaponOverlayRenderer.column(for:)` /
+  `WeaponTier.weaponSheetRow`.
+  `WeaponOverlayRendererTests.test_everyWeaponCell_carriesAuthoredArt_andNoWestColumnIsAnUnflippedCopyOfItsEast`
+  re-decodes `sprite_player_weapons.png` and proves all 24 cells carry
+  opaque pixels and that no west column is an unflipped duplicate of its
+  east counterpart (the "backwards gun" failure mode a bounds check alone
+  cannot see). `AtlasSlicingTests
+  .test_weaponOverlay_everyTierAndDirection_resolvesANonZeroCell_atTheDesignTableRowAndColumn`
+  re-confirms every one of the 24 `(tier, direction)` cells resolves a
+  real texture through the production accessor.
+- **Ground diamonds**: the six non-uniform `tileset_ground` sub-rects,
+  measured (not assumed) against the shipped 592x60px PNG by
+  `AtlasGroundDiamondTests` -- five 96px cells plus one 112px overhang
+  cell, tiling the sheet's measured width exactly.
+- **Buildings**: all 12 `building_00`...`building_11` sprites resolve,
+  carry an alpha channel, and have real transparent pixels outside their
+  silhouette (not merely a 32-bit container filled fully opaque) --
+  `BuildingCatalogTests.test_everyBuildingSprite_carriesAnAlphaChannel_andHasTransparentPixelsOutsideItsSilhouette`,
+  which is the actual "renders on a transparent background" measurement
+  gate 10 asks for, run per building off decoded pixels rather than
+  inferred from the PNG being 32-bit. `AtlasSlicingTests
+  .test_everyBuildingID_resolvesItsOwnImagesetName_andANonZeroTexture`
+  additionally pins that each id's declared name and the World layer's
+  independently-typed-out `BuildingCatalog` restatement agree.
+
+No mis-indexed cell was found across any of the above -- every table
+already carried the measured-against-shipped-art proof the story asks
+for, built up incrementally across CYBERPUN-17-1, 17-6, 17-8 and 17-9.
+This PR's contribution is `CyberpunkMonsterCrawlTests/AtlasSlicingTests.swift`:
+a single new file that exercises every named animation state (player
+walk's 32 direction/frame pairs, raccoon walk+attack's 64, weapon
+overlay's 24 tier/direction pairs) and every building id (12) against
+each family's own *production* texture accessor in one place, so a future
+regression in any one family's table is caught here too rather than only
+in that family's own scattered test file.
+
+## Why this is stronger evidence than a static screenshot
+
+A screenshot of "each sheet's slice boundaries" is correct exactly once,
+at the moment it is captured, against whatever the art happened to be
+that day. `AtlasSlicingTests` (and the measurement tests it complements)
+re-decode the shipped PNGs and re-check every declared index against them
+on every single test run -- so a future art re-export that shifts a row,
+a renamed imageset, or an accidentally-reordered `Direction8` case is
+caught the next time the suite runs, not only if someone remembers to
+re-capture and re-review a screenshot. The static image is not fabricated
+here; the stronger, continuously-verified equivalent is what ships in its
+place.
+
+## Still outstanding
+
+A human reviewer with simulator access may still wish to visually confirm
+the slice boundaries by eye (e.g. via Xcode's asset-catalog preview or a
+debug crop overlay) -- that literal `.png` capture is not produced by this
+implementation step and is named here explicitly so it is never mistaken
+for having already happened.

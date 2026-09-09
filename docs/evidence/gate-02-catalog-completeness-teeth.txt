@@ -1,0 +1,119 @@
+Gate 2 evidence -- CYBERPUN-17-14-t2 (PR 2: asset-resolution + atlas-slicing audit)
+
+AC 3 / gate 2's own text asks for two things:
+  (a) no placeholder texture appears anywhere in a full run from menu to
+      death screen;
+  (b) "the catalog-completeness test still fails when an imageset is
+      deliberately removed (verify the test's teeth, then restore)."
+
+This log is the reasoned, code-level verification of (b) -- walked through
+rather than executed, because this implementation step runs in a container
+with no Xcode/simulator to actually delete a file, run the suite, and put
+it back. What follows traces exactly which assertion trips and why, so the
+claim is checkable against the cited line rather than asserted on faith.
+
+The asset catalog has two completeness gates, not one file named
+"AssetCatalogCompletenessTests" -- grepped for at the start of this PR and
+confirmed absent under that name (`grep -rn AssetCatalogCompleteness .`
+returns nothing). The two gates that jointly cover the story's "catalog
+completeness" concept are:
+
+  1. CyberpunkMonsterCrawlTests/AtlasCatalogTests.swift
+     -- the 10 non-building atlas sheets (sprite_player_walk,
+     sprite_player_weapons, sprite_bullets, sprite_raccoon_walk,
+     sprite_raccoon_attack, tileset_ground, sprite_pickups, sprite_pulse,
+     sprite_hit_puff, sprite_signs).
+  2. CyberpunkMonsterCrawlTests/BuildingCatalogTests.swift
+     -- the 12 building sprites (building_00 ... building_11).
+
+Both close out CYBERPUN-17-1's AC 2 / AC 5 ("every sheet/building the
+manifest references resolves to a real, non-zero-sized image in
+Assets.xcassets"), and both were already exercised behind a
+`SCAFFOLDING(CYBERPUN-17-1-t4)`-tagged `XCTExpectFailure` before the art
+landed, per BuildingCatalogTests' own header comment -- i.e. these two
+files already proved, once, that removing/never-shipping the art turns
+them red. This PR re-verifies that mechanism still holds today rather than
+re-running that one-time proof from scratch.
+
+WHAT WOULD HAPPEN IF sprite_player_walk WERE DELETED FROM Assets.xcassets
+(worked through against the actual code, not simulated):
+
+  1. AtlasCatalogTests.test_everyAtlasSheet_resolvesToARealNonZeroSizedImage_withAnAlphaChannel
+     calls `UIImage(named: "sprite_player_walk", in: .appModule,
+     compatibleWith: nil)`. With the imageset gone this returns `nil`, so
+     the `guard let image = ..., let cgImage = image.cgImage else { XCTFail(...) }`
+     fires immediately -- FAILS.
+  2. AtlasCatalogTests.test_everyAtlasSheet_resolvesWithoutTrippingTheMeasurementPrecondition
+     calls `sheetCase.sheet`, which constructs `SpriteSheet(imageID:
+     "sprite_player_walk", pixelSize: CGSize(width: 144, height: 320),
+     cellSize: ...)`. `SpriteSheet.init` calls
+     `measuredPixelSize(forImageNamed:)`, which returns `.zero` for a
+     missing image (SpriteSheet.swift's own doc comment: "An image that
+     fails to resolve ... measures as .zero, which reliably fails the
+     precondition"), and the `precondition(measured == pixelSize, ...)`
+     traps the whole test process -- a hard abort, not a quietly-skipped
+     assertion, exactly as CYBERPUN-17-1 requires.
+  3. TextureLoadingTests' three tests over `AtlasSheet.allCases.map(\.imageID)`
+     each call `TextureLoading.texture(named: "sprite_player_walk")` ->
+     `SKTexture(imageNamed:)`, which returns a texture that resolves at
+     `size() == .zero` for a missing name -- FAILS
+     `test_texture_resolvesARealNonZeroSizedImage_forEveryImportedAtlasSheet`'s
+     `XCTAssertGreaterThan(texture.size().width, 0, ...)`.
+  4. Every production consumer of `PlayerSpriteSheet.sheet` /
+     `PlayerNode.texture(row:column:)` walks the same `SpriteSheet.init`
+     precondition on the very first frame that needs a player texture, so
+     the failure is not confined to the test target -- a build shipping a
+     deleted sheet cannot render a player frame at all, it traps.
+
+WHAT WOULD HAPPEN IF building_05 WERE DELETED:
+
+  1. BuildingCatalogTests.test_shippedAssetCatalog_containsEveryBuildingSprite
+     asserts `UIImage(named: "building_05", ...)` is non-nil -- FAILS
+     directly.
+  2. BuildingCatalogTests.test_everyBuildingSprite_carriesAnAlphaChannel_andHasTransparentPixelsOutsideItsSilhouette
+     calls `ImagePixelSampling.sourceAlphaInfo(ofImageNamed: "building_05")`,
+     which returns `nil` for a missing image, and the test's own
+     `guard ... else { XCTFail(...); continue }` fires -- FAILS.
+  3. `BuildingSprite.building05.texture` walks `measuredPixelSize`'s
+     `precondition` the same way `SpriteSheet.init` does (`BuildingSprite.swift`:
+     "A missing/renamed imageset measures as .zero, which reliably trips
+     the precondition") -- a production caller (the city-lattice building
+     placement) would trap the process on the first tile that places this
+     building, not silently draw nothing.
+
+RESTORING the deleted imageset returns every one of the above to green,
+because none of the assertions above hold any state across runs -- each
+re-decodes the catalog fresh from `Bundle.appModule` on every invocation.
+
+CONCLUSION: both completeness gates trip on a missing asset through two
+independent mechanisms each (an `XCTFail`/`XCTAssertGreaterThan` inside the
+test target, and a hard `precondition` trap reachable from the production
+texture-loading path itself), and neither gate holds any cached state that
+would let a re-added asset stay "removed" in the test's eyes. The teeth are
+intact. This reasoning is not a substitute for actually deleting a file,
+running the suite on a macOS host, and watching it go red -- that
+literal step needs a real Xcode/simulator run, which the following section
+records as still outstanding rather than claimed here.
+
+WHAT IS STILL OUTSTANDING (named explicitly, not silently skipped):
+  - The literal "delete one imageset, run the suite, watch it fail,
+    restore it, watch it pass" exercise, executed on a real macOS build
+    host rather than reasoned through against the source. The pre-PR host
+    build gate compiles and runs this project's full suite on every PR;
+    it does not, by itself, perform a deliberate deletion-and-restore
+    cycle, so this remains a manual verification step for whoever reviews
+    this PR with Xcode access.
+  - `gate-02-no-placeholder-textures.mov`, the full-run recording named in
+    the PR plan. No `.mov` is fabricated here (see docs/evidence/README.md's
+    CYBERPUN-17-14-t1 section for why a placeholder binary is worse than no
+    binary at all). Real frame evidence covering the menu, early gameplay,
+    the raccoon swarm approaching and in contact, the weapon overlay, the
+    swarm in weapon range, and the death-screen summary is instead produced
+    by the runtime probe from the journeys already tagged `"CYBERPUN-17-14"`
+    in `.mothership/journeys/`: `first-launch-playable.json`,
+    `raccoon-swarm.json`, `auto-fire-weapons.json` and
+    `death-and-high-scores.json` (the last three gained that tag in this
+    PR, alongside their original story). Collectively their screenshots are
+    exactly gate 2's "no placeholder texture from menu to death screen"
+    claim, captured on a real simulator by the platform's own pipeline
+    rather than a fabricated recording authored here.

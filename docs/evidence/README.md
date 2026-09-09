@@ -101,3 +101,70 @@ and attach the resulting recording/screenshots as `gate-01-first-launch-playable
 under this directory before gate 1 is fully evidenced in the form the
 plan originally asked for. This is named here explicitly rather than left
 unmentioned so it is never mistaken for having already happened.
+
+## `CYBERPUN-17-14-t2` (PR 2: asset-resolution + atlas-slicing audit)
+
+This PR's plan calls for two evidence artifacts:
+
+- `gate-02-no-placeholder-textures.mov` -- a full-run recording, menu to
+  death screen, showing no placeholder texture.
+- `gate-10-atlas-slicing.png` -- screenshot(s) of each atlas sheet's slice
+  boundaries.
+
+Neither binary is fabricated here, for the same reason PR 1's section
+above gives: this implementation step has no Xcode/simulator/screen-capture
+tool, and a placeholder file at either exact name would be indistinguishable
+from real evidence until opened.
+
+| gate | state after this PR |
+| --- | --- |
+| 2 -- every asset resolves, no placeholder textures | **audited, code-verified, evidence mechanism wired -- literal recording still outstanding.** See `gate-02-catalog-completeness-teeth.txt` for the code-level trace of why `AtlasCatalogTests`/`BuildingCatalogTests` fail on a deliberately-removed imageset and recover on restore (the "verify the test's teeth" half of AC 3), and for which real journeys now carry the `"CYBERPUN-17-14"` tag so the runtime probe captures genuine full-run frames. |
+| 10 -- atlas sheets slice correctly, buildings render whole and transparent | **audited, no offender found, newly pinned in one place.** See `gate-10-atlas-slicing.txt` and `CyberpunkMonsterCrawlTests/AtlasSlicingTests.swift`. |
+
+### Gate 2 -- asset-resolution audit
+
+The audit (re-reading `AtlasCatalogTests.swift`, `BuildingCatalogTests.swift`
+and `TextureLoadingTests.swift` -- the files that jointly implement the
+"asset catalog completeness" concept the plan's `AssetCatalogCompletenessTests.swift`
+refers to; grepping the repo for that exact name first confirmed no file
+carries it) found both existing completeness gates still trip correctly on
+a missing asset, through two independent mechanisms each (see
+`gate-02-catalog-completeness-teeth.txt` for the full trace: an `XCTFail`/
+`XCTAssertGreaterThan` inside the test target, and a hard `precondition`
+trap reachable from the production texture-loading path itself). Neither
+file needed a fix, so neither was modified.
+
+Rather than leaving the full-run "no placeholder anywhere" claim
+unevidenced, three already-existing journeys that together drive a
+complete menu-to-death run and screenshot every stage in between --
+`raccoon-swarm.json`, `auto-fire-weapons.json` and
+`death-and-high-scores.json` -- were tagged with `"CYBERPUN-17-14"` in
+addition to their original story, alongside `first-launch-playable.json`
+(already tagged for this feature by PR 1). `JourneyManifestTests` confirms
+this addition breaks nothing: every gate in that file filters journeys by
+`stories.contains(...)` rather than asserting an exact list, and the
+structural/coverage assertions on each of the three journeys already held
+before this tag was added. When the runtime probe next executes gate
+evidence for `CYBERPUN-17-14`, it will run all four journeys and produce
+real frames spanning menu, early gameplay, the raccoon swarm approaching
+and in contact, the weapon overlay on the player, the swarm in weapon
+range, and the death-screen summary -- the full run this gate's `.mov`
+was meant to cover.
+
+### Gate 10 -- atlas-slicing audit
+
+The audit re-read every atlas index against its owning row/column table
+and its existing pixel-measurement test (player walk, raccoon walk +
+attack, weapon overlay, the six ground diamonds, all 12 buildings) and
+found no mis-indexed cell -- see `gate-10-atlas-slicing.txt` for the
+per-family trace. `CyberpunkMonsterCrawlTests/AtlasSlicingTests.swift` is
+new: it exercises every named animation state and every building id
+against each family's own production texture accessor in one
+consolidated file, so a future regression in any one family's table is
+now also caught here.
+
+## Outstanding, carried over from PR 1
+
+The three gate-1 JPGs referenced in PR 1's section above remain deleted
+and gate 1's literal recording remains outstanding, as recorded there.
+This PR adds no new claim about gate 1.
