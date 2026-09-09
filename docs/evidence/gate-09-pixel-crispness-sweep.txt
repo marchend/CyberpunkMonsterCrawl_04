@@ -1,0 +1,218 @@
+CYBERPUN-17-14-t3 (PR 3) -- gate 9 audit trace: pixel-crispness sweep
+======================================================================
+
+Scope: every texture-load path, every node scale assignment, and every
+node position assignment reachable from a production sprite consumer in
+CyberpunkMonsterCrawl/Sources/**, re-read against PixelCrispness's own
+three invariants (nearest filtering, no mipmaps, whole-integer scale) plus
+whole-point placement.
+
+Method
+------
+1. Grepped every call site of `SpriteSheet.texture(col:row:)` /
+   `.texture(forPixelRect:)` (the only two atlas-cropping entry points
+   `AtlasContractConventionTests` permits) and read each caller's
+   cache-population / node-finalization code by hand.
+2. Grepped every `.xScale =` / `.yScale =` assignment outside
+   `PixelCrispness` itself.
+3. Read `IsometricProjection.tileToScreen` (integer tile inputs always
+   produce integer screen outputs: `(tileX - tileY) * 48`,
+   `(tileX + tileY) * 24`) and every position assignment derived from it.
+4. Wrote `CyberpunkMonsterCrawlTests/PixelCrispnessSweepTests.swift`, which
+   constructs a live, production-shaped node from every consumer this
+   sweep covers and asserts nearest filtering, no mipmaps, whole-integer
+   *effective magnification* (drawn size over the source cell -- see the
+   Scale section for why not `xScale`), and whole-point placement
+   directly -- so this trace is backed by an in-suite, re-runnable check,
+   not only by this file's prose. Where the story knowingly departs from a
+   rule, the sweep asserts the departure by name (three such exceptions:
+   two magnifications, one placement) instead of reporting a clean pass.
+
+Consumers audited (file -> production entry point)
+----------------------------------------------------
+- Sources/Actors/PlayerNode.swift            -> PlayerNode.texture(row:column:)
+- Sources/Actors/Raccoon/RaccoonNode.swift    -> RaccoonNode.texture(state:row:column:)
+- Sources/Combat/BulletNode.swift             -> BulletNode.texture(forTier:)
+- Sources/Combat/HitEffects.swift             -> HitEffects.texture(forColumn:)
+- Sources/Rendering/WeaponOverlayRenderer.swift -> WeaponOverlayRenderer.texture(tier:direction:)
+- Sources/Rendering/PulseRingNode.swift       -> PulseRingNode.texture(forColumn:)
+- Sources/Pickups/PickupNode.swift            -> PickupNode.texture(forColumn:)
+- Sources/World/GroundTileRenderer.swift      -> GroundTileRenderer.configure(_:for:at:)
+- Sources/World/TileFieldRenderer.swift       -> TileFieldRenderer.configure(_:for:)
+- Sources/Rendering/RooftopSignRenderer.swift -> RooftopSignRenderer.makeSignNode(for:parent:)
+
+Filtering: one deviation from the pattern, fixed (NOT a live blur)
+------------------------------------------------------------------
+CORRECTION (PR #66 review). The first revision of this trace reported
+"one real offender" on the premise that `SpriteSheet.texture(col:row:)` /
+`.texture(forPixelRect:)` cut a `SKTexture` via `SKTexture(rect:in:)`
+that does NOT inherit the sheet texture's `.nearest`/no-mipmap settings.
+The review asked for that premise to be pinned by a test rather than
+asserted in prose. Pinning it falsified it: measured on a real run, a
+fresh crop out of a `TextureLoading`-stamped sheet reads back `.nearest`
+with mipmaps off, with no stamp of its own
+(`PixelCrispnessSweepTests
+.test_aRawSheetCrop_carriesTheSheetsNearestFiltering_measuredNotAssumed`,
+which also asserts it is measuring a genuinely fresh instance rather than
+a cached, already-stamped one).
+
+So the finding below is a **consistency** finding, not a defect: one
+cache-population site deviated from the pattern every sibling factory
+follows. Nothing was blurred on a device because of it. The stamp was
+still added, for two reasons worth stating rather than implying: crop
+inheritance is undocumented `SKTexture` behaviour (the test above is the
+tripwire if a future SpriteKit changes it), and a factory whose guarantee
+holds only if its caller remembers a follow-up `PixelCrispness.apply(to:)`
+call is not the guarantee the other six factories provide.
+
+Every consumer already stamped its own crop except one:
+  PlayerNode.texture(row:column:)                 -- stamps explicitly. OK.
+  RaccoonNode.texture(state:row:column:)           -- stamps explicitly. OK.
+  BulletNode.texture(forTier:)                     -- stamps explicitly. OK.
+  HitEffects.texture(forColumn:)                   -- stamps explicitly. OK.
+  WeaponOverlayRenderer.texture(tier:direction:)    -- stamps explicitly. OK.
+  PulseRingNode.texture(forColumn:)                -- stamps explicitly. OK.
+  PickupNode.texture(forColumn:)                   -- DID NOT stamp. The one
+    deviation; now stamps. Not a blur -- see the correction above.
+  GroundTileRenderer.configure / TileFieldRenderer.configure /
+  RooftopSignRenderer.makeSignNode                 -- no cache at all; each
+    calls PixelCrispness.apply(to: node) immediately after assigning the
+    fresh crop, which is an equally sound (if less obviously named)
+    pattern. Not offenders.
+
+`PickupNode.texture(forColumn:)` cached a raw, unstamped crop. This did
+NOT actually blur on a device, for two independent reasons: the crop
+carries the sheet's `.nearest` across anyway (measured -- see the
+correction above), and `PickupNode.init` always calls
+`PixelCrispness.apply(to: icon)` immediately after assigning the texture,
+and `SKTexture` is a reference type, so that `apply` call mutated the
+very same object the cache was holding -- the cache ended up correctly
+filtered as a side effect of the *caller's* finalization, not as a
+guarantee the factory itself provided. Fixed at the cache-population
+site (CyberpunkMonsterCrawl/Sources/Pickups/PickupNode.swift) to match
+every sibling factory's pattern, so the guarantee no longer depends on
+every future caller remembering to call `apply(to:)` first.
+`PixelCrispnessSweepTests.test_pickupNode_textureForColumn_
+isNearestFilteredAndMipmapFree_directlyFromTheFactory` asserts the
+factory now provides this directly.
+
+That assertion was order-dependent as first written and could not have
+failed (PR #66 review): `PickupNode.textureCache` is process-wide
+`static var` state, so any earlier `PickupNode.init` in the test process
+-- including one in an alphabetically earlier method of the same class --
+left the cached instance already stamped, and the assertion read that back
+whether or not the factory did the stamping itself. `PickupNode` now
+exposes a `resetTextureCacheForTesting()` test seam (the same role
+`AccessibleSKView.resetForTesting()` documents), which that test calls per
+kind, so it goes red if the two lines in `PickupNode.texture(forColumn:)`
+are deleted. The premise underneath the whole finding was pinned directly
+too, on a raw `AtlasSheet.pickups.sheet.texture(col:row:)` crop
+(`test_aRawSheetCrop_carriesTheSheetsNearestFiltering_measuredNotAssumed`)
+-- and, as the correction at the top of this section records, measuring it
+FALSIFIED it: the crop does carry the sheet's `.nearest`/no-mipmap
+settings across. That is why this section reports a consistency deviation
+rather than a live blur.
+
+Scale: two known non-integer magnifications, accepted by the story;
+everything else integer
+--------------------------------------------------------------------
+Every `SKSpriteNode.xScale`/`yScale` assignment in the audited files sets
+either `+1`/`-1` (a mirror flip) or is finalized through
+`PixelCrispness.apply(to:)`'s own `wholeScale(_:)` rounding.
+
+That fact on its own is NOT evidence for gate 9, and the first revision of
+this trace overstated it as "no offender found" (PR #66 review). Gate 9's
+criterion is "every on-screen scale is a whole-integer multiple of the 1x
+art", and an `isIntegerScale(node.xScale)` assertion cannot fail for any
+node that has just been through `apply(to:)` -- that call rounds the very
+property being asserted. It is also structurally blind to the two cases
+that actually violate the criterion, because both deliberately route their
+magnification through `SKSpriteNode.size`, where `wholeScale` never sees
+it:
+
+  1. RaccoonNode.scaledSize(forTier:deviceScale:) -- the elite draws its
+     measured 48x28 cell at 77x45 (deviceScale 1): 1.604x horizontally,
+     1.607x vertically. NOT an integer multiple. Accepted by the story
+     (AC4's 1.6x elite); device-pixel snapping is its only crispness
+     guarantee. That method's own doc comment records the opt-out.
+  2. PickupNode.iconSize -- the story's fixed 32x32pt icon drawn from the
+     measured 24x24px cell: 1.333x. NOT an integer multiple. Accepted by
+     the story (a legible pickup icon); that property's own doc comment
+     records the opt-out.
+
+A human signing gate 9 off should see those two rather than have them
+netted out of a "no offender" summary. Everything else in the sweep --
+player body, base raccoon, bullets, hit puff/muzzle flash, pulse ring,
+weapon overlay, ground tiles, buildings, rooftop signs -- draws its source
+cell at an exact whole-integer multiple (1x, with PulseRingNode's
+scale-to-radius the one consumer that legitimately carries an *integer*
+magnification in xScale/yScale).
+
+`PixelCrispnessSweepTests.assertPixelCrisp` now asserts *effective
+magnification* (`node.size / node.texture.size()` -- the idiom
+`RaccoonNodeTests.test_eliteBody_effectiveMagnification_...` and
+`PickupNodeTests.test_icon_effectiveMagnification_...` established) rather
+than `xScale`, with those two cases passed in as explicitly named
+exceptions that must stay non-integral (a stale opt-out that quietly
+became integral fails the test rather than passing it). The `xScale`/
+`yScale` integer checks are kept only for what they can still prove: that
+magnification never starts leaking into scale, where `wholeScale` would
+silently round 1.6x to 2x.
+
+Position: one accepted exception (bullets in flight); everything else
+whole-point
+--------------------------------------------------------------------
+Every world-space node's position is derived from
+`IsometricProjection.tileToScreen` (integer tile coordinates in, integer
+screen points out by construction) or from
+`PixelCrispness.snappedPosition(for:scale:)` (`CameraController`,
+`PlayerNode`, `PickupNode`, `RaccoonNode`'s size snap), and every sprite
+factory finishes with `PixelCrispness.apply(to:)`'s own whole-point
+rounding. `CameraController` -- the one place a world container moves
+every frame -- already snaps its offset to the live device pixel grid
+(landed with CYBERPUN-17-7; see that type's own doc comment), closing
+the one gap earlier CLAUDE.md/AGENT.md revisions recorded as open
+("cameraNode.position is not snapped anywhere").
+
+EXCEPT bullets, which the first revision of this trace wrongly reported as
+clean (PR #66 review). `Player.handleFire(target:origin:tier:)` projects
+the player's *fractional* mid-walk TilePoint (integer-in/integer-out only
+holds for integer input), converts it through
+`effectsSpacePoint(fromWorldSpace:)` -- which adds a camera offset snapped
+to the DEVICE PIXEL grid, not the whole-point grid -- and
+`Player.advanceInFlightBullets(deltaTime:)` then rewrites the node's
+position every frame to a linear interpolation by
+`elapsed / travelDuration` with no rounding on that path.
+`BulletNode.configure(tier:position:spriteKitShotVector:)` writes that
+point through verbatim. So in a real run an in-flight bullet IS placed at
+arbitrary sub-pixel positions: a genuine gate-9 "half-pixel-placed"
+candidate.
+
+Recorded as an accepted exception rather than snapped, because snapping
+would not buy crispness here: `BulletNode` also sets `zRotation` from
+`atan2` so the round points along its shot vector (AC5), which resamples
+its texels off-axis at any position -- while whole-point snapping a
+fast-moving projectile would make it visibly step. A future PR that
+decides otherwise should snap in `advanceInFlightBullets` (not only in
+`configure`, which is not where the per-frame writes happen) and remove
+this paragraph.
+
+`PixelCrispnessSweepTests
+.test_bulletNode_inFlightPlacement_isTheAcceptedSubPixelException` pins
+both halves of this exception -- the unrounded pass-through and the
+off-axis rotation -- so the behaviour is asserted rather than merely
+described here.
+
+What this audit does NOT evidence
+-----------------------------------
+This is a code-level trace plus an in-suite regression test
+(`PixelCrispnessSweepTests.swift`), run headlessly (deviceScale
+defaulted to 1, i.e. a whole-point grid) -- it is not a screenshot of a
+real `@2x`/`@3x` simulator frame. This task runs in a container with no
+Xcode/simulator/screen-capture tool (see docs/evidence/README.md's PR
+1/2 sections for the same limitation), so no `gate-09-pixel-crispness-
+2x.png` / `gate-09-pixel-crispness-3x.png` is fabricated here. Gate 9
+remains open in the sense the story's acceptance criterion means it: a
+human (or the platform's runtime-probe pipeline) still needs to capture
+real `@2x`/`@3x` frames of the running app and attach them under this
+directory.

@@ -103,8 +103,53 @@ final class PickupNode: SKNode {
             return cached
         }
         let texture = cachedSheet.texture(col: column, row: 0)
+        // Stamped here so this factory provides the pixel-crisp guarantee
+        // itself, exactly as `PlayerNode.texture(row:column:)` /
+        // `RaccoonNode.texture(state:row:column:)` / `BulletNode.texture
+        // (forTier:)` / `HitEffects.texture(forColumn:)` /
+        // `WeaponOverlayRenderer.texture(tier:direction:)` /
+        // `PulseRingNode.texture(forColumn:)` all already do at their own
+        // cache-population sites. This was the one cache-population site in
+        // the repo that skipped the stamp (CYBERPUN-17-14-t3, gate 9).
+        //
+        // It was **not** a live blur, and the sweep's first write-up saying
+        // otherwise was corrected in PR #66: the rect-cropping initializer
+        // `SpriteSheet.texture(forPixelRect:)` uses does carry the parent
+        // sheet texture's filtering across, measured by
+        // `PixelCrispnessSweepTests
+        // .test_aRawSheetCrop_carriesTheSheetsNearestFiltering_measuredNotAssumed`,
+        // and `PickupNode.init`'s own `PixelCrispness.apply(to: icon)` call
+        // additionally mutates this very object (a class, held by
+        // reference) in place. The stamp stays because crop inheritance is
+        // undocumented behaviour to depend on, and because a factory whose
+        // guarantee is conditional on its caller's follow-up call is the
+        // pattern this codebase deliberately does not use.
+        texture.filteringMode = .nearest
+        texture.usesMipmaps = false
         textureCache[column] = texture
         return texture
+    }
+
+    // MARK: - Test seam
+
+    /// Empties `textureCache`, so the next `texture(forColumn:)` call
+    /// slices a genuinely fresh crop instead of returning a cached one.
+    ///
+    /// `textureCache` is `static var`, so it survives for the whole test
+    /// process, and `PickupNode.init` calls
+    /// `PixelCrispness.apply(to: icon)` -- which mutates the very
+    /// `SKTexture` instance the cache holds, since `SKTexture` is a class.
+    /// Once *any* earlier test in the process has constructed a
+    /// `PickupNode`, the cached crop therefore reads back `.nearest`/
+    /// mipmap-free whether or not `texture(forColumn:)` stamps it itself:
+    /// an assertion on the factory's own guarantee would pass even with the
+    /// stamp above deleted (PR #66 review). Calling this from a test's
+    /// `setUp` makes that assertion able to fail again, which is the whole
+    /// point of having it. Same "test seam" role
+    /// `AccessibleSKView.resetForTesting()` documents; not used by any
+    /// production path.
+    static func resetTextureCacheForTesting() {
+        textureCache = [:]
     }
 
     /// Which pickup this node represents -- fixed at construction.
