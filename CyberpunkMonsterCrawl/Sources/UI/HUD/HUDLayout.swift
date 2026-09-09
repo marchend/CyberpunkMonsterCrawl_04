@@ -114,21 +114,28 @@ enum HUDLayout {
         return CGRect(x: minX, y: minY, width: max(0, maxX - minX), height: max(0, maxY - minY))
     }
 
-    /// The bottom-left region `FloatingThumbstickNode` claims for itself
-    /// plus its own reserved (legacy, bottom-left) pulse-button slot --
-    /// mirrored from that type's own geometry rather than re-declared, so
-    /// this can never silently drift out of step with it.
+    /// The bottom-left region `FloatingThumbstickNode` claims for itself --
+    /// mirrored from that type's own geometry (`restingPosition` plus its
+    /// full `maxRadius` drag extent) rather than re-declared, so this can
+    /// never silently drift out of step with it.
+    ///
+    /// Until `CYBERPUN-17-14` PR 1 this region also covered the stick's
+    /// reserved bottom-left pulse-button slot, 88pt of which sat above the
+    /// stick's own extent. That slot is gone with the button it was reserved
+    /// for (the HUD's own bottom-right `HUDPulseButton` is the run's one
+    /// ability control), so the region is now exactly the stick.
     static func thumbstickReservedRegion(sceneSize: CGSize, safeAreaInsets: UIEdgeInsets) -> CGRect {
         let safeRect = safeContentRect(sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
-        let reservedSlot = FloatingThumbstickNode.reservedPulseButtonSlot(
+        let stickRest = FloatingThumbstickNode.restingPosition(
             forSize: sceneSize,
             safeAreaInsets: safeAreaInsets
         )
+        let stickTop = stickRest.y + FloatingThumbstickNode.maxRadius
         return CGRect(
             x: safeRect.minX,
             y: safeRect.minY,
             width: FloatingThumbstickNode.leftRegion(forSize: sceneSize, safeAreaInsets: safeAreaInsets).width,
-            height: reservedSlot.maxY - safeRect.minY
+            height: stickTop - safeRect.minY
         )
     }
 

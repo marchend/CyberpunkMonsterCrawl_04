@@ -2,7 +2,8 @@ import SpriteKit
 import UIKit
 
 /// The real menu screen: "Pixel Grit" dark background with a neon-accent
-/// PLAY button, plus a placeholder HIGH SCORES entry.
+/// PLAY button, plus a HIGH SCORES entry into the real, fully-built
+/// `HighScoresScreenNode` table (`CYBERPUN-17-13`).
 ///
 /// `node` is mounted in `GameScene.uiLayer`, which is parented to the
 /// scene's camera, so this screen lays out around `(0, 0)` = the centre of
@@ -15,8 +16,8 @@ final class MenuScreenNode: ScreenNode {
     /// reachable, tappable entry point into gameplay.
     let playButton: ButtonNode
 
-    /// Placeholder route into `.highScores` (real transition; the high
-    /// scores screen's own content is skeletal \u2014 see `HighScoresScreenNode`).
+    /// Route into `.highScores`, the real persisted-table screen \u2014 see
+    /// `HighScoresScreenNode`.
     let highScoresButton: ButtonNode
 
     /// Full-bleed dark backdrop, resized to the current scene size on every

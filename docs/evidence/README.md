@@ -1,0 +1,103 @@
+# Evidence — `CYBERPUN-17-14-t1` (PR 1: scaffolding removal)
+
+This PR's plan calls for two evidence artifacts, labelled by gate number:
+
+- `gate-01-first-launch-playable.mov` — a simulator recording of
+  menu → PLAY → stick moves the player → every button responds.
+- `gate-07-scaffolding-grep-output.png` — a screenshot/log of the
+  zero-match scaffolding-marker grep.
+
+## What is actually committed here, and why
+
+This implementation task runs in a container with no Xcode/simulator and
+no screen-capture tool — there is no way to record a real `.mov` of a
+running simulator, or to take a real screenshot of a terminal, from here.
+Committing a file at either of those exact names without genuine captured
+bytes would be worse than not committing them at all (a `.mov`/`.png` that
+isn't real evidence is indistinguishable, on disk, from real evidence,
+until someone opens it) — see the project's own recorded lesson: "identical
+frames across bundles mean nothing was captured" was a real defect a
+prior story shipped and a later review had to catch by decoding the bytes.
+
+So instead of fabricated binary placeholders, this PR ships the two real
+things it *can* produce, and leaves the actual capture as explicitly
+named outstanding work rather than a silent gap:
+
+### Which of the ten gates this PR touches at all
+
+The ticket scopes ten product gates demonstrated on a running simulator.
+This PR is not all ten, and nothing here should be read as claiming a gate
+is met because the suite is green — that premise ("v1 passed its tests and
+shipped unplayable") is the reason this story exists. What this PR covers:
+
+| gate | state after this PR |
+| --- | --- |
+| 1 — first launch is playable | **mechanism only.** The journey exists and is gated by `JourneyManifestTests`; the frames are *not* captured (see below, and `.mothership/evidence/CYBERPUN-17-14-t1/journey-first-launch-playable/README.md`). Not met. |
+| 7 — scaffolding marker grep returns nothing | **met, and now including the marker an earlier revision of this gate excluded** — see below. |
+
+Every other gate the ticket lists — including the pixel-crispness sweep
+(2), the placeholder-texture audit (4), the screen-mock comparison (9) and
+the atlas-slicing verification (10) named in PR #64's review — is **not
+addressed by this PR and is not claimed as met here**. No later PR number
+is invented for them: whoever picks them up owns updating this table, and
+the closing PR should not have to reconstruct which gates were still open
+from a diff.
+
+### Gate 1 — `.mothership/journeys/first-launch-playable.json`
+
+A new journey, tagged `"stories": ["CYBERPUN-17-14"]`, that drives the
+runtime probe through menu → PLAY → a live `.gameplay` screen → a press on
+the HUD's visible ability button, screenshotting at each stage
+(`gate1-menu`, `gate1-gameplay-running`, `gate1-button-responded`). Its own
+`demonstrates` field records, honestly, that the probe vocabulary has no
+drag/hold verb, so it cannot show the thumbstick actually moving the
+player on a live device — that half of gate 1 is machine-verified instead,
+end-to-end, by `ThumbstickMovementSeamTests`. This journey is the
+mechanism; the actual `.mov` (or the platform's own screenshot bundle) is
+produced when the runtime probe executes it against a real build, which
+happens outside this authoring step.
+
+### Gate 7 — `gate-07-scaffolding-grep-output.txt`
+
+A genuine, reproducible log of the actual scan performed while
+implementing this PR: a search for the scaffolding marker (`SCAFFOLDING`)
+across the bundled app target (`CyberpunkMonsterCrawl/`), returning zero
+matches, **and across the whole repository**, which is what the story's
+acceptance criterion actually asks for. PR #64's review caught that an
+earlier revision of this gate scoped itself to the app target and thereby
+excluded the one live marker in the tree (the `CYBERPUN-17-11`
+pickup-spawn bisection instrumentation, whose named removal owner had
+never been filed and which a passing test would have made permanent).
+That artifact has been removed rather than the scope narrowed; the log
+enumerates the occurrences of the literal string that remain, all of
+which describe the convention rather than tag anything. The same scan, made permanent and re-run on every
+suite run rather than a one-time log, is
+`CyberpunkMonsterCrawlTests/ScaffoldingRemovalTests.swift`
+(`test_bundledAppSource_containsNoScaffoldingMarker`), which also carries
+an anti-vacuity guard proving the scanner actually finds the marker when
+one is present. The `.txt` extension here (rather than `.png`) is
+deliberate: this is a real, verifiable text log rather than a fabricated
+image standing in for a screenshot that was never taken.
+
+## Outstanding
+
+**The three gate-1 JPGs that were committed under
+`.mothership/evidence/CYBERPUN-17-14-t1/journey-first-launch-playable/`
+have been deleted (PR #64 review).** All three shared git blob SHA
+`a5e0d08b6e736d2c3bb508dc4098ecde3fc9b34a`, i.e. they were one image
+committed three times under three gate-numbered names — the same
+"identical frames mean nothing was captured" defect this file cites two
+sections above, arriving in the same PR that cites it. Either they were
+never captured from a real run, or the run captured the same frame at all
+three steps and the app never visibly advanced past the menu, which is
+gate 1 failing. Neither reading is evidence of a pass, so the bundle now
+holds only a README recording exactly what must be re-captured and the
+instruction to check byte-level distinctness before attaching frames
+next time.
+
+A human reviewer (or the platform's own simulator/runtime-probe pipeline)
+still needs to execute `first-launch-playable.json` against a real build
+and attach the resulting recording/screenshots as `gate-01-first-launch-playable.mov`
+under this directory before gate 1 is fully evidenced in the form the
+plan originally asked for. This is named here explicitly rather than left
+unmentioned so it is never mistaken for having already happened.

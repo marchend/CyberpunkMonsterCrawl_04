@@ -123,20 +123,17 @@ final class FloatingThumbstickNode: SKNode {
     /// than just its centre point.
     static let cornerMargin: CGFloat = 24
 
-    /// Gap (points) between the stick's own top extent (`restPosition.y +
-    /// maxRadius`) and the reserved pulse-button slot directly above it.
-    static let pulseButtonSlotGap: CGFloat = 16
-
-    /// Size of the reserved HUD slot for the future pulse-ability button
-    /// (`CYBERPUN-17-10`). Stacked directly above the stick's own rest
-    /// position, in the same bottom-left "thumb quadrant" -- both controls
-    /// share that quadrant, so a touch that starts in the slot must resolve
-    /// to "tap the future pulse button", never "engage the stick", even
-    /// though the point still falls inside the stick's own left-region
-    /// touch-acceptance box. `CYBERPUN-17-10` should mount its real button
-    /// at exactly `reservedPulseButtonSlot(forSize:safeAreaInsets:)` rather
-    /// than re-deriving its own placement, so the two can never drift apart.
-    static let pulseButtonSlotSize = CGSize(width: 72, height: 72)
+    // `CYBERPUN-17-14` PR 1 removed `pulseButtonSlotGap`,
+    // `pulseButtonSlotSize` and `reservedPulseButtonSlot(forSize:
+    // safeAreaInsets:)`, together with the exclusion `canBeginTouch(at:)`
+    // applied for that slot. `CYBERPUN-17-10` reserved a 72x72 hole directly
+    // above the stick for a bottom-left pulse button; `CYBERPUN-17-12` PR 2
+    // moved the run's one visible ability control to the HUD's bottom-right
+    // `HUDPulseButton` and hid the older mount in every state, which left the
+    // stick refusing touches inside a region no control occupied any more --
+    // live input degraded by a placeholder, not merely untidy scaffolding
+    // (PR #64 review). The whole bottom-left thumb quadrant inside
+    // `leftRegion` is the stick's again.
 
     // MARK: - Nodes
 
@@ -262,7 +259,7 @@ final class FloatingThumbstickNode: SKNode {
         }
     }
 
-    // MARK: - Regions (shared with a future real pulse button)
+    // MARK: - Regions
 
     /// The left half of the safe content area -- the only region a touch
     /// may start the stick in. `x` runs from the safe-area-inset left edge
@@ -286,26 +283,14 @@ final class FloatingThumbstickNode: SKNode {
         )
     }
 
-    /// The reserved HUD slot for the future pulse-ability button -- stacked
-    /// directly above the stick's own rest position, separated from it by
-    /// `pulseButtonSlotGap`. See `pulseButtonSlotSize`'s doc comment for why
-    /// this sits inside `leftRegion` rather than off to one side of it.
-    static func reservedPulseButtonSlot(forSize size: CGSize, safeAreaInsets: UIEdgeInsets) -> CGRect {
-        let rest = restingPosition(forSize: size, safeAreaInsets: safeAreaInsets)
-        let slotMinY = rest.y + maxRadius + pulseButtonSlotGap
-        return CGRect(
-            x: rest.x - pulseButtonSlotSize.width / 2,
-            y: slotMinY,
-            width: pulseButtonSlotSize.width,
-            height: pulseButtonSlotSize.height
-        )
-    }
-
     // MARK: - Touch tracking
 
     /// Whether a touch at `point` (already in this node's coordinate space)
-    /// is allowed to engage the stick: a run is active, the point is inside
-    /// the left region, and it is outside the reserved pulse-button slot.
+    /// is allowed to engage the stick: a run is active and the point is
+    /// inside the left region. Nothing else is carved out of that region any
+    /// more -- see the note above `base`/`knob` for the reserved pulse-button
+    /// slot this used to exclude, and why refusing touches there outlived the
+    /// control it was reserved for.
     ///
     /// The `isRunActive` half makes the run invariant hold from *both*
     /// directions. `isRunActive`'s `didSet` already owns "run ended =>
@@ -332,9 +317,7 @@ final class FloatingThumbstickNode: SKNode {
         guard isRunActive else { return false }
 
         let region = Self.leftRegion(forSize: currentSize, safeAreaInsets: currentSafeAreaInsets)
-        guard region.contains(point) else { return false }
-        let reserved = Self.reservedPulseButtonSlot(forSize: currentSize, safeAreaInsets: currentSafeAreaInsets)
-        return !reserved.contains(point)
+        return region.contains(point)
     }
 
     /// Begins tracking a new touch at `point`, if `canBeginTouch(at:)`

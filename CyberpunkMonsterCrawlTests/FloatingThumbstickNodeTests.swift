@@ -91,32 +91,38 @@ final class FloatingThumbstickNodeTests: XCTestCase {
         XCTAssertFalse(stick.beginTouch(at: CGPoint(x: 50, y: 0)))
     }
 
-    /// The motivating case for the exclusion: the reserved pulse-button slot
-    /// sits *inside* the stick's own left-region touch box (both live in the
-    /// bottom-left "thumb quadrant"), so accepting a touch there would be a
-    /// real bug, not one already prevented by the plain left/right split.
-    func test_beginTouch_rejectsATouchInsideThePulseButtonReservedSlot() {
+    /// `CYBERPUN-17-14` PR 1's regression guard for the *removed* reserved
+    /// pulse-button slot, and the inversion of the test that used to sit
+    /// here.
+    ///
+    /// Until this PR the stick refused every touch inside a 72x72 box
+    /// stacked 16pt above its own drag radius, reserved for a bottom-left
+    /// pulse button that `CYBERPUN-17-12` PR 2 had already replaced with the
+    /// HUD's bottom-right one and hidden in every state. That left the stick
+    /// declining real touches in the middle of the thumb quadrant for a
+    /// control nobody could see -- live input degraded by a placeholder
+    /// (PR #64 review). The button and the slot are both gone, so a touch
+    /// there must now engage the stick like any other point in the left
+    /// region.
+    func test_beginTouch_acceptsATouchWhereThePulseButtonSlotUsedToBe() {
         let stick = makeLaidOutStick()
-        let slot = FloatingThumbstickNode.reservedPulseButtonSlot(forSize: sceneSize, safeAreaInsets: insets)
-        let point = CGPoint(x: slot.midX, y: slot.midY)
+        let rest = FloatingThumbstickNode.restingPosition(forSize: sceneSize, safeAreaInsets: insets)
+        // The deleted slot's own centre: 16pt of gap above the stick's drag
+        // radius, then half of the 72pt-tall slot.
+        let point = CGPoint(x: rest.x, y: rest.y + FloatingThumbstickNode.maxRadius + 16 + 36)
 
-        // Sanity: prove this test exercises the exclusion, not the
-        // already-covered right-half rejection.
+        // Sanity: prove this point is inside the stick's own left-region
+        // touch box, i.e. that the acceptance being asserted is the removed
+        // exclusion and not the already-covered right-half rejection.
         XCTAssertTrue(
             FloatingThumbstickNode.leftRegion(forSize: sceneSize, safeAreaInsets: insets).contains(point),
-            "the reserved slot must sit inside the stick's own left-region touch box for this test to be meaningful"
+            "the removed slot sat inside the stick's own left-region touch box, so this point must too"
         )
 
-        XCTAssertFalse(stick.beginTouch(at: point))
-    }
-
-    func test_reservedPulseButtonSlot_doesNotOverlapTheSticksOwnRestCircle() {
-        let slot = FloatingThumbstickNode.reservedPulseButtonSlot(forSize: sceneSize, safeAreaInsets: insets)
-        let rest = FloatingThumbstickNode.restingPosition(forSize: sceneSize, safeAreaInsets: insets)
-
-        XCTAssertGreaterThanOrEqual(
-            slot.minY, rest.y + FloatingThumbstickNode.maxRadius,
-            "the reserved slot must sit clear above the stick's own drag radius"
+        XCTAssertTrue(
+            stick.beginTouch(at: point),
+            "the stick must accept touches in the 72x72 region formerly reserved for the deleted "
+                + "bottom-left pulse button -- refusing them is a dead patch in the thumb quadrant"
         )
     }
 

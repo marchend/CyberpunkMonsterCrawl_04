@@ -1,0 +1,77 @@
+Gate 7 evidence — CYBERPUN-17-14-t1
+Scan performed while implementing this PR: search for the literal
+substring "SCAFFOLDING" across the bundled app target
+(CyberpunkMonsterCrawl/), i.e. the tree that actually ships inside the
+app binary, and then across the whole repository, because the story's
+acceptance criterion asks for the marker grep to come back empty across
+the whole codebase and not only where it is convenient.
+
+Command (equivalent grep, run against the app target directory):
+
+    grep -rn "SCAFFOLDING" CyberpunkMonsterCrawl/
+
+Result: zero matches.
+
+This is the same zero-match state
+CyberpunkMonsterCrawlTests/ScaffoldingRemovalTests.swift's
+test_bundledAppSource_containsNoScaffoldingMarker asserts on every suite
+run, so this log is a one-time snapshot of a now-permanently-gated
+invariant rather than the only place it is checked.
+
+For context, every previously `// SCAFFOLDING:` / `SCAFFOLDING(<ticket>)`
+-tagged artifact this codebase ever shipped in the app target was already
+removed by the story that owned it before this PR started:
+  - CYBERPUN-17-7: PlayerScaffoldingDriver, debugPlayerDemoEnabled, the
+    debug camera pan.
+  - CYBERPUN-17-10: CrashDiagnostics (Sources/Diagnostics/CrashDiagnostics.swift),
+    removed at -t6 close-out.
+  - CYBERPUN-17-13: LaunchGotoState (Sources/Debug/LaunchGotoState.swift).
+
+Whole-repository scan (PR #64 review)
+
+    grep -rn "SCAFFOLDING" .
+
+An earlier revision of this log reported the app-target scan as gate 7
+met while excluding the one live marker in the tree: the CYBERPUN-17-11
+pickup-spawn crash-bisection instrumentation, tagged with a marker that
+named a root-cause ticket nobody had filed as its removal owner, and held
+in place by a JourneyManifestTests gate that failed if the two bracketing
+assert_running checkpoints were deleted. A narrower gate excluding the
+only marker in the tree is not the acceptance criterion, so this PR
+removed the artifact rather than the scope:
+
+  - .mothership/journeys/pickup-spawn.json is back to its original
+    12s/18s single waits; the two diagnostic checkpoints are gone.
+  - JourneyManifestTests' bisection gate is gone, replaced by
+    test_aJourneyExistsForThePickupSpawnWork_andCapturesPastTheFirstSpawnDelay,
+    which pins what is permanent (a CYBERPUN-17-11 journey exists and
+    captures past the first-spawn delay) rather than the instrumentation.
+  - What is known about the still-unidentified CYBERPUN-17-11 crash is
+    recorded in AGENT.md/CLAUDE.md, where it survives without shipping a
+    diagnostic nobody owns. Naming a frame still needs the symbolicated
+    backtrace a probe run returns; that remains outstanding and is a
+    human call, not something this gate can close.
+
+No artifact anywhere in the tree carries the marker now. The occurrences
+of the literal string that the whole-repository grep still returns are
+the ones that *describe* the convention rather than tag anything, and
+they are listed here so the next reviewer does not have to re-derive
+which is which:
+
+  - docs/bootstrap.md — the project convention itself ("any temporary
+    label, overlay or debug driver is marked `// SCAFFOLDING:`").
+  - CyberpunkMonsterCrawlTests/ScaffoldingRemovalTests.swift — the gate's
+    own `marker` constant plus the throwaway fixture files its
+    anti-vacuity test writes under NSTemporaryDirectory() and deletes
+    again; without those the scanner could pass while walking zero files.
+  - CyberpunkMonsterCrawlTests/ScreensTests.swift — a doc comment citing
+    the convention when explaining that no screen's visual content is
+    marker-tagged.
+  - docs/evidence/README.md and this log — the gate's own evidence.
+  - AGENT.md / CLAUDE.md — project history describing markers that have
+    since been removed.
+
+That list is exactly why the in-suite gate scans the app target rather
+than the whole repository: a repository-wide assertion would fail on the
+gate's own definition of the string it searches for, which is a vacuous
+red rather than a real one.

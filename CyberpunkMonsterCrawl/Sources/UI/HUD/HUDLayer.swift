@@ -156,8 +156,7 @@ final class HUDLayer: SKNode {
     /// frames, anchored at each frame's centre -- every element draws
     /// itself centred on its own local origin (see e.g. `HPSegmentBar`'s
     /// own doc comment), so `frame.midX`/`frame.midY` is the correct
-    /// mount point, the same convention `GameScene.layoutPulseButton()`
-    /// already follows for the older bottom-left button.
+    /// mount point.
     func applyLayout(for sceneSize: CGSize, safeAreaInsets: UIEdgeInsets, orientation: HUDOrientation) {
         position(hpBar, at: .hpBar, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
         position(levelXPBar, at: .levelXPBar, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)

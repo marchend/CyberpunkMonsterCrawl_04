@@ -525,68 +525,35 @@ final class JourneyManifestTests: XCTestCase {
         )
     }
 
-    /// How far past `firstSpawnDelay` the *at-or-after* bisection checkpoint
-    /// may sit and still be a bisection checkpoint rather than an ordinary
-    /// liveness check.
-    ///
-    /// Raised on PR #61: without a window, "an `assert_running` exists at or
-    /// after the delay" passes vacuously against the `assert_running` steps
-    /// the journey already carried after each screenshot (12s and 18s past
-    /// PLAY, both `>= 8s`), so the tight checkpoint this gate exists to pin
-    /// could be deleted with the suite still green. 2s is the probe's own
-    /// coarse granularity -- waits are whole seconds and the journey budgets
-    /// ~10s of cumulative slop over the whole run -- so it admits a
-    /// checkpoint that brackets the delay while rejecting one that has
-    /// drifted out to the screenshot steps.
-    private static let checkpointWindowPastTheSpawnDelay: TimeInterval = 2
+    // `CYBERPUN-17-14` PR 1 removed `checkpointWindowPastTheSpawnDelay` and
+    // the `test_thePickupSpawnJourney_bisects...` gate that used it, together
+    // with the two bracketing `assert_running` checkpoints in
+    // `.mothership/journeys/pickup-spawn.json`. They were diagnostic
+    // instrumentation for the still-unidentified `CYBERPUN-17-11` crash,
+    // tagged with a marker whose named removal owner ("the root-cause
+    // ticket") was never filed, and a passing test asserting their presence
+    // is what would have made them permanent -- the exact shape this
+    // scaffolding-clearing story exists to end. What is known about that
+    // crash is recorded in `AGENT.md`'s `CYBERPUN-17-11` entry instead, where
+    // it survives without shipping an artifact nobody owns; whoever files the
+    // root-cause ticket can re-add a bisection deliberately, under that
+    // ticket's own ID.
 
-    /// `CYBERPUN-17-11`'s runtime probe has twice reported the app process
-    /// gone right around `PLAY+12s`/`PLAY+18s` -- shortly after
-    /// `PickupKind.medKit`/`.garbageCan`'s shared `firstSpawnDelay` (8s)
-    /// fires, the moment the first `Pickup` record is created and the first
-    /// `PickupNode` is mounted -- with two independent static audits of the
-    /// whole pickup path finding no reachable crash site. Rather than
-    /// re-adding an in-app signal-handler crash-capture harness (the
-    /// `CYBERPUN-17-10` pattern already tried once and removed at close-out
-    /// as un-owned scaffolding, with that crash still unidentified), this
-    /// bisects the death with the probe's own `assert_running` verb: one
-    /// checkpoint strictly before the delay can fire and one in a narrow
-    /// window at or just past it
-    /// (`checkpointWindowPastTheSpawnDelay`), so the *next* "process gone"
-    /// report narrows to "before pickups are even touched", "right as the
-    /// first pickup is created/mounted", or "sometime after" -- instead of
-    /// only "gone".
+    /// What survives the removal above: the pickup story still needs *a*
+    /// journey, and that journey still has to reach gameplay and capture a
+    /// frame late enough for a pickup to exist. This pins that (real,
+    /// permanent) coverage without pinning any diagnostic checkpoint, so the
+    /// bisection instrumentation could be deleted -- as it now has been --
+    /// while product verification for `CYBERPUN-17-11` stays gated.
     ///
-    /// The at-or-after arm is bound to that window rather than to "a
-    /// checkpoint exists somewhere later" because the journey already
-    /// carried `assert_running` after each screenshot (12s/18s past PLAY),
-    /// which satisfies the looser form on its own -- the tight checkpoint
-    /// could then be deleted with this test still green. The window is what
-    /// makes the gate bind, in the same shape as the derived bounds the rest
-    /// of this file uses (`secondsBeforeARaccoonCanBeOnScreen`,
-    /// `secondsBeforeThePlayerCanBeDead`).
-    ///
-    /// **SCAFFOLDING(TBD -- root-cause ticket, filed by the gate reviewer).**
-    /// These two checkpoints are diagnostic instrumentation for a specific,
-    /// still-unidentified crash, and this test makes them permanent by
-    /// design -- once the crash is named, removing them would fail the suite,
-    /// which is exactly the "temporary artifact with a test protecting it"
-    /// shape `CYBERPUN-17-10`'s harness produced one layer in. Raised on
-    /// PR #61 review: no ticket ID is invented here, because filing the
-    /// root-cause ticket is the human call AGENT.md already records as
-    /// outstanding. Whoever files it should put its ID in this marker (and in
-    /// the matching marker in the journey's `demonstrates` paragraph); when
-    /// that ticket closes, **this test and the two extra `assert_running`
-    /// steps go away with it**. The steps themselves are cheap and harmless
-    /// in the journey -- the point of the marker is that they are removable,
-    /// and that the tree records their being temporary instead of staying
-    /// silent about it.
-    ///
-    /// Only the `wait` steps *after* the `navigate` into gameplay count
-    /// toward the cumulative clock, mirroring
-    /// `test_aJourneyExistsForThisStorysCombatWork_...`'s own reasoning: a
+    /// The first screenshot after `navigate` must sit at or past both kinds'
+    /// shared `firstSpawnDelay`, which is a property of the *product* claim
+    /// the frame makes ("a pickup is on the street"), not of any crash
+    /// investigation: a frame taken earlier cannot show a pickup at all.
+    /// Only `wait` steps *after* the `navigate` into gameplay count, the same
+    /// reasoning `test_aJourneyExistsForThisStorysCombatWork_...` uses -- a
     /// wait before PLAY cannot bear on when pickup code first runs.
-    func test_thePickupSpawnJourney_bisectsTheFirstSpawnDelayWithAssertRunningCheckpoints() {
+    func test_aJourneyExistsForThePickupSpawnWork_andCapturesPastTheFirstSpawnDelay() {
         let journeys = loadJourneys()
 
         let pickupJourneys = journeys.filter { $0.stories.contains("CYBERPUN-17-11") }
@@ -600,7 +567,7 @@ final class JourneyManifestTests: XCTestCase {
         XCTAssertEqual(
             firstSpawnDelay, PickupKind.garbageCan.tuning.firstSpawnDelay,
             "Both kinds are documented to share firstSpawnDelay; if that ever diverges this "
-                + "bisection needs to pick one deliberately rather than silently using medKit's."
+                + "gate needs to pick one deliberately rather than silently using medKit's."
         )
 
         for journey in pickupJourneys {
@@ -614,54 +581,81 @@ final class JourneyManifestTests: XCTestCase {
             }
 
             var cumulativeSeconds: TimeInterval = 0
-            var sawCheckpointBeforeDelay = false
-            var firstCheckpointAtOrAfterDelay: TimeInterval?
+            var firstScreenshotSeconds: TimeInterval?
 
             for step in journey.steps.dropFirst(navigateIndex + 1) {
                 switch step["action"] as? String {
                 case "wait":
                     cumulativeSeconds += (step["seconds"] as? NSNumber)?.doubleValue ?? 0
-                case "assert_running":
-                    if cumulativeSeconds < firstSpawnDelay {
-                        sawCheckpointBeforeDelay = true
-                    } else if firstCheckpointAtOrAfterDelay == nil {
-                        firstCheckpointAtOrAfterDelay = cumulativeSeconds
+                case "screenshot":
+                    if firstScreenshotSeconds == nil {
+                        firstScreenshotSeconds = cumulativeSeconds
                     }
                 default:
                     break
                 }
             }
 
-            XCTAssertTrue(
-                sawCheckpointBeforeDelay,
-                "\(file): needs an assert_running checkpoint before "
-                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has elapsed "
-                    + "past PLAY, so a probe run that dies before the first spawn attempt is "
-                    + "distinguishable from one that dies at or after it."
-            )
-
-            guard let tightCheckpoint = firstCheckpointAtOrAfterDelay else {
+            guard let firstScreenshotSeconds else {
                 XCTFail(
-                    "\(file): needs an assert_running checkpoint at or after "
-                        + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) has "
-                        + "elapsed past PLAY -- right around when the first Pickup record is "
-                        + "created and the first PickupNode is mounted -- so a probe run that "
-                        + "dies there is distinguishable from one that dies earlier or survives it."
+                    "\(file): navigates into gameplay but never screenshots afterwards, so the "
+                        + "pickup work is never captured for review."
                 )
                 continue
             }
-            XCTAssertLessThan(
-                tightCheckpoint, firstSpawnDelay + Self.checkpointWindowPastTheSpawnDelay,
-                "\(file): the first assert_running at or after "
-                    + "PickupKind.medKit.tuning.firstSpawnDelay (\(firstSpawnDelay)s) lands at "
-                    + "\(tightCheckpoint)s past PLAY, outside the "
-                    + "\(firstSpawnDelay)-\(firstSpawnDelay + Self.checkpointWindowPastTheSpawnDelay)s "
-                    + "window that makes it a bisection checkpoint rather than an ordinary "
-                    + "liveness check. The journey already carried assert_running after each "
-                    + "screenshot (12s and 18s past PLAY), both at-or-after the delay, so "
-                    + "'a checkpoint exists somewhere later' passes vacuously and the tight "
-                    + "checkpoint could be deleted with the suite still green -- this window is "
-                    + "what actually binds it."
+
+            XCTAssertGreaterThanOrEqual(
+                firstScreenshotSeconds, firstSpawnDelay,
+                "\(file): the first gameplay screenshot lands \(firstScreenshotSeconds)s past "
+                    + "PLAY, before PickupKind.medKit.tuning.firstSpawnDelay "
+                    + "(\(firstSpawnDelay)s) can have fired -- that frame is an empty street, and "
+                    + "an empty street reads as \"feature missing\"."
+            )
+        }
+    }
+
+    /// `CYBERPUN-17-14` PR 1's own journey (`first-launch-playable.json`),
+    /// covering the story with no journey named in its `stories` --
+    /// otherwise product verification falls back to a launch-only capture
+    /// for gate 1, the same gap `test_aJourneyExistsForThisStorysCombatWork_...`
+    /// exists to close for `CYBERPUN-17-9`.
+    ///
+    /// Deliberately a lighter gate than the combat/pickup ones above: this
+    /// journey has no derived spawn-timing floor to bind on (its screenshots
+    /// are gated on reachability, not on a swarm/pickup having had time to
+    /// appear), so this test only pins the structural shape a "no journey at
+    /// all" or "navigate with nothing captured after it" regression would
+    /// break -- a real journey navigates into gameplay and then captures at
+    /// least one more frame.
+    func test_aJourneyExistsForCYBERPUN1714sFirstLaunchGate_andCapturesAfterNavigating() {
+        let journeys = loadJourneys()
+
+        let gateOneJourneys = journeys.filter { $0.stories.contains("CYBERPUN-17-14") }
+        XCTAssertFalse(
+            gateOneJourneys.isEmpty,
+            "No journey names CYBERPUN-17-14 in its \"stories\", so product verification has "
+                + "nothing to run for the first-launch-playable gate and falls back to a "
+                + "launch-only capture."
+        )
+
+        for journey in gateOneJourneys {
+            let file = journey.fileName
+
+            guard let navigateIndex = journey.steps.firstIndex(
+                where: { ($0["action"] as? String) == "navigate" }
+            ) else {
+                XCTFail("\(file): must navigate past the menu -- gate 1 is about reaching gameplay.")
+                continue
+            }
+
+            let screenshotsAfterNavigate = journey.steps
+                .dropFirst(navigateIndex + 1)
+                .filter { ($0["action"] as? String) == "screenshot" }
+
+            XCTAssertFalse(
+                screenshotsAfterNavigate.isEmpty,
+                "\(file): navigates but never screenshots afterwards, so nothing after the menu "
+                    + "is ever captured for gate 1's review."
             )
         }
     }
