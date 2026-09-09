@@ -4,34 +4,27 @@ import UIKit
 
 /// The HUD's cooldown button for the player-triggered pulse ability.
 ///
-/// **Naming note.** This type is `HUDPulseButton`, distinct from
-/// `Sources/UI/PulseButton.swift`'s `final class PulseButton`, which is a
-/// **live, wired production dependency** of `GameScene` (`CYBERPUN-17-10`'s
-/// bottom-left ability button -- see that file's doc comment and
-/// `GameScene.pulseButton`). Two top-level types named `PulseButton` in the
-/// same module would be a compile error, and this PR's own scope is
-/// explicitly "no scene wiring, no composition root" -- it cannot retire the
-/// old type's production call sites (that is a later PR's job, once the
-/// rest of this HUD is wired in). Reusing the class name here would either
-/// fail to compile or silently require touching `GameScene`, both outside
-/// this PR's stated scope, so this HUD element is named distinctly instead.
-/// This file is likewise named `HUDPulseButton.swift` (matching the type),
-/// not `PulseButton.swift` -- Swift's module-internal file-scoped
-/// declarations use the filename to disambiguate, so a target cannot
-/// contain two files sharing a basename regardless of the class names
-/// declared inside them. **This type is now the visible one.** PR #63's
-/// review decision (`CYBERPUN-17-12` PR 2) made this button's bottom-right
-/// slot -- the placement the ticket asks for, settling the old
+/// **Naming note (historical).** This type was named `HUDPulseButton`
+/// rather than `PulseButton` because, when it was introduced
+/// (`CYBERPUN-17-12` PR 1), `Sources/UI/PulseButton.swift`'s `final class
+/// PulseButton` -- `CYBERPUN-17-10`'s bottom-left ability button -- was
+/// still a live, wired production dependency of `GameScene`, and two
+/// top-level types (or two files) sharing that name in one module would not
+/// compile. **That older type no longer exists.** PR #63's review decision
+/// (`CYBERPUN-17-12` PR 2) made this button's bottom-right slot -- the
+/// placement the ticket asks for, settling the old
 /// bottom-left-vs-bottom-right note recorded on `CYBERPUN-17-10` -- the
-/// run's only visible ability control, and `GameScene` now hides the older
-/// `PulseButton` mount in every state. That older type is still
-/// constructed and wired to the same `handlePulsePress()`; *deleting* it
-/// once nothing references it is `CYBERPUN-17-14`'s work.
+/// run's only visible ability control, and `CYBERPUN-17-14` PR 1 then
+/// deleted `Sources/UI/PulseButton.swift`, its `layoutPulseButton()` mount
+/// and `GameScene.pulseButton` outright (see `GameScene.commonInit()`'s own
+/// note at the old mount site). This type is the run's one pulse button;
+/// the `HUD` prefix is now only a name, not a disambiguator.
 ///
 /// Construct + `update(cooldownFraction:isReady:)` only -- no positioning
 /// logic (`HUDLayout` owns where this mounts). Conforms to `TouchResponder`
-/// like every other interactive node in this codebase (`ButtonNode`, the
-/// old `PulseButton`): it never sets `isUserInteractionEnabled`, so
+/// like every other interactive node in this codebase (`ButtonNode`, and
+/// the since-deleted `PulseButton`): it never sets
+/// `isUserInteractionEnabled`, so
 /// `GameScene.nodesBypassingSceneTouchDispatch()` stays clean once this node
 /// is actually mounted.
 ///

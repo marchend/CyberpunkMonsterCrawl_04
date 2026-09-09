@@ -28,13 +28,25 @@ Re-read `GameScene.startNewRun()` (CYBERPUN-17-13 PR 3) and
    player actually walks through would not have changed.
    `RunVarietyTests.swift` (new, this PR) closes that gap directly:
    `test_consecutiveRunAgainInvocations_produceGenuinelyDifferentCityLayouts_notJustADifferentJunction`
-   classifies a real tile neighbourhood (13x13 tiles) around each run's own
-   spawn junction via `CityLatticeGenerator.classify` and asserts the
-   classification differs across 10 consecutive RUN AGAIN invocations, not
-   merely the junction coordinate. The existing junction-only claim is also
-   restated in the same file
-   (`test_consecutiveRunAgainInvocations_produceADifferentStartJunction_everyTime`)
-   so both halves of gate 6's wording live together.
+   fingerprints a real tile neighbourhood (13x13 tiles) around each run's
+   own spawn junction via `CityLatticeGenerator.classify` **plus every
+   building `BuildingPlacement.generate` places on the blocks that window
+   covers**, and asserts that **every consecutive pair** of 10 RUN AGAIN
+   runs differs -- not merely that some pair somewhere in the sequence
+   does (PR #67 review: gate 6's wording is "two consecutive RUN AGAIN
+   runs", and a "distinct count > 1" spelling would pass while runs 2-10
+   were byte-identical). The per-lot building selection is in the
+   fingerprint for a reason: `RunSpawnSelector.selectSpawnTile` always
+   returns `blockN * period + junctionCentreOffset`, so the street/lot
+   lattice *structure* of this window is invariant by construction and a
+   tile-kind-only signature would be both narrower than the gate's claim
+   and coarse enough for two genuinely different seeds to collide. The
+   existing junction-only claim is also restated in the same file
+   (`test_consecutiveRunAgainInvocations_doNotAllShareOneStartJunction`,
+   named for what it checks: a bounded candidate set makes two seeds
+   sharing one junction a rare but genuine outcome, so that one stays a
+   "not all the same" assertion) so both halves of gate 6's wording live
+   together.
 
 One deliberate accepted carve-out, unchanged by this PR and recorded
 before this story began (AGENT.md/CLAUDE.md's own `CYBERPUN-17-13` entry):
@@ -62,3 +74,18 @@ simulator run. A human (or the platform's runtime-probe pipeline) still
 needs to capture `gate-06-run-variety.png`: two consecutive RUN AGAIN runs,
 side by side, visibly showing a different city layout and a different
 starting junction.
+
+Probe coverage for that capture (PR #67 review)
+------------------------------------------------
+Gate 6 was previously the one gate whose runtime evidence was deferred with
+no owner -- no journey tagged `CYBERPUN-17-14` captured anything gate 6
+could be reviewed from, so the probe had nothing to execute for it on this
+story's closing PR. `.mothership/journeys/death-and-high-scores.json` (long
+since tagged `CYBERPUN-17-14` for gate 2, and the only journey in the tree
+that taps RUN AGAIN and drives a second full run) now takes a gameplay city
+frame in each of its two consecutive runs -- `gate-06-run-variety-run-1-city`
+right after PLAY and `gate-06-run-variety-run-2-city` right after the
+RUN AGAIN tap, both at the first gameplay frame of their own run so the
+camera sits on that run's own spawn junction in each. The outstanding
+literal capture above is now a side-by-side human/vision review of that
+pair, rather than work with no journey behind it.

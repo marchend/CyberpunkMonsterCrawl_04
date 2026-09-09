@@ -38,7 +38,10 @@ extensively tested by earlier stories (CYBERPUN-17-3, CYBERPUN-17-5):
    turns that prose claim into a checked fact: a linear storey-count
    estimate anchored at the two classes with an explicit count
    (`.lowest` ~1, `.tall` ~4) is computed from every `BuildingSprite`'s own
-   *measured/declared* pixel height, and every one of the 12 buildings --
+   `measuredPixelSize` -- the path that reads the shipped imageset and runs
+   the measured-vs-declared `precondition`, not the hand-typed
+   `declaredPixelSize` table (PR #67 review) -- and every one of the 12
+   buildings --
    `.large`'s `building_11` included -- estimates inside the 1-4 storey
    span (`building_11` measures 192px tall against `building_05`'s 240px
    `.tall` anchor, estimating to ~3.1 storeys: its "large" distinction is

@@ -18,6 +18,18 @@ named claims:
    window reaches a mounted `PickupNode` on the production scene-wiring
    path (`PickupIntegrationTests
    .test_pickupsAppearAsMountedPickupNodes_withinTheExpectedTimeWindow`).
+   The *visible* half of "visible in normal play" is a separate question
+   from the timing half (PR #67 review): `visibleRect` is only the
+   axis-aligned bounding box of the visible diamond, ~70% of which is off
+   camera at a phone viewport, so a spawn inside it is not yet a spawn the
+   player can see. `PickupVisibilityTests` (new, this PR) therefore drives
+   `PickupManager` with the production `isVisibleOnScreen` predicate --
+   `RaccoonSpawnDirector.isOnScreen(tile:cameraPosition:viewportSize:)`,
+   the closure `GameScene.commonInit()` hands over -- and
+   `test_everySpawnAgainstARealGeneratedCity_landsWhereTheCameraCanActuallySeeIt`
+   asserts every spawn against a real generated city is genuinely on
+   camera, alongside the existing scene-level
+   `PickupIntegrationTests.test_everyPickupMounted_spawnsWhereTheCameraCanSeeIt`.
    No offender found.
 
 2. Surviving a camera excursion: `Pickup.age` advances strictly by real
@@ -49,8 +61,15 @@ named claims:
    the same placement-validation logic against buildings `BuildingPlacement
    .generate` itself produces over a wide swept region, confirming across
    many spawn attempts that no pickup ever lands on or adjacent to a real
-   generated building. No offender found -- the fixture-driven coverage
-   generalizes correctly to real generated shapes.
+   generated building. That assertion's oracle is deliberately *not*
+   `BuildingObstruction.isObstructed(_:byAnyOf:)` (PR #67 review) -- using
+   the production predicate over the production records would prove only
+   that the neighbour loop ran, and a mis-derived `footprintTiles` would
+   read the same wrong set on both sides. The occupied-tile set is rebuilt
+   independently from each record's `lotTile` plus its catalog entry's
+   `footprintSize.tileSpan`, and asserted to agree with `footprintTiles`
+   outright. No offender found -- the fixture-driven coverage generalizes
+   correctly to real generated shapes, and the two derivations agree.
 
 Finding: no offender
 ---------------------

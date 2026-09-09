@@ -28,7 +28,7 @@ sitting next to where it should be.
 | 3 | Actors face and animate their movement -- all 8 facings, walk frames cycling | `gate-03-actor-facing-animation.txt`, `ActorFacingAnimationTests` | `gate-03-actor-facing-animation.mov` -- **not captured** | Audited, no offender |
 | 4 | The city reads as a city -- lattice, whole buildings spanning 1-4 storeys, rooftop signs, compared to the mock | `gate-04-city-read-audit.txt`, `CityReadComparisonTests` (new, PR 4), `CityLatticeGeneratorTests`, `ConnectivityTests`, `BuildingCatalogTests`, `RooftopSignPlacementTests`; `.mothership/journeys/menu-to-gameplay.json` **retagged this PR** (previously named only `CYBERPUN-17-5` -- the runtime probe had nothing to run for this gate at all) | `gate-04-city-read-portrait.png`, `gate-04-city-read-landscape.png` -- **not captured**; the five screen mocks were not available as files in this implementation step either, so no pixel-level side-by-side comparison against them was possible here | Audited, no offender; no accepted deviation needed (see gate-04 trace) |
 | 5 | Pickups visible in normal play -- first spawn within the window, surviving a camera excursion, icons legible, never on/adjacent to a building | `gate-05-pickup-visibility-audit.txt`, `PickupVisibilityTests` (new, PR 4), `PickupManagerTests`, `PickupIntegrationTests`; `.mothership/journeys/pickup-spawn.json` **retagged this PR** (previously named only `CYBERPUN-17-11`) | `gate-05-pickups-visible.mov` -- **not captured** | Audited, no offender |
-| 6 | Every run differs -- two consecutive RUN AGAIN runs with different cities and start junctions | `gate-06-run-variety-audit.txt`, `RunVarietyTests` (new, PR 4), `GameStateMachineTests` | `gate-06-run-variety.png` -- **not captured**; no existing journey drives two consecutive RUN AGAIN captures side by side (out of this PR's scope -- authoring a new journey was not in this PR's file list) | Audited, no offender for RUN AGAIN; **accepted carve-out, still not human-accepted** (see below) |
+| 6 | Every run differs -- two consecutive RUN AGAIN runs with different cities and start junctions | `gate-06-run-variety-audit.txt`, `RunVarietyTests` (new, PR 4), `GameStateMachineTests`; `.mothership/journeys/death-and-high-scores.json` (already tagged `CYBERPUN-17-14` for gate 2) now takes a **city frame in each of its two consecutive runs** -- `gate-06-run-variety-run-1-city` right after PLAY and `gate-06-run-variety-run-2-city` right after the RUN AGAIN tap, added on PR #67 review | `gate-06-run-variety.png` -- **not captured**; the two journey frames above are what the runtime probe now produces for this gate, and the outstanding literal capture is a human/probe review of that pair side by side | Audited, no offender for RUN AGAIN; **accepted carve-out, still not human-accepted** (see below) |
 | 7 | No scaffolding ships -- grep for `// SCAFFOLDING:` returns nothing | `gate-07-scaffolding-grep-output.txt` (a real, reproducible zero-match grep log), `ScaffoldingRemovalTests` (the same scan, made permanent) | N/A -- a grep log *is* the literal evidence this gate asks for | **Met** |
 | 8 | The pulse works and is visible -- ring drawn, raccoons mid-shove, a raccoon pinned against a building | `gate-08-pulse-audit.txt`, `PulseAbilityTests`, `PulseSceneWiringTests`, `PulseRingNodeTests`; `.mothership/journeys/pulse-ability.json` **retagged this PR** (previously named only `CYBERPUN-17-10` -- the runtime probe had nothing to run for this gate at all) | `gate-08-pulse.png` -- **not captured**; even once run, that journey's own text records it cannot reliably catch the ring/mid-shove/pin frames (no raccoon guaranteed in range, ring's play window shorter than screenshot round-trip latency) -- a genuine capture needs a raccoon in range near a building at press time, which no journey in the tree currently stages | Audited, no offender; two pre-existing outstanding items unrelated to the visual claim (see below) |
 | 9 | Pixel art crisp on `@2x` and `@3x` | `gate-09-pixel-crispness-sweep.txt`, `PixelCrispnessSweepTests` | `gate-09-pixel-crispness-2x.png`, `gate-09-pixel-crispness-3x.png` -- **not captured** | Audited; one real defect found and fixed (PR 3, `PickupNode` texture filtering); three named accepted exceptions (see below) |
@@ -57,6 +57,29 @@ already covers every journey tagged `CYBERPUN-17-14` (all three retagged
 journeys navigate then screenshot afterward, so this gate continues to
 pass), and `test_everyJourney_carriesTheFieldsTheProbeAndTheReviewerBothNeed`
 covers the retagged files' structural shape unconditionally.
+
+**Gate 6 had the same defect and is fixed the same way (PR #67 review).**
+It was the one gate in the table above deferred with a reason that pointed
+at this PR itself ("authoring a new journey was not in this PR's file
+list") -- a deferral with no owner, on the story's closing PR. It needed no
+new journey: `death-and-high-scores.json` already carries the
+`CYBERPUN-17-14` tag (for gate 2) and is the only journey in the tree that
+taps RUN AGAIN and drives a second full run, but every frame it captured
+was a death screen or the high-scores table, so the probe still produced
+nothing gate 6 could be reviewed from. It now takes one gameplay city frame
+in each of its two consecutive runs -- `gate-06-run-variety-run-1-city`
+immediately after PLAY and `gate-06-run-variety-run-2-city` immediately
+after the RUN AGAIN tap, both at the same moment of their own run (the
+first gameplay frame, camera on that run's own spawn junction) so the
+comparison is like-for-like. That journey's own `"demonstrates"` text now
+states what the pair is reviewed for (a visibly different city and starting
+junction; two identical frames *are* the gate-6 failure) and what it cannot
+show (the seed value, hence not "every future run differs" -- that half
+stays with `RunVarietyTests`/`GameStateMachineTests`). Both new steps sit
+before the journey's existing floor waits, so
+`test_theDeathJourneysWaitForElementSteps_areBackstoppedByADerivedFloorWait`
+still sees the same contiguous `wait` runs immediately preceding each
+`wait_for_element`.
 
 ## Why no `.mov`/`.png`/`.jpg` is fabricated here
 

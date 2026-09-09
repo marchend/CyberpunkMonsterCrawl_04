@@ -35,21 +35,32 @@ final class CityReadComparisonTests: XCTestCase {
     /// height-class table names by an explicit storey count: `.lowest`
     /// ("~1 storey", `building_10`) and `.tall` ("~4 storey", `building_05`).
     /// A linear fit between those two anchors turns every other class's
-    /// declared pixel height into an estimated storey count without
-    /// inventing a new measured constant -- the same "derive from
-    /// measured/declared facts, never invent a number" discipline this
-    /// codebase applies throughout
+    /// pixel height into an estimated storey count without inventing a new
+    /// measured constant -- the same "derive from measured facts, never
+    /// invent a number" discipline this codebase applies throughout
     /// (`BuildingSpriteBaseAlignmentTests`/`RooftopSignSpriteAlignmentTests`).
-    private static func estimatedStoreys(forDeclaredHeight height: CGFloat) -> Double {
-        let lowestHeight = BuildingSprite.building10.declaredPixelSize.height // .lowest, ~1 storey
-        let tallHeight = BuildingSprite.building05.declaredPixelSize.height // .tall, ~4 storey
+    ///
+    /// Every height here comes from `measuredPixelSize`, never
+    /// `declaredPixelSize` (PR #67 review). `declaredPixelSize` is
+    /// explicitly the hand-typed story table -- asserting over it would make
+    /// this file a self-consistency check on a Swift literal that stays
+    /// green if the art were re-exported at a different height, and gate 4's
+    /// "1-4 storeys" claim would be table-inferred rather than
+    /// evidence-backed. `measuredPixelSize` reads the shipped imageset and
+    /// runs `BuildingSprite`'s own measured-vs-declared `precondition` on
+    /// the way through, so these assertions touch the actual bytes -- the
+    /// convention `BuildingSpriteTests`/`BuildingCatalogTests` already use
+    /// whenever a fact about the art is asserted.
+    private static func estimatedStoreys(forMeasuredHeight height: CGFloat) -> Double {
+        let lowestHeight = BuildingSprite.building10.measuredPixelSize.height // .lowest, ~1 storey
+        let tallHeight = BuildingSprite.building05.measuredPixelSize.height // .tall, ~4 storey
         let heightPerStorey = (tallHeight - lowestHeight) / 3
         return 1 + Double((height - lowestHeight) / heightPerStorey)
     }
 
     func test_everyBuilding_estimatesWithinTheOneToFourStoreySpanTheGateNames() {
         for sprite in BuildingSprite.allCases {
-            let storeys = Self.estimatedStoreys(forDeclaredHeight: sprite.declaredPixelSize.height)
+            let storeys = Self.estimatedStoreys(forMeasuredHeight: sprite.measuredPixelSize.height)
             XCTAssertTrue(
                 (0.5...4.5).contains(storeys),
                 "\(sprite.imageID) (\(sprite.heightClass)) estimates to \(storeys) storeys, outside gate 4's "
@@ -59,11 +70,15 @@ final class CityReadComparisonTests: XCTestCase {
         }
     }
 
-    func test_heightClassesAreOrderedByDeclaredHeight_lowestToTall() {
-        let lowest = BuildingSprite.building10.declaredPixelSize.height
-        let low = BuildingSprite.building00.declaredPixelSize.height
-        let mid = BuildingSprite.building06.declaredPixelSize.height
-        let tall = BuildingSprite.building05.declaredPixelSize.height
+    /// Ordered by *measured* height for the same reason the estimate above
+    /// is: a class ordering read off the hand-typed table proves only that
+    /// the table is internally consistent, while the shipped art is what a
+    /// player reads as "shorter" or "taller".
+    func test_heightClassesAreOrderedByMeasuredHeight_lowestToTall() {
+        let lowest = BuildingSprite.building10.measuredPixelSize.height
+        let low = BuildingSprite.building00.measuredPixelSize.height
+        let mid = BuildingSprite.building06.measuredPixelSize.height
+        let tall = BuildingSprite.building05.measuredPixelSize.height
 
         XCTAssertLessThan(lowest, low, ".lowest must read visually shorter than .low")
         XCTAssertLessThan(low, mid, ".low must read visually shorter than .mid")
