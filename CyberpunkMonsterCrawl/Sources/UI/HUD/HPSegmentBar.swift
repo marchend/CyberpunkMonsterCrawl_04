@@ -14,7 +14,7 @@ import UIKit
 /// reads as part of the same worn plate instead of a hole punched out of it.
 /// Thin gaps (`segmentSpacing`) between segments read as the plate's own
 /// grime/wear lines rather than smooth, continuous fill.
-final class HPSegmentBar: SKNode {
+final class HPSegmentBar: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Tunables
 
@@ -55,8 +55,16 @@ final class HPSegmentBar: SKNode {
         plate.name = "hpSegmentBar.plate"
 
         // Deliberately **not** an accessibility element -- on this node
-        // *and* on every drawn child of it, which is the part that
-        // actually binds.
+        // *and* on every drawn child of it.
+        //
+        // What actually binds is this type's `AccessibilityOpaqueNode`
+        // conformance (see the declaration above): `GameScene`'s walk skips
+        // a conformer's whole subtree without consulting any descendant's
+        // flag. These assignments are the second line of defence, kept
+        // because they state the intent at the node itself -- and kept
+        // *only* as that, because setting them was measured **not** to be
+        // sufficient: SpriteKit published the HUD's visible `SKLabelNode`s
+        // anyway (the measurement is recorded on `AccessibilityOpaqueNode`).
         //
         // `GameScene.accessibleUINodes()` walks `uiLayer` and *descends*
         // through any node that does not opt in, so leaving the plate and

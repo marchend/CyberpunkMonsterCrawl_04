@@ -4,7 +4,7 @@ import UIKit
 
 /// Kill counter: construct + `update(kills:)` only -- no positioning logic
 /// (`HUDLayout` owns where this mounts).
-final class KillCountLabel: SKNode {
+final class KillCountLabel: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Nodes
 

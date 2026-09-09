@@ -14,7 +14,7 @@ import UIKit
 /// if that ever flipped, but the explicit set-to-`false` here is what makes
 /// "this banner cannot ever swallow a touch" a stated fact of this file
 /// rather than a property of whatever the graph-wide default happens to be.
-final class SwarmBanner: SKNode {
+final class SwarmBanner: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Tunables
 

@@ -5,7 +5,7 @@ import UIKit
 /// Level label + XP fill bar: construct + `update(level:currentXP:
 /// xpForNextLevel:)` only -- no positioning logic (`HUDLayout` owns where
 /// this mounts).
-final class LevelXPBar: SKNode {
+final class LevelXPBar: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Tunables
 

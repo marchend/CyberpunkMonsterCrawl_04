@@ -1548,17 +1548,21 @@ final class GameScene: SKScene {
     ///
     /// **The in-run HUD (`CYBERPUN-17-12`) publishes exactly one element**,
     /// its `HUDPulseButton`. Because this walk *descends* through anything
-    /// that has not opted in, the five passive elements
-    /// (`HPSegmentBar`, `LevelXPBar`, `RunTimerLabel`, `KillCountLabel`,
-    /// `SwarmBanner`) and every drawn child of theirs set
-    /// `isAccessibilityElement = false` explicitly -- the same deliberate
-    /// opt-out `FloatingThumbstickNode` documents at length, and for the
-    /// same reason: a published element becomes a real, interactive mirror
-    /// that wins UIKit's hit test for its rect, and the HP and level/XP
-    /// bars sit inside the floating stick's touch-acceptance box.
+    /// that has not opted in, the five passive elements (`HPSegmentBar`,
+    /// `LevelXPBar`, `RunTimerLabel`, `KillCountLabel`, `SwarmBanner`)
+    /// declare their whole subtrees opaque by conforming to
+    /// `AccessibilityOpaqueNode`, and this walk skips a conformer outright.
+    /// A per-node `isAccessibilityElement = false` on each of them was
+    /// tried first and measured *not* to hold: SpriteKit still published
+    /// the three visible `SKLabelNode`s inside them (see that protocol's
+    /// own doc comment for the measurement). The subtree rule never
+    /// consults a descendant's flag, so no per-class default and no later
+    /// text mutation can reintroduce an interactive mirror over a passive
+    /// read-out -- which matters most for the HP and level/XP bars, sitting
+    /// inside the floating stick's touch-acceptance box.
     /// `AccessibleSKViewTests.test_duringARun_theHUDPublishesOnlyItsPulseButton`
-    /// pins that set during a real run rather than leaving it to whatever
-    /// SpriteKit's per-class defaults happen to be.
+    /// pins the published set during a real run rather than leaving it to
+    /// whatever SpriteKit's per-class defaults happen to be.
     func accessibleUINodes() -> [SKNode] {
         var accessible: [SKNode] = []
         collectAccessibleNodes(under: uiLayer, into: &accessible)
@@ -1571,6 +1575,15 @@ final class GameScene: SKScene {
             // hiding a parent hides everything under it, so its descendants
             // are equally unreachable by `atPoint(_:)`.
             guard isVisibleToTouchRouting(child) else { continue }
+            // A node that declares its whole subtree accessibility-opaque
+            // publishes nothing at all - itself included - so neither it
+            // nor any descendant is considered. This is the deliberate
+            // opt-out for a passive read-out (the HUD's five non-button
+            // elements), and it is a *subtree* rule rather than a per-node
+            // flag because an explicit `isAccessibilityElement = false` on
+            // each drawn child was measured not to hold for `SKLabelNode`
+            // (see `AccessibilityOpaqueNode`).
+            if child is AccessibilityOpaqueNode { continue }
             if child.isAccessibilityElement {
                 // An accessibility element is a **leaf**, so its subtree is
                 // not walked. That is UIKit's own rule

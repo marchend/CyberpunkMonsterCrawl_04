@@ -4,7 +4,7 @@ import UIKit
 
 /// Elapsed-run-time label: construct + `update(elapsedSeconds:)` only -- no
 /// positioning logic (`HUDLayout` owns where this mounts).
-final class RunTimerLabel: SKNode {
+final class RunTimerLabel: SKNode, AccessibilityOpaqueNode {
 
     // MARK: - Nodes
 

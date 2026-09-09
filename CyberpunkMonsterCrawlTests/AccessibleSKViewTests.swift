@@ -344,6 +344,45 @@ final class AccessibleSKViewTests: XCTestCase {
         XCTAssertFalse(identifiers.contains("menu.childOfHiddenContainer"))
     }
 
+    /// The deliberate opt-out a passive read-out uses
+    /// (`AccessibilityOpaqueNode`) is a **subtree** rule, not a per-node
+    /// flag: the walk must not consult a descendant's
+    /// `isAccessibilityElement` at all inside a conformer. That is what
+    /// makes it total where the per-node flag was not -- setting
+    /// `isAccessibilityElement = false` on the HUD's own label children was
+    /// measured not to hold (SpriteKit published them anyway), so the
+    /// strongest thing the walk can offer is to stop descending. A child
+    /// that explicitly opts *in* is the hardest case, so that is the one
+    /// asserted here.
+    func test_accessibleUINodes_skipsAnOpaqueSubtree_evenWhenAChildOptsIn() {
+        final class OpaqueContainer: SKNode, AccessibilityOpaqueNode {}
+
+        let scene = makeMenuScene()
+
+        let opaque = OpaqueContainer()
+        opaque.isAccessibilityElement = true
+        opaque.accessibilityIdentifier = "menu.opaqueContainer"
+        let child = SKSpriteNode(color: .white, size: CGSize(width: 40, height: 20))
+        child.isAccessibilityElement = true
+        child.accessibilityIdentifier = "menu.childOfOpaqueContainer"
+        opaque.addChild(child)
+        scene.uiLayer.addChild(opaque)
+
+        let published = scene.accessibleUINodes()
+        let identifiers = Set(published.compactMap(\.accessibilityIdentifier))
+
+        XCTAssertFalse(
+            identifiers.contains("menu.opaqueContainer"),
+            "an accessibility-opaque node must not publish itself, even with the flag set"
+        )
+        XCTAssertFalse(
+            identifiers.contains("menu.childOfOpaqueContainer"),
+            "an accessibility-opaque node must not publish a descendant that opts in either"
+        )
+        XCTAssertFalse(published.contains { $0 === opaque || $0.inParentHierarchy(opaque) })
+        XCTAssertTrue(identifiers.contains("menu.playButton"), "the real buttons must be unaffected")
+    }
+
     func test_accessibleUINodes_followsTheActiveScreen_soAFrameCannotGoStale() {
         let scene = makeMenuScene()
         XCTAssertTrue(scene.stateMachine.transition(to: .highScores))
