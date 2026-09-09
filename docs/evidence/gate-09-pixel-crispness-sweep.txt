@@ -105,10 +105,13 @@ whether or not the factory did the stamping itself. `PickupNode` now
 exposes a `resetTextureCacheForTesting()` test seam (the same role
 `AccessibleSKView.resetForTesting()` documents), which that test calls per
 kind, so it goes red if the two lines in `PickupNode.texture(forColumn:)`
-are deleted. The premise underneath the whole finding -- that a rect crop
-does NOT inherit the sheet texture's filtering -- is now pinned directly
+are deleted. The premise underneath the whole finding was pinned directly
 too, on a raw `AtlasSheet.pickups.sheet.texture(col:row:)` crop
-(`test_aRawSheetCrop_doesNotInheritTheSheetsFiltering_...`).
+(`test_aRawSheetCrop_carriesTheSheetsNearestFiltering_measuredNotAssumed`)
+-- and, as the correction at the top of this section records, measuring it
+FALSIFIED it: the crop does carry the sheet's `.nearest`/no-mipmap
+settings across. That is why this section reports a consistency deviation
+rather than a live blur.
 
 Scale: two known non-integer magnifications, accepted by the story;
 everything else integer
