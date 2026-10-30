@@ -60,27 +60,73 @@ final class GroundTileRendererTests: XCTestCase {
         XCTAssertEqual(GroundTileRenderer.groundTileKind(for: .asphalt, at: coordinate), .asphaltEastWest)
     }
 
+    /// Locates a straight north-south corridor whose *two* flanking block
+    /// interiors both classify as `blockKind`, returning the corridor's
+    /// west-edge tile X plus a tile Y inside those two blocks' interior
+    /// rows.
+    ///
+    /// CYBERPUN-17-22: a corridor edge kerbs only the one block interior it
+    /// actually borders, so what a cross-section reads depends on what
+    /// those two specific blocks hold under the seed. Searching the lattice
+    /// for a corridor the generator really reports as flanked by
+    /// `blockKind` keeps the test fully deterministic (same seed, same
+    /// scan order, same answer) while pinning the *generator's* behaviour
+    /// rather than a hand-picked coordinate that happens to agree with it.
+    private func corridorFlanked(
+        byBlocksOfKind blockKind: TileKind,
+        seed: WorldSeed
+    ) -> (westEdgeX: Int, tileY: Int)? {
+        let period = CityLatticeGenerator.period
+        for blockY in -16..<16 {
+            for blockX in -32..<32 {
+                // Local (0, 0) of each block: both mods < blockSize, so
+                // `classify` reports the block interior's own kind.
+                let tileY = blockY * period
+                let westBlock = CityLatticeGenerator.classify(tileX: blockX * period, tileY: tileY, seed: seed)
+                let eastBlock = CityLatticeGenerator.classify(tileX: (blockX + 1) * period, tileY: tileY, seed: seed)
+                guard westBlock.kind == blockKind, eastBlock.kind == blockKind else { continue }
+                // The street band between the two: xMod 3/4/5 = west edge,
+                // centre lane, east edge; yMod 0 keeps that axis a block
+                // interior, so this is a straight corridor's cross-section.
+                return (blockX * period + CityLatticeGenerator.blockSize, tileY)
+            }
+        }
+        return nil
+    }
+
     /// AC: the 3-tile street reads as asphalt between sidewalks/kerbs —
     /// three distinct ground kinds/rects, not a single merged "street"
     /// sprite. Uses `CityLatticeGenerator.classify` to source real
     /// `TileKind`s for a genuine street cross-section rather than
     /// hand-picked kinds that might not reflect what the generator emits.
-    func test_threeTileStreetCrossSection_reads_asphaltFlankedBySidewalks() {
+    ///
+    /// Taken beside blocks the generator reports as `.buildingFootprint`,
+    /// because that is the case with a building edge to kerb.
+    func test_threeTileStreetCrossSection_besideBuiltBlocks_readsAsphaltFlankedBySidewalks() {
         let seed = WorldSeed(rawValue: 42)
-        // x = 3, 4, 5 at y = 0: xMod 3/4/5 are the street band's edge,
-        // centre lane, edge; yMod 0 keeps this axis a block interior, so
-        // this is a straight north-south corridor's width cross-section.
-        let west = CityLatticeGenerator.classify(tileX: 3, tileY: 0, seed: seed)
-        let centre = CityLatticeGenerator.classify(tileX: 4, tileY: 0, seed: seed)
-        let east = CityLatticeGenerator.classify(tileX: 5, tileY: 0, seed: seed)
+        guard let corridor = corridorFlanked(byBlocksOfKind: .buildingFootprint, seed: seed) else {
+            return XCTFail("No corridor flanked by two building blocks in the scanned region under seed 42.")
+        }
+        let westX = corridor.westEdgeX
+        let tileY = corridor.tileY
+
+        let west = CityLatticeGenerator.classify(tileX: westX, tileY: tileY, seed: seed)
+        let centre = CityLatticeGenerator.classify(tileX: westX + 1, tileY: tileY, seed: seed)
+        let east = CityLatticeGenerator.classify(tileX: westX + 2, tileY: tileY, seed: seed)
 
         XCTAssertEqual(west.kind, .kerbSidewalk)
         XCTAssertEqual(centre.kind, .asphalt)
         XCTAssertEqual(east.kind, .kerbSidewalk)
 
-        let westGroundKind = GroundTileRenderer.groundTileKind(for: west.kind, at: TileCoordinate(tileX: 3, tileY: 0))
-        let centreGroundKind = GroundTileRenderer.groundTileKind(for: centre.kind, at: TileCoordinate(tileX: 4, tileY: 0))
-        let eastGroundKind = GroundTileRenderer.groundTileKind(for: east.kind, at: TileCoordinate(tileX: 5, tileY: 0))
+        let westGroundKind = GroundTileRenderer.groundTileKind(
+            for: west.kind, at: TileCoordinate(tileX: westX, tileY: tileY)
+        )
+        let centreGroundKind = GroundTileRenderer.groundTileKind(
+            for: centre.kind, at: TileCoordinate(tileX: westX + 1, tileY: tileY)
+        )
+        let eastGroundKind = GroundTileRenderer.groundTileKind(
+            for: east.kind, at: TileCoordinate(tileX: westX + 2, tileY: tileY)
+        )
 
         XCTAssertEqual(westGroundKind, .kerbSidewalk)
         XCTAssertEqual(eastGroundKind, .kerbSidewalk)
@@ -92,6 +138,44 @@ final class GroundTileRendererTests: XCTestCase {
 
         XCTAssertEqual(westRect, eastRect, "Both kerb edges of one corridor must share the same texture.")
         XCTAssertNotEqual(westRect, centreRect, "The lane must render as a texture distinct from its flanking kerbs.")
+    }
+
+    /// CYBERPUN-17-22, the sibling case: a corridor between two empty lots
+    /// has no building edge to kerb on either side, so its cross-section
+    /// reads as three tiles of unbroken lane asphalt — one texture across
+    /// the full width, with no kerb crop anywhere in it.
+    func test_threeTileStreetCrossSection_besideEmptyLots_readsAsUnbrokenAsphalt() {
+        let seed = WorldSeed(rawValue: 42)
+        guard let corridor = corridorFlanked(byBlocksOfKind: .lot, seed: seed) else {
+            return XCTFail("No corridor flanked by two empty lots in the scanned region under seed 42.")
+        }
+        let westX = corridor.westEdgeX
+        let tileY = corridor.tileY
+
+        let crossSection = (0..<3).map { offset in
+            CityLatticeGenerator.classify(tileX: westX + offset, tileY: tileY, seed: seed)
+        }
+        for (offset, info) in crossSection.enumerated() {
+            XCTAssertEqual(
+                info.kind, .asphalt,
+                "(\(westX + offset), \(tileY)) borders an empty lot, so it has nothing to kerb."
+            )
+        }
+
+        let groundKinds = crossSection.enumerated().map { offset, info in
+            GroundTileRenderer.groundTileKind(for: info.kind, at: TileCoordinate(tileX: westX + offset, tileY: tileY))
+        }
+        XCTAssertEqual(
+            groundKinds, [.asphaltNorthSouth, .asphaltNorthSouth, .asphaltNorthSouth],
+            "A lot-flanked corridor must render as its north-south lane across its full 3-tile width."
+        )
+
+        let rects = groundKinds.map { GroundTileCatalog.pixelRect(for: $0) }
+        let kerbRect = GroundTileCatalog.pixelRect(for: .kerbSidewalk)
+        for rect in rects {
+            XCTAssertNotEqual(rect, kerbRect, "No kerb texture may be drawn where there is no building to kerb.")
+        }
+        XCTAssertEqual(Set(rects.map(\.debugDescription)).count, 1, "The lot-flanked width must be one texture.")
     }
 
     // MARK: - Pixel crispness sweep (AC5)

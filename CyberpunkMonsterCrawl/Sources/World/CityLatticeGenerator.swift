@@ -46,6 +46,11 @@ struct TileInfo: Equatable {
 /// - A block interior tile's fate (`.lot` vs `.buildingFootprint`) is
 ///   decided once *per block* (not per tile) via `SeedMixer`, so every
 ///   tile inside one block interior agrees.
+/// - A street tile's *sub-kind* at a band edge follows the block it
+///   borders (`CYBERPUN-17-22`): an edge beside a built block kerbs it as
+///   `.kerbSidewalk`, an edge beside an empty `.lot` has nothing to kerb
+///   and stays `.asphalt`. Street-ness itself is never seed-driven, so
+///   this changes what an edge *reads* as, never whether it is street.
 enum CityLatticeGenerator {
     /// Tiles per repeating period, along each axis: a 3-tile building
     /// block plus the 3-tile street corridor that rings it.
@@ -113,7 +118,11 @@ enum CityLatticeGenerator {
     /// which tiles are street at all, and the lane/stop-line/corner
     /// layout within a crossing \u2014 remain 100% seed-independent, which is
     /// what guarantees the intersection rule and the lattice's
-    /// seed-independent connectivity.
+    /// seed-independent connectivity. (A corner/edge tile's *kind* is not
+    /// part of that structural layout: which of a crossing's nine
+    /// positions is a corner never changes, but whether a given corner
+    /// reads as `.kerbSidewalk` or `.asphalt` follows the one block
+    /// interior it borders.)
     private static func streetTileKind(
         tileX: Int, tileY: Int, xMod: Int, yMod: Int, isStreetX: Bool, isStreetY: Bool, seed: WorldSeed
     ) -> TileKind {

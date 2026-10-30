@@ -191,8 +191,11 @@ final class CityLatticeGeneratorTests: XCTestCase {
             }
         }
 
-        XCTAssertTrue(sawLotRing, "Test fixture sampled no empty-lot block \u2014 strengthen the seed/range")
-        XCTAssertTrue(sawBuildingRing, "Test fixture sampled no building-footprint block \u2014 strengthen the seed/range")
+        XCTAssertTrue(sawLotRing, "Test fixture sampled no empty-lot block - strengthen the seed/range")
+        XCTAssertTrue(
+            sawBuildingRing,
+            "Test fixture sampled no building-footprint block - strengthen the seed/range"
+        )
     }
 
     // MARK: - AC6: ~1-in-4 blocks are empty lots

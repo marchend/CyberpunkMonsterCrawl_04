@@ -115,7 +115,8 @@ enum GroundTileKind: CaseIterable {
 ///   carry junction paint is not this file's decision at all —
 ///   `CityLatticeGenerator.streetTileKind` already pins it (the four lane
 ///   *mouths* of a 3x3 crossing are `.junctionStopLine`, the centre is plain
-///   `.asphalt`, the four corners continue the `kerbSidewalk` ring). This
+///   `.asphalt`, and each corner continues the `kerbSidewalk` ring only
+///   where the block interior it borders is built). This
 ///   catalog only names the art for a kind the lattice has already decided;
 ///   moving junction paint onto the crossing centre would mean changing the
 ///   lattice, not the crop table. See `GroundTileRenderer
