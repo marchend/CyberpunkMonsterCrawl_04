@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// Pure tile\u2194radar mapping/scale/classification math for the minimap radar
+/// Pure tile<->radar mapping/scale/classification math for the minimap radar
 /// (`CYBERPUN-17-23`). No SpriteKit dependency and no scene construction --
 /// every function here is a closed-form transform of plain numbers, so
 /// `RadarGeometryTests` can prove the two product-critical facts (AC9's
@@ -25,8 +25,28 @@ enum RadarGeometry {
     /// world the radar shows, since nothing about the world itself changed.
     private static let fieldOfViewMultiplier: CGFloat = 2.5
 
-    /// The radar's world-to-radar scale factor for a scene of `sceneSize`:
-    /// `110 / (2.5 * max(width, height))`.
+    /// The radar's scale factor for a scene of `sceneSize`, in **radar
+    /// points per tile** -- the unit `radarPoint(forTileOffset:scale:)`
+    /// consumes, where `scale` stands in for
+    /// `IsometricProjection.tileHalfWidth`:
+    /// `48 * 110 / (2.5 * max(width, height))`.
+    ///
+    /// The `tileHalfWidth` factor is what converts the dimensionless
+    /// "radar points per world *screen* point" ratio
+    /// `110 / (2.5 * max(w, h))` into points *per tile*. Without it the
+    /// two functions disagree by exactly `tileHalfWidth` (48x), and the
+    /// dial would show ~2,100 tiles across instead of the ~44 the field of
+    /// view below describes -- every backdrop pixel sampling a different
+    /// distant tile, i.e. noise. `RadarGeometryTests` pins the composition
+    /// end to end (not just each function against its own formula), so the
+    /// two units cannot drift apart again silently.
+    ///
+    /// The field of view that produces: for a 390x844 device the scale is
+    /// `48 * 110 / (2.5 * 844) ~= 2.5` pt/tile, so the content square's
+    /// +/-55pt half-extent spans +/-22 tiles of `(dx - dy)`, which
+    /// `IsometricProjection.tileToScreen` places `22 * 48 ~= 1055` world
+    /// points out -- `2.5 * 844` world points across the dial, exactly the
+    /// documented "2.5x the device's longer screen dimension".
     ///
     /// Keyed off `max(width, height)` (not width alone, not height alone,
     /// not some combination of both) specifically so a portrait and a
@@ -37,7 +57,8 @@ enum RadarGeometry {
     static func radarScale(for sceneSize: CGSize) -> CGFloat {
         let maxDimension = max(sceneSize.width, sceneSize.height)
         guard maxDimension > 0 else { return 0 }
-        return contentSquareSize / (fieldOfViewMultiplier * maxDimension)
+        let tileHalfWidth = CGFloat(IsometricProjection.tileHalfWidth)
+        return tileHalfWidth * contentSquareSize / (fieldOfViewMultiplier * maxDimension)
     }
 
     /// Maps a tile-space offset (relative to the radar's own centre --

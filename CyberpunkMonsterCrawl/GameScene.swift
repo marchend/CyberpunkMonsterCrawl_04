@@ -1943,10 +1943,18 @@ extension GameScene: HUDRunModel {
 
     // MARK: - Radar live data (`CYBERPUN-17-23`)
 
-    /// Reuses `raccoonSpawnDirector.targetCandidates` -- the identical
-    /// per-frame snapshot `advanceMovementAndCamera(currentTime:)` already
-    /// feeds to `playerCombat`/`applyPulseTrigger(raccoons:)` -- so the
-    /// radar introduces no second traversal of the live swarm.
+    /// Reuses `raccoonSpawnDirector.targetCandidates` -- the same snapshot
+    /// shape `advanceMovementAndCamera(currentTime:)` already feeds to
+    /// `playerCombat`/`applyPulseTrigger(raccoons:)` -- rather than
+    /// building a second representation of the swarm for the radar.
+    ///
+    /// Not a free read, though: `targetCandidates` is *computed* (a fresh
+    /// `map` over `activeRaccoons` every access), so a radar reading this
+    /// each frame is a real second traversal plus allocation on top of
+    /// the combat one. Bounded by `maxConcurrentSwarmSize` (40), hence
+    /// cheap -- but if a third consumer ever appears, cache this frame's
+    /// snapshot in `advanceMovementAndCamera` and have all of them read
+    /// the cached array instead.
     var radarRaccoonCandidates: [TargetSelection.Candidate] { raccoonSpawnDirector.targetCandidates }
 
     /// `pickupManager.activePickups` filtered to live, uncollected med

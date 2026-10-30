@@ -14,9 +14,10 @@ import UIKit
 ///   alone cannot see a chunk's *placed* buildings, since those are a
 ///   `ChunkGenerator`-level decision layered on top of the lattice, not one
 ///   of `classify`'s own three inputs).
-/// - `makeBackdropTexture(playerTile:seed:buildingRecords:scale:)`
-///   rasterizes that predicate into a small `SKTexture` sized to
-///   `RadarGeometry`'s 110x110 content square.
+/// - `makeBackdropTexture(playerTile:seed:buildingRecords:scale:
+///   deviceScale:)` rasterizes that predicate into a small `SKTexture`
+///   sized to `RadarGeometry`'s 110x110 content square, at the device's
+///   own pixel density.
 ///
 /// **Scope of this PR (`CYBERPUN-17-23-t1`):** the pure classification plus
 /// the texture builder only -- no SpriteKit *node* mounts this texture yet
@@ -24,10 +25,47 @@ import UIKit
 /// later PR" split `ChunkStreamingManager`/`GroundPlaneStreamer` and
 /// `RaccoonSpawnDirector`/`RaccoonNode` already follow in this codebase).
 enum RadarBackdropRenderer {
-    /// Pixel dimensions of the rendered backdrop image -- matches
-    /// `RadarGeometry.contentSquareSize` 1:1, so the resulting texture can
-    /// be drawn centred on the radar's own centre with no further scaling.
-    static let contentSquarePixelSize = Int(RadarGeometry.contentSquareSize)
+    /// Pixel dimensions of the rendered backdrop image at `deviceScale`.
+    ///
+    /// The dial is `RadarGeometry.contentSquareSize` **points** across, so
+    /// the bitmap is that many *device pixels*: 110 at `@1x`, 220 at
+    /// `@2x`, 330 at `@3x`. Rasterizing at a fixed 110 px for a 110 pt
+    /// dial would hand the compositor a texture it has to upscale 2-3x on
+    /// every shipping device -- exactly the blur `PixelCrispness` and this
+    /// codebase's pixel-crispness evidence gate exist to prevent -- so the
+    /// mounting PR sizes the sprite back down to 110 pt and the texture
+    /// lands 1:1 on the device's own pixel grid.
+    ///
+    /// `deviceScale` is floored at `1`, the same headless (view-less)
+    /// fallback `PixelCrispness.snappedPosition(for:scale:)`'s callers
+    /// already use, so a degenerate scale can never ask for a zero-sized
+    /// bitmap.
+    static func contentSquarePixelSize(forDeviceScale deviceScale: CGFloat) -> Int {
+        Int((RadarGeometry.contentSquareSize * max(deviceScale, 1)).rounded())
+    }
+
+    /// Inverts `RadarGeometry.radarPoint(forTileOffset:scale:)`: the tile
+    /// offset whose radar-space point is nearest `point`.
+    ///
+    /// `radarPoint` computes `x = (dx - dy) * scale`,
+    /// `y = (dx + dy) * (scale / 2)`, so for a given radar-space point
+    /// `(x, y)`, `dx - dy = x / scale` and `dx + dy = 2y / scale`, giving
+    /// `dx = (x + 2y) / (2 * scale)` and `dy = (2y - x) / (2 * scale)`.
+    /// Rounded to the nearest tile, since a pixel generally lands between
+    /// two tile centres.
+    ///
+    /// Lifted out of the rasterizer's inner loop (rather than left inline)
+    /// so `RadarGeometryTests` can pin the round-trip --
+    /// `radarPoint(forTileOffset:) -> tileOffset(forRadarPoint:)` returns
+    /// the offset it started from -- directly, which is what stops this
+    /// algebra drifting if `radarPoint`'s formula ever changes. A
+    /// degenerate `scale <= 0` has no inverse and reports the centre tile.
+    static func tileOffset(forRadarPoint point: CGPoint, scale: CGFloat) -> (x: Int, y: Int) {
+        guard scale > 0 else { return (x: 0, y: 0) }
+        let dx = Int(((point.x + 2 * point.y) / (2 * scale)).rounded())
+        let dy = Int(((2 * point.y - point.x) / (2 * scale)).rounded())
+        return (x: dx, y: dy)
+    }
 
     /// Whether world tile `(tileX, tileY)` reads as blocked on the radar.
     static func isTileBlocked(
@@ -51,29 +89,67 @@ enum RadarBackdropRenderer {
     /// base, lighter plate" read every other piece of chrome in this
     /// palette already uses.
     ///
-    /// Walks **output pixels**, not tile offsets. `RadarGeometry
-    /// .radarScale(for:)` is tuned so the radar shows a field of view many
-    /// multiples of the screen's own size -- i.e. a wide swath of world
-    /// tiles compressed into a 110pt dial -- so iterating tile offsets out
-    /// to the content square's edge would mean scanning a number of tiles
-    /// that grows with `1 / scale`. Inverting `RadarGeometry.radarPoint(
-    /// forTileOffset:scale:)`'s forward transform once per output pixel
-    /// instead keeps this exactly `contentSquarePixelSize\u00b2` tile lookups,
-    /// independent of how far `scale` lets the radar see.
+    /// Walks **output pixels**, not tile offsets, inverting
+    /// `RadarGeometry.radarPoint(forTileOffset:scale:)` once per pixel via
+    /// `tileOffset(forRadarPoint:scale:)`. Iterating tile offsets out to
+    /// the content square's edge would instead scan a tile count that
+    /// grows with `1 / scale`; walking pixels keeps this bounded by the
+    /// bitmap, independent of how far `scale` lets the radar see.
     ///
-    /// The inversion itself: `radarPoint` computes `x = (dx - dy) * scale`,
-    /// `y = (dx + dy) * (scale / 2)`, so for a given radar-space point
-    /// `(x, y)`, `dx - dy = x / scale` and `dx + dy = 2y / scale`, giving
-    /// `dx = (x + 2y) / (2 * scale)` and `dy = (2y - x) / (2 * scale)`.
-    /// Rounded to the nearest tile, since a pixel generally lands between
-    /// two tile centers.
+    /// **Cost, and the rebuild cadence this implies.** The pixel walk is
+    /// `contentSquarePixelSize(forDeviceScale:)^2` iterations -- 12,100 at
+    /// `@1x`, 108,900 at `@3x` -- and each *distinct tile* costs a
+    /// `CityLatticeGenerator.classify` hash plus a linear
+    /// `BuildingObstruction.isObstructed` scan of every resident record.
+    /// Neighbouring pixels overwhelmingly resolve to the same tile (a tile
+    /// is ~2.5pt across at a phone's scale), so the classification is
+    /// memoized per tile offset below and only the `context.fill` runs per
+    /// pixel. Even so this is **not a per-frame operation**: the intended
+    /// cadence for the mounting PR is a rebuild when the player's tile
+    /// changes (or when the resident chunk window does), not once per
+    /// `update(_:)`.
+    ///
+    /// `deviceScale` is the view's `contentScaleFactor` (`1` headless) --
+    /// see `contentSquarePixelSize(forDeviceScale:)` for why the bitmap is
+    /// sized in device pixels rather than points.
     static func makeBackdropTexture(
         playerTile: TileCoordinate,
         seed: WorldSeed,
         buildingRecords: [BuildingPlacementRecord],
-        scale: CGFloat
+        scale: CGFloat,
+        deviceScale: CGFloat
     ) -> SKTexture {
-        let size = contentSquarePixelSize
+        guard let image = makeBackdropImage(
+            playerTile: playerTile,
+            seed: seed,
+            buildingRecords: buildingRecords,
+            scale: scale,
+            deviceScale: deviceScale
+        ) else {
+            return SKTexture()
+        }
+        return SKTexture(cgImage: image)
+    }
+
+    /// The rasterization itself, stopping one step short of
+    /// `makeBackdropTexture`'s `SKTexture` wrap.
+    ///
+    /// Split out because a `CGImage`'s pixels are directly readable in a
+    /// headless unit test while an `SKTexture`'s are not (reading those
+    /// back needs a live renderer), so `RadarGeometryTests` can pin the
+    /// two things the rasterizer can get wrong -- the vertical orientation
+    /// (a y-flip here would mirror the radar north/south and break AC9's
+    /// "up means up" promise just as surely as a sign error in
+    /// `radarPoint`) and the per-pixel tile inversion.
+    static func makeBackdropImage(
+        playerTile: TileCoordinate,
+        seed: WorldSeed,
+        buildingRecords: [BuildingPlacementRecord],
+        scale: CGFloat,
+        deviceScale: CGFloat
+    ) -> CGImage? {
+        let pixelScale = max(deviceScale, 1)
+        let size = contentSquarePixelSize(forDeviceScale: pixelScale)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(
             data: nil,
@@ -84,7 +160,7 @@ enum RadarBackdropRenderer {
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else {
-            return SKTexture()
+            return nil
         }
 
         context.setFillColor(PixelGritPalette.background.cgColor)
@@ -96,34 +172,50 @@ enum RadarBackdropRenderer {
         // for:)` only returns 0 for a zero-area scene, which never mounts a
         // view), but keeps this function total for a direct test call.
         guard scale > 0 else {
-            guard let image = context.makeImage() else { return SKTexture() }
-            return SKTexture(cgImage: image)
+            return context.makeImage()
         }
 
         context.setFillColor(PixelGritPalette.plate.cgColor)
         let half = CGFloat(size) / 2
+        var blockedByTile: [TileCoordinate: Bool] = [:]
 
         for pixelY in 0..<size {
-            // `py`/`px` below are expressed in the same "centred on the
-            // radar's own origin, up is positive" convention
-            // `RadarGeometry.radarPoint(forTileOffset:scale:)`'s forward
-            // transform uses, so this inversion matches it exactly.
-            let py = CGFloat(pixelY) - half
+            // `py`/`px` below are in radar *points* (hence the divide by
+            // `pixelScale`), expressed in the same "centred on the radar's
+            // own origin, up is positive" convention `RadarGeometry
+            // .radarPoint(forTileOffset:scale:)`'s forward transform uses.
+            // `CGContext` is y-up too, so filling at `pixelY` keeps up
+            // meaning up; `SKTexture(cgImage:)` preserves that orientation
+            // (pinned by `RadarGeometryTests`, not assumed).
+            let py = (CGFloat(pixelY) - half) / pixelScale
             for pixelX in 0..<size {
-                let px = CGFloat(pixelX) - half
+                let px = (CGFloat(pixelX) - half) / pixelScale
 
-                let dx = Int(((px + 2 * py) / (2 * scale)).rounded())
-                let dy = Int(((2 * py - px) / (2 * scale)).rounded())
+                let offset = tileOffset(forRadarPoint: CGPoint(x: px, y: py), scale: scale)
+                let tile = TileCoordinate(
+                    tileX: playerTile.tileX + offset.x,
+                    tileY: playerTile.tileY + offset.y
+                )
 
-                let tileX = playerTile.tileX + dx
-                let tileY = playerTile.tileY + dy
-                if isTileBlocked(tileX: tileX, tileY: tileY, seed: seed, buildingRecords: buildingRecords) {
+                let blocked: Bool
+                if let memoized = blockedByTile[tile] {
+                    blocked = memoized
+                } else {
+                    blocked = isTileBlocked(
+                        tileX: tile.tileX,
+                        tileY: tile.tileY,
+                        seed: seed,
+                        buildingRecords: buildingRecords
+                    )
+                    blockedByTile[tile] = blocked
+                }
+
+                if blocked {
                     context.fill(CGRect(x: pixelX, y: pixelY, width: 1, height: 1))
                 }
             }
         }
 
-        guard let image = context.makeImage() else { return SKTexture() }
-        return SKTexture(cgImage: image)
+        return context.makeImage()
     }
 }

@@ -2,7 +2,7 @@ import CoreGraphics
 import XCTest
 @testable import CyberpunkMonsterCrawl
 
-/// `CYBERPUN-17-23-t1`: pure tile\u2194radar mapping/scale/classification math,
+/// `CYBERPUN-17-23-t1`: pure tile<->radar mapping/scale/classification math,
 /// provable entirely from unit tests with no scene construction (AC9/AC12).
 final class RadarGeometryTests: XCTestCase {
 
@@ -63,13 +63,67 @@ final class RadarGeometryTests: XCTestCase {
         )
     }
 
-    /// Pins the formula itself (`110 / (2.5 * max(w, h))`), not just the
-    /// portrait/landscape symmetry above.
+    /// Pins the formula itself (`tileHalfWidth * 110 / (2.5 * max(w, h))`),
+    /// not just the portrait/landscape symmetry above.
     func test_radarScale_matchesDocumentedFormula() {
         let sceneSize = CGSize(width: 400, height: 200)
-        let expected: CGFloat = 110 / (2.5 * 400)
+        let expected = CGFloat(IsometricProjection.tileHalfWidth) * 110 / (2.5 * 400)
 
         XCTAssertEqual(RadarGeometry.radarScale(for: sceneSize), expected, accuracy: 1e-12)
+    }
+
+    // MARK: - (b2) radarScale composed with radarPoint (field of view)
+
+    /// Raised on PR #78 review: every other test here pins one function
+    /// against its own formula -- `radarScale` against its formula,
+    /// `radarPoint` against a hard-coded `scale: 10` -- so a *unit*
+    /// mismatch between the two (radar points per world *screen* point vs
+    /// per *tile*, which differ by exactly `tileHalfWidth`) was invisible
+    /// to the whole suite. This test feeds `radarScale(for:)`'s own output
+    /// into `radarPoint` and asserts a plausible neighbourhood fits inside
+    /// the dial, which is the property that actually has to hold once PR 2
+    /// mounts this.
+    func test_radarScale_composedWithRadarPoint_keepsTheNearNeighbourhoodInsideTheDial() {
+        let scale = RadarGeometry.radarScale(for: CGSize(width: 390, height: 844))
+
+        // ~20 tiles out is the "immediate neighbourhood" the ticket asks
+        // the dial to show: still inside the content square.
+        let nearOffsets: [(x: Int, y: Int)] = [(20, 0), (-20, 0), (0, 20), (0, -20), (14, 14), (-14, -14)]
+        for offset in nearOffsets {
+            let point = RadarGeometry.radarPoint(forTileOffset: offset, scale: scale)
+            XCTAssertTrue(
+                RadarGeometry.isWithinContentSquare(point),
+                "expected offset \(offset) -> \(point) to fall inside the dial at scale \(scale)"
+            )
+        }
+
+        // ~200 tiles out is far outside the documented field of view: a
+        // scale off by `tileHalfWidth` would wrongly draw these inside.
+        let farOffsets: [(x: Int, y: Int)] = [(200, 0), (-200, 0), (0, 200), (0, -200), (140, 140)]
+        for offset in farOffsets {
+            let point = RadarGeometry.radarPoint(forTileOffset: offset, scale: scale)
+            XCTAssertFalse(
+                RadarGeometry.isWithinContentSquare(point),
+                "expected offset \(offset) -> \(point) to fall outside the dial at scale \(scale)"
+            )
+        }
+    }
+
+    /// The other half of the composition: the dial's half-extent, measured
+    /// back out into *world screen points*, is exactly the documented
+    /// "2.5x the device's longer screen dimension" (AC12's premise).
+    func test_radarScale_fieldOfView_isTwoAndAHalfTimesTheLongerScreenDimension() {
+        let longerDimension: CGFloat = 844
+        let scale = RadarGeometry.radarScale(for: CGSize(width: 390, height: longerDimension))
+
+        // `radarPoint` sets `x = (dx - dy) * scale`, so the content
+        // square's 55pt half-extent is this many tiles of `(dx - dy)` ...
+        let halfExtentInTiles = RadarGeometry.halfContentSquareSize / scale
+        // ... which `IsometricProjection.tileToScreen` places this many
+        // world screen points from the centre.
+        let halfExtentInWorldPoints = halfExtentInTiles * CGFloat(IsometricProjection.tileHalfWidth)
+
+        XCTAssertEqual(2 * halfExtentInWorldPoints, 2.5 * longerDimension, accuracy: 1e-9)
     }
 
     // MARK: - (c) Content-square window-inclusion boundary cases
@@ -169,5 +223,186 @@ final class RadarGeometryTests: XCTestCase {
                 buildingRecords: [record]
             )
         )
+    }
+
+    // MARK: - (e) RadarBackdropRenderer rasterization (raised on PR #78)
+
+    /// The scene size every rasterization case below renders for -- a real
+    /// device's portrait size, so `scale` is the production value rather
+    /// than a convenient round number.
+    private static let rasterSceneSize = CGSize(width: 390, height: 844)
+
+    /// `RadarBackdropRenderer.tileOffset(forRadarPoint:scale:)` is the
+    /// inversion the rasterizer runs once per output pixel. Nothing pinned
+    /// it against `radarPoint`'s forward transform, so the algebra could
+    /// drift silently if either formula changed -- this round-trips a
+    /// sample of offsets at the real production scale.
+    func test_tileOffset_roundTripsRadarPoint_forASampleOfTileOffsets() {
+        let scale = RadarGeometry.radarScale(for: Self.rasterSceneSize)
+        let offsets: [(x: Int, y: Int)] = [
+            (0, 0), (1, 0), (0, 1), (-1, 0), (0, -1), (3, 3), (-3, -3), (7, -5), (-5, 7), (20, 20), (-18, 4),
+        ]
+
+        for offset in offsets {
+            let point = RadarGeometry.radarPoint(forTileOffset: offset, scale: scale)
+            let roundTripped = RadarBackdropRenderer.tileOffset(forRadarPoint: point, scale: scale)
+
+            XCTAssertEqual(roundTripped.x, offset.x, "dx round-trip mismatch for offset \(offset)")
+            XCTAssertEqual(roundTripped.y, offset.y, "dy round-trip mismatch for offset \(offset)")
+        }
+    }
+
+    func test_tileOffset_reportsTheCentreTile_forADegenerateScale() {
+        let offset = RadarBackdropRenderer.tileOffset(forRadarPoint: CGPoint(x: 10, y: 10), scale: 0)
+
+        XCTAssertEqual(offset.x, 0)
+        XCTAssertEqual(offset.y, 0)
+    }
+
+    /// AC9's "up on the radar means up on the screen" has to survive the
+    /// `CGContext` -> `CGImage` hand-off, not just `radarPoint`'s own
+    /// formula: a y-flip there mirrors the whole dial north/south while
+    /// every existing test still passes. A blocked tile whose offset
+    /// projects *up* must only ever paint pixels in the bitmap's top half.
+    func test_makeBackdropImage_paintsAnUpwardBlockedTile_intoTheTopHalfOfTheBitmap() throws {
+        let rows = try changedPixelRows(forBlockedTileOffset: (x: 3, y: 3))
+        let halfHeight = RadarBackdropRenderer.contentSquarePixelSize(forDeviceScale: 1) / 2
+
+        XCTAssertFalse(rows.isEmpty, "expected the added placement record to paint at least one pixel")
+        for row in rows {
+            XCTAssertLessThan(row, halfHeight, "an upward tile painted into the bottom half (row \(row))")
+        }
+    }
+
+    /// The mirror case -- without it, an image flipped *and* a tile offset
+    /// flipped would cancel out above.
+    func test_makeBackdropImage_paintsADownwardBlockedTile_intoTheBottomHalfOfTheBitmap() throws {
+        let rows = try changedPixelRows(forBlockedTileOffset: (x: -3, y: -3))
+        let halfHeight = RadarBackdropRenderer.contentSquarePixelSize(forDeviceScale: 1) / 2
+
+        XCTAssertFalse(rows.isEmpty, "expected the added placement record to paint at least one pixel")
+        for row in rows {
+            XCTAssertGreaterThanOrEqual(
+                row, halfHeight, "a downward tile painted into the top half (row \(row))"
+            )
+        }
+    }
+
+    /// The backdrop rasterizes at the device's own pixel density (the
+    /// behaviour `HUDRunModel.deviceScale` is for): 110pt of dial is 110px
+    /// at `@1x` but 330px at `@3x`, so the mounting PR can draw it 1:1 on
+    /// the pixel grid instead of upscaling a 110px bitmap into a blur.
+    func test_makeBackdropImage_rasterizesAtTheDeviceScale_notAtAFixedPointSize() throws {
+        let scale = RadarGeometry.radarScale(for: Self.rasterSceneSize)
+
+        for deviceScale in [CGFloat(1), 2, 3] {
+            let image = try XCTUnwrap(RadarBackdropRenderer.makeBackdropImage(
+                playerTile: TileCoordinate(tileX: 0, tileY: 0),
+                seed: WorldSeed(rawValue: 1),
+                buildingRecords: [],
+                scale: scale,
+                deviceScale: deviceScale
+            ))
+            let expected = Int(RadarGeometry.contentSquareSize * deviceScale)
+
+            XCTAssertEqual(image.width, expected, "wrong pixel width at deviceScale \(deviceScale)")
+            XCTAssertEqual(image.height, expected, "wrong pixel height at deviceScale \(deviceScale)")
+        }
+    }
+
+    /// A headless (view-less) scene reports no usable device scale; the
+    /// bitmap floors at the `@1x` size rather than collapsing to nothing.
+    func test_contentSquarePixelSize_floorsADegenerateDeviceScaleAtOne() {
+        XCTAssertEqual(RadarBackdropRenderer.contentSquarePixelSize(forDeviceScale: 0), 110)
+        XCTAssertEqual(RadarBackdropRenderer.contentSquarePixelSize(forDeviceScale: 1), 110)
+        XCTAssertEqual(RadarBackdropRenderer.contentSquarePixelSize(forDeviceScale: 3), 330)
+    }
+
+    // MARK: - (e) helpers
+
+    /// Renders the backdrop twice -- once with no placement records, once
+    /// with a single record obstructing the tile at `offset` from the
+    /// player -- and returns the top-down row index (row 0 == the top of
+    /// the image) of every pixel that differs between the two.
+    ///
+    /// Diffing rather than inspecting absolute colours because the seeded
+    /// lattice paints blocked tiles all over the dial under every seed;
+    /// the difference between the two renders is exactly the one tile
+    /// under test.
+    private func changedPixelRows(forBlockedTileOffset offset: (x: Int, y: Int)) throws -> [Int] {
+        let seed = WorldSeed(rawValue: 1)
+        let playerTile = TileCoordinate(tileX: 0, tileY: 0)
+        let scale = RadarGeometry.radarScale(for: Self.rasterSceneSize)
+        let tile = TileCoordinate(
+            tileX: playerTile.tileX + offset.x,
+            tileY: playerTile.tileY + offset.y
+        )
+
+        // Precondition: `(+/-3, +/-3)` is street on every seed (both axes
+        // land in the street band), so the lattice does not already call
+        // this tile blocked and every changed pixel is the record's doing.
+        XCTAssertNotEqual(
+            CityLatticeGenerator.classify(tileX: tile.tileX, tileY: tile.tileY, seed: seed).kind,
+            .buildingFootprint
+        )
+
+        let record = BuildingPlacementRecord(
+            lotTile: tile,
+            building: BuildingCatalog.entries[0],
+            footprintTiles: [tile],
+            farCornerTile: tile
+        )
+
+        let baseline = try XCTUnwrap(RadarBackdropRenderer.makeBackdropImage(
+            playerTile: playerTile, seed: seed, buildingRecords: [], scale: scale, deviceScale: 1
+        ))
+        let withRecord = try XCTUnwrap(RadarBackdropRenderer.makeBackdropImage(
+            playerTile: playerTile, seed: seed, buildingRecords: [record], scale: scale, deviceScale: 1
+        ))
+
+        let baselineBytes = try XCTUnwrap(rgbaBytes(of: baseline))
+        let recordBytes = try XCTUnwrap(rgbaBytes(of: withRecord))
+        XCTAssertEqual(baselineBytes.count, recordBytes.count)
+
+        let width = baseline.width
+        var rows: [Int] = []
+        for index in stride(from: 0, to: min(baselineBytes.count, recordBytes.count), by: 4) {
+            let differs = baselineBytes[index] != recordBytes[index]
+                || baselineBytes[index + 1] != recordBytes[index + 1]
+                || baselineBytes[index + 2] != recordBytes[index + 2]
+            if differs {
+                rows.append(index / 4 / width)
+            }
+        }
+        return rows
+    }
+
+    /// `image`'s pixels as top-down RGBA8 rows, by redrawing it into a
+    /// bitmap context of known layout (a `CGImage`'s own backing store is
+    /// not directly addressable, and an `SKTexture`'s needs a live
+    /// renderer -- which is why `makeBackdropImage` is split out of
+    /// `makeBackdropTexture` at all).
+    private func rgbaBytes(of image: CGImage) -> [UInt8]? {
+        let width = image.width
+        let height = image.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+
+        let drew = bytes.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(
+                data: raw.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                return false
+            }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+
+        return drew ? bytes : nil
     }
 }
