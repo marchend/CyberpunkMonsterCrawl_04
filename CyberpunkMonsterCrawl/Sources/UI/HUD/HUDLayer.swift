@@ -92,6 +92,26 @@ protocol HUDRunModel: AnyObject {
     /// texture lands 1:1 on the device's pixel grid instead of being
     /// upscaled 2-3x into a blur.
     var deviceScale: CGFloat { get }
+
+    /// The player's current world tile -- the radar's own centre, and the
+    /// reference every other radar-space point (`RadarMapNode`'s raccoon/
+    /// med-kit markers, `RadarBackdropRenderer`'s backdrop) is projected
+    /// relative to. Rounded from the player's own (fractional) world
+    /// position via `IsometricProjection.tile(containing:)`'s pinned seam
+    /// rule, the same rounding every other "which tile owns this
+    /// continuous position" question in this codebase already uses.
+    ///
+    /// Added alongside `RadarMapNode` (`CYBERPUN-17-23-t2`) -- PR 1 wired
+    /// every other radar live-data accessor but, since no node yet
+    /// consumed an absolute reference tile, did not need this one.
+    var radarPlayerTile: TileCoordinate { get }
+
+    /// The world seed `RadarBackdropRenderer.isTileBlocked` classifies
+    /// tiles against -- the same seed the resident city streams from, so
+    /// the radar backdrop always matches the exact city the player is
+    /// walking through. `GameScene`'s existing `worldSeed` stored property
+    /// already satisfies this requirement with no extra conformance code.
+    var worldSeed: WorldSeed { get }
 }
 
 /// Coarse device orientation, derived from a scene size's own aspect
@@ -135,6 +155,7 @@ final class HUDLayer: SKNode {
     let runTimer = RunTimerLabel()
     let killCount = KillCountLabel()
     let swarmBanner = SwarmBanner()
+    let radarMap = RadarMapNode()
 
     /// Built after `super.init()` (see `init()`) because its `onPress`
     /// closure needs to reference `self` -- the same "implicitly-unwrapped,
@@ -177,6 +198,7 @@ final class HUDLayer: SKNode {
         addChild(runTimer)
         addChild(killCount)
         addChild(swarmBanner)
+        addChild(radarMap)
 
         pulseButton = HUDPulseButton(onPress: { [weak self] in
             self?.pulseTriggerHandler?()
@@ -202,6 +224,16 @@ final class HUDLayer: SKNode {
         position(killCount, at: .killCount, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
         position(pulseButton, at: .pulseButton, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
         position(swarmBanner, at: .swarmBanner, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
+        position(radarMap, at: .radarMap, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
+
+        // The radar's own points-per-tile scale depends on `sceneSize`
+        // alone (`RadarGeometry.radarScale(for:)`'s own "same field of
+        // view in either orientation" contract), not on anything
+        // `refresh()` reads per frame -- so it is set here, alongside
+        // this node's position/size, rather than threaded through
+        // `RadarMapNode.update(...)`'s live-data parameter list.
+        radarMap.radarScale = RadarGeometry.radarScale(for: sceneSize)
+
         currentOrientation = orientation
     }
 
@@ -272,5 +304,43 @@ final class HUDLayer: SKNode {
         runTimer.update(elapsedSeconds: runModel.elapsedSeconds)
         killCount.update(kills: runModel.kills)
         pulseButton.update(cooldownFraction: runModel.pulseCooldownFraction, isReady: runModel.isPulseReady)
+
+        // Raccoon/med-kit live positions arrive as the model's own
+        // fractional `TilePoint`s (`TargetSelection.Candidate.position`,
+        // `radarMedKitTiles`); `RadarMapNode` only needs the *tile* each
+        // currently occupies, via the same seam-rounding rule every other
+        // "which tile owns this continuous position" call site in this
+        // codebase already uses.
+        let raccoonTiles = runModel.radarRaccoonCandidates.map { candidate -> TileCoordinate in
+            let tile = IsometricProjection.tile(containing: candidate.position)
+            return TileCoordinate(tileX: tile.tileX, tileY: tile.tileY)
+        }
+        let medKitTiles = runModel.radarMedKitTiles.map { position -> TileCoordinate in
+            let tile = IsometricProjection.tile(containing: position)
+            return TileCoordinate(tileX: tile.tileX, tileY: tile.tileY)
+        }
+
+        // Captures this frame's own `radarBuildingRecords`/`worldSeed`
+        // reading rather than handing `RadarMapNode` the raw seed/records
+        // types directly -- keeps that node's own API decoupled from
+        // `WorldSeed`/`BuildingPlacementRecord`, the same "take a plain
+        // predicate, not my internals" shape `TargetSelection.Candidate`
+        // already uses to keep `TargetSelection` decoupled from
+        // `RaccoonSpawnDirector`.
+        let buildingRecords = runModel.radarBuildingRecords
+        let seed = runModel.worldSeed
+        let isTileBlocked: (Int, Int) -> Bool = { tileX, tileY in
+            RadarBackdropRenderer.isTileBlocked(
+                tileX: tileX, tileY: tileY, seed: seed, buildingRecords: buildingRecords
+            )
+        }
+
+        radarMap.update(
+            playerTile: runModel.radarPlayerTile,
+            raccoonTiles: raccoonTiles,
+            medKitTiles: medKitTiles,
+            isTileBlocked: isTileBlocked,
+            deviceScale: runModel.deviceScale
+        )
     }
 }

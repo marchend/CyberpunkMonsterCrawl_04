@@ -1972,4 +1972,17 @@ extension GameScene: HUDRunModel {
     /// shared with `pickupManager`'s own `obstructionsProvider` via
     /// `residentBuildingPlacementRecords()` rather than re-traversed here.
     var radarBuildingRecords: [BuildingPlacementRecord] { residentBuildingPlacementRecords() }
+
+    /// The player's current world tile -- `RadarMapNode`'s own centre
+    /// (`CYBERPUN-17-23-t2`). `playerWorldPosition` is `nil` before the
+    /// first `.gameplay` entry (see `advanceMovementAndCamera(currentTime:)`'s
+    /// own doc note), so this falls back to tile `(0, 0)` exactly like
+    /// `deviceScale`'s own headless fallback above -- `HUDLayer` is never
+    /// bound before `.gameplay` mounts it in practice, so the fallback is
+    /// defensive rather than a value any real run reads.
+    var radarPlayerTile: TileCoordinate {
+        let position = playerWorldPosition ?? TilePoint(x: 0, y: 0)
+        let tile = IsometricProjection.tile(containing: position)
+        return TileCoordinate(tileX: tile.tileX, tileY: tile.tileY)
+    }
 }

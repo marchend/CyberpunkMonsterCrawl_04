@@ -1,8 +1,9 @@
 import CoreGraphics
 import UIKit
 
-/// The six HUD elements `CYBERPUN-17-12` mounts, and the one name
-/// `HUDLayout` computes a frame for.
+/// The six HUD elements `CYBERPUN-17-12` mounts, plus the minimap radar
+/// `CYBERPUN-17-23-t2` adds -- one name per element `HUDLayout` computes a
+/// frame for.
 enum HUDSlot: CaseIterable {
     case hpBar
     case levelXPBar
@@ -10,6 +11,11 @@ enum HUDSlot: CaseIterable {
     case killCount
     case pulseButton
     case swarmBanner
+
+    /// The minimap radar (`CYBERPUN-17-23-t2`) -- hung below the right
+    /// column (`runTimer`/`killCount`), the same "edge-anchored column"
+    /// convention `levelXPBar` already follows under `hpBar`.
+    case radarMap
 }
 
 /// Pure layout-spec type: `(sceneSize, safeAreaInsets) -> [HUDSlot: CGRect]`.
@@ -76,6 +82,14 @@ enum HUDLayout {
     static let runTimerSize = CGSize(width: 120, height: 32)
     static let killCountSize = CGSize(width: 120, height: 32)
     static let pulseButtonSize = CGSize(width: 72, height: 72)
+
+    /// The radar's outer drawn size: `RadarGeometry`'s 110x110 content
+    /// square plus a 1pt border on every edge (`RadarMapNode`'s own
+    /// border stroke) -- 112x112.
+    static let radarMapSize = CGSize(
+        width: RadarGeometry.contentSquareSize + 2,
+        height: RadarGeometry.contentSquareSize + 2
+    )
 
     /// The banner's own drawn size: 280x36 around an 18pt `Menlo-Bold`
     /// line.
@@ -188,21 +202,37 @@ enum HUDLayout {
                 height: pulseButtonSize.height
             )
 
+        case .radarMap:
+            // Hung below the right column's own lowest element -- `killCount`
+            // today, the same "stack with `verticalSpacing`, anchored to the
+            // safe edge" rule `killCount` itself uses under `runTimer`.
+            let killCount = frame(
+                for: .killCount, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
+            )
+            return CGRect(
+                x: safeRect.maxX - edgeMargin - radarMapSize.width,
+                y: killCount.minY - verticalSpacing - radarMapSize.height,
+                width: radarMapSize.width,
+                height: radarMapSize.height
+            )
+
         case .swarmBanner:
             // Hung below *both* columns, not just one: the banner is
             // horizontally centred and 280pt wide, so on a 390pt-wide
             // portrait screen its x-range overlaps the left column (the HP
             // and level/XP bars run from the safe-area edge to +41) *and*
-            // the right column (the run timer and kill count start at +59).
-            // Clearing only one of them would put the banner straight
-            // through the other -- which is exactly what a top-centre run
-            // timer did to the HP bar before this layout split the top row
-            // into two edge-anchored columns.
+            // the right column (the run timer, kill count and -- since
+            // `CYBERPUN-17-23-t2` -- the radar map, which is now the
+            // column's own lowest element and so the one that matters
+            // here). Clearing only one of them would put the banner
+            // straight through the other -- which is exactly what a
+            // top-centre run timer did to the HP bar before this layout
+            // split the top row into two edge-anchored columns.
             let leftColumnBottom = frame(
                 for: .levelXPBar, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
             ).minY
             let rightColumnBottom = frame(
-                for: .killCount, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
+                for: .radarMap, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets
             ).minY
             let hungBelowBothColumns =
                 min(leftColumnBottom, rightColumnBottom) - verticalSpacing - swarmBannerSize.height
