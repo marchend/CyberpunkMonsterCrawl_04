@@ -139,7 +139,9 @@ enum GroundTileRenderer {
     /// tiles of a 3x3 crossing carry junction paint — the four lane *mouths*
     /// are `TileKind.junctionStopLine` ("this is literally where a stop line
     /// is painted, across the lane at the mouth of the junction"), the centre
-    /// is plain `.asphalt`, and the four corners continue the kerb ring. The
+    /// is plain `.asphalt`, and each corner continues the kerb ring only
+    /// where the block interior it borders is built (beside an empty lot it
+    /// stays `.asphalt`). The
     /// ground plane renders the kind it is handed; moving junction paint onto
     /// the crossing centre would mean changing that lattice decision (and its
     /// tests), not the crop table.

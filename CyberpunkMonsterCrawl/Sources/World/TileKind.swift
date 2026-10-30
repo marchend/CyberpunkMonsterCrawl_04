@@ -13,17 +13,21 @@ enum TileKind: Equatable, CaseIterable {
     /// The painted stop line inside a lattice crossing (a 3x3 intersection
     /// area): the four tiles at the *mouths* of the junction, where one
     /// axis sits on the driving lane and the other on a band edge. The
-    /// crossing's centre is `.asphalt` and its four corners stay
-    /// `.kerbSidewalk` (the sidewalk band continues through the junction),
+    /// crossing's centre is `.asphalt` and each of its four corners
+    /// continues the sidewalk band through the junction only where the one
+    /// block interior that corner borders has a building edge to kerb
+    /// (a corner bordering an empty `.lot` reads as `.asphalt`),
     /// so this case marks only where a stop line is actually painted
     /// across a lane. Still street, still walkable, still part of the
     /// navmesh \u2014 this is a paint/marking distinction for rendering, not a
     /// collision distinction.
     case junctionStopLine
-    /// The sidewalk bordering a street band on the side nearest a block,
-    /// including the four corner tiles of a lattice crossing where two
-    /// sidewalk bands meet, so the ring around every 3x3 block is
-    /// unbroken.
+    /// The sidewalk bordering a street band on the side nearest a block
+    /// interior that has a building edge to kerb, including the corner
+    /// tiles of a lattice crossing where two such bands meet, so the ring
+    /// around a built 3x3 block is unbroken. A block the seed left as an
+    /// empty `.lot` has no building to kerb, so the band beside it stays
+    /// `.asphalt` rather than ringing an empty plot with sidewalk.
     /// Walkable \u2014 the player and the raccoon swarm cross it exactly like
     /// asphalt; it exists as a separate case purely so the ground-plane
     /// renderer can draw a kerb/sidewalk texture instead of asphalt there.
