@@ -91,12 +91,35 @@ final class CityLatticeGeneratorTests: XCTestCase {
         // phase, `3` and `9` the positive side.
         let crossingOrigins = [(3, 3), (3, -3), (-3, 3), (-3, -3), (9, -9), (-9, 9)]
 
-        /// Expected kind per (xBandPosition, yBandPosition) inside a crossing.
-        func expectedKind(xBand: Int, yBand: Int) -> TileKind {
+        /// Local, source-independent floor division \u2014 mirrors
+        /// `CityLatticeGenerator`'s private `floorDiv`, needed here to
+        /// derive which block a crossing corner borders (see
+        /// `expectedKind`'s corner case) without reaching into the
+        /// generator's internals.
+        func localFloorDiv(_ value: Int, _ divisor: Int) -> Int {
+            let quotient = value / divisor
+            let remainder = value % divisor
+            if remainder != 0 && (remainder < 0) != (divisor < 0) {
+                return quotient - 1
+            }
+            return quotient
+        }
+
+        /// Expected kind per (xBandPosition, yBandPosition) inside a
+        /// crossing. A corner's kind now depends on whether the one block
+        /// interior it borders has a building edge to kerb
+        /// (`CityLatticeGenerator.isEmptyLotBlock`) \u2014 this is the
+        /// CYBERPUN-17-22 fix: an empty-lot-bordering corner reads as
+        /// `.asphalt`, not an unconditional `.kerbSidewalk`.
+        func expectedKind(tileX: Int, tileY: Int, xBand: Int, yBand: Int, seed: WorldSeed) -> TileKind {
             let xIsLane = (xBand == 1)
             let yIsLane = (yBand == 1)
             if xIsLane && yIsLane { return .asphalt }
-            return (xIsLane || yIsLane) ? .junctionStopLine : .kerbSidewalk
+            if xIsLane || yIsLane { return .junctionStopLine }
+            let blockX = localFloorDiv(tileX, 6) + (xBand == 2 ? 1 : 0)
+            let blockY = localFloorDiv(tileY, 6) + (yBand == 2 ? 1 : 0)
+            let isEmpty = CityLatticeGenerator.isEmptyLotBlock(blockX: blockX, blockY: blockY, seed: seed)
+            return isEmpty ? .asphalt : .kerbSidewalk
         }
 
         for seed in someSeeds(5) {
@@ -112,7 +135,8 @@ final class CityLatticeGeneratorTests: XCTestCase {
                             "(\(tileX), \(tileY)) was expected to be a crossing tile - check the test's offsets"
                         )
                         XCTAssertEqual(
-                            info.kind, expectedKind(xBand: xBand, yBand: yBand),
+                            info.kind,
+                            expectedKind(tileX: tileX, tileY: tileY, xBand: xBand, yBand: yBand, seed: seed),
                             "Crossing tile (\(tileX), \(tileY)) [band (\(xBand), \(yBand))] under seed "
                                 + "\(seed.rawValue) was \(info.kind)"
                         )
@@ -122,12 +146,17 @@ final class CityLatticeGeneratorTests: XCTestCase {
         }
     }
 
-    /// The consequence the renderer cares about: the `kerbSidewalk` ring
-    /// around a 3x3 block interior is unbroken, corners included, so the
-    /// corridor's "asphalt flanked by sidewalks" reading survives every
-    /// junction.
-    func test_classify_sidewalkRingAroundABlockInterior_isUnbrokenIncludingCorners() {
+    /// CYBERPUN-17-22: the ring of street-band edge/corner tiles
+    /// immediately surrounding one block interior all border *that same*
+    /// block (by construction of the band-position offsets), so the ring
+    /// must be uniformly `.kerbSidewalk` when the block has a building
+    /// edge to kerb (`.buildingFootprint`) and uniformly `.asphalt` when
+    /// the block is an empty `.lot` with nothing to kerb \u2014 never an
+    /// unconditional sidewalk ring regardless of what the block holds.
+    func test_classify_sidewalkRingAroundABlockInterior_matchesItsOwnBuildingFootprintState() {
         let seed = WorldSeed(rawValue: 31_337)
+        var sawLotRing = false
+        var sawBuildingRing = false
 
         for blockX in -2..<2 {
             for blockY in -2..<2 {
@@ -135,6 +164,13 @@ final class CityLatticeGeneratorTests: XCTestCase {
                 // and 3 on each axis (6-tile period, 3-tile block).
                 let originX = blockX * 6
                 let originY = blockY * 6
+                let isEmptyLot = CityLatticeGenerator.isEmptyLotBlock(blockX: blockX, blockY: blockY, seed: seed)
+                let expected: TileKind = isEmptyLot ? .asphalt : .kerbSidewalk
+                if isEmptyLot {
+                    sawLotRing = true
+                } else {
+                    sawBuildingRing = true
+                }
 
                 for local in -1...3 {
                     let ringTiles = [
@@ -146,14 +182,17 @@ final class CityLatticeGeneratorTests: XCTestCase {
                     for (tileX, tileY) in ringTiles {
                         let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
                         XCTAssertEqual(
-                            info.kind, .kerbSidewalk,
+                            info.kind, expected,
                             "Ring tile (\(tileX), \(tileY)) around block (\(blockX), \(blockY)) was \(info.kind), "
-                                + "breaking the sidewalk ring"
+                                + "expected \(expected) to match the block's own building-footprint state"
                         )
                     }
                 }
             }
         }
+
+        XCTAssertTrue(sawLotRing, "Test fixture sampled no empty-lot block \u2014 strengthen the seed/range")
+        XCTAssertTrue(sawBuildingRing, "Test fixture sampled no building-footprint block \u2014 strengthen the seed/range")
     }
 
     // MARK: - AC6: ~1-in-4 blocks are empty lots

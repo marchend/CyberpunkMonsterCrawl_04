@@ -75,7 +75,10 @@ enum CityLatticeGenerator {
 
         let kind: TileKind
         if isStreetX || isStreetY {
-            kind = streetTileKind(xMod: xMod, yMod: yMod, isStreetX: isStreetX, isStreetY: isStreetY)
+            kind = streetTileKind(
+                tileX: tileX, tileY: tileY, xMod: xMod, yMod: yMod,
+                isStreetX: isStreetX, isStreetY: isStreetY, seed: seed
+            )
         } else {
             kind = blockInteriorTileKind(tileX: tileX, tileY: tileY, seed: seed)
         }
@@ -95,10 +98,25 @@ enum CityLatticeGenerator {
 
     /// Sub-classifies a tile already known to be street (i.e.
     /// `isStreetX || isStreetY`) into asphalt / stop-line / kerb-sidewalk.
-    /// This branch never consults `seed` \u2014 street tiles are 100%
-    /// structural, which is precisely what guarantees the intersection
-    /// rule and the lattice's seed-independent connectivity.
-    private static func streetTileKind(xMod: Int, yMod: Int, isStreetX: Bool, isStreetY: Bool) -> TileKind {
+    ///
+    /// This consults `seed` for exactly one purpose: a street-band edge
+    /// tile (band position 0 or 2 on a straight corridor, or one of the
+    /// four corners of a lattice crossing) only reads as `.kerbSidewalk`
+    /// when the specific block interior it borders actually has a
+    /// building edge to kerb (`.buildingFootprint`); an edge bordering an
+    /// empty `.lot` interior has nothing to kerb and reads as `.asphalt`
+    /// instead. That lookup (`isEmptyLotBlock`) is itself a pure function
+    /// of block coordinates derived from `tileX`/`tileY` plus `seed` \u2014 the
+    /// same three inputs `classify` already takes \u2014 so this stays a pure
+    /// function of its inputs and the chunk-boundary agreement
+    /// (`CYBERPUN-17-3-t3`) still holds. The *structural* decisions \u2014
+    /// which tiles are street at all, and the lane/stop-line/corner
+    /// layout within a crossing \u2014 remain 100% seed-independent, which is
+    /// what guarantees the intersection rule and the lattice's
+    /// seed-independent connectivity.
+    private static func streetTileKind(
+        tileX: Int, tileY: Int, xMod: Int, yMod: Int, isStreetX: Bool, isStreetY: Bool, seed: WorldSeed
+    ) -> TileKind {
         // Position within the 3-tile street band: 0 = edge nearest the
         // lower-index block, 1 = centre driving lane, 2 = edge nearest the
         // higher-index block. Only meaningful on an axis that is actually
@@ -121,25 +139,54 @@ enum CityLatticeGenerator {
             //   edge): this is literally where a stop line is painted,
             //   across the lane at the mouth of the junction.
             // - Corner (both axes on a band edge): the continuation of the
-            //   `kerbSidewalk` band running down each corridor. Painting
-            //   these as stop line would break the sidewalk ring around
-            //   every 3x3 block at all four corners and put road paint
-            //   where a kerb corner belongs on every intersection in the
-            //   city, so the corridor's "asphalt flanked by sidewalks"
-            //   reading survives the junction.
+            //   `kerbSidewalk` band running down each corridor \u2014 but only
+            //   where the one block interior this specific corner borders
+            //   (`blockBorderedByEdge`) actually has a building to kerb;
+            //   otherwise it continues as `.asphalt`, since an empty lot
+            //   has no building edge for the sidewalk to serve.
             let xIsLane = xBandPosition == 1
             let yIsLane = yBandPosition == 1
             if xIsLane && yIsLane {
                 return .asphalt
             }
-            return (xIsLane || yIsLane) ? .junctionStopLine : .kerbSidewalk
+            if xIsLane || yIsLane {
+                return .junctionStopLine
+            }
+            return blockBorderedByEdge(
+                tileX: tileX, tileY: tileY, xBandPosition: xBandPosition, yBandPosition: yBandPosition, seed: seed
+            ) == .buildingFootprint ? .kerbSidewalk : .asphalt
         }
 
         // Exactly one axis is in the street band: a straight corridor
-        // segment. Its centre lane is asphalt, flanked by kerb sidewalk on
-        // both edges.
+        // segment. Its centre lane is asphalt; its two edges kerb only the
+        // block interior they actually border, and only when that
+        // interior has a building edge to kerb.
         let bandPosition = isStreetX ? xBandPosition : yBandPosition
-        return bandPosition == 1 ? .asphalt : .kerbSidewalk
+        if bandPosition == 1 {
+            return .asphalt
+        }
+        return blockBorderedByEdge(
+            tileX: tileX, tileY: tileY, xBandPosition: xBandPosition, yBandPosition: yBandPosition, seed: seed
+        ) == .buildingFootprint ? .kerbSidewalk : .asphalt
+    }
+
+    /// The block-interior kind (`.lot` or `.buildingFootprint`) bordered by
+    /// a street-band edge/corner tile at `(tileX, tileY)`.
+    ///
+    /// Band position 0 borders the block in the *current* period on that
+    /// axis; band position 2 borders the *next* period's block (one block
+    /// index higher). An axis not in the street band (`bandPosition ==
+    /// -1`, the corridor case's cross-axis) contributes no offset, since
+    /// that axis already sits inside the one block interior the edge runs
+    /// alongside. Combining both axes' offsets is what singles out the one
+    /// block a lattice-crossing corner borders, out of the four blocks
+    /// that physically meet at that corner.
+    private static func blockBorderedByEdge(
+        tileX: Int, tileY: Int, xBandPosition: Int, yBandPosition: Int, seed: WorldSeed
+    ) -> TileKind {
+        let blockX = floorDiv(tileX, period) + (xBandPosition == 2 ? 1 : 0)
+        let blockY = floorDiv(tileY, period) + (yBandPosition == 2 ? 1 : 0)
+        return isEmptyLotBlock(blockX: blockX, blockY: blockY, seed: seed) ? .lot : .buildingFootprint
     }
 
     // MARK: - Block-interior sub-classification
