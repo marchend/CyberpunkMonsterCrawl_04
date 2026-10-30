@@ -130,6 +130,96 @@ final class PickupNode: SKNode {
         return texture
     }
 
+    // MARK: - Med kit pad glow (CYBERPUN-17-18)
+
+    /// `medKit`'s pad texture: a soft circular radial gradient from
+    /// `padColor(for: .medKit)` (opaque at the center) fading to fully
+    /// transparent at `padSize`'s half-width -- drawn once with pure
+    /// CoreGraphics (`CGContext.drawRadialGradient`), cached the same
+    /// "compute once, reuse" way `cachedSheet`/`textureCache` are, since a
+    /// `PickupNode` is expected to be constructed far more often than this
+    /// needs regenerating.
+    ///
+    /// Rendered at exactly `padSize`'s point dimensions (40x40px), so the
+    /// pad's effective magnification stays the required whole-integer 1x
+    /// (`PixelCrispnessSweepTests.assertPixelCrisp`) with no accepted
+    /// exception needed -- the soft falloff comes entirely from the baked
+    /// per-pixel alpha gradient, not from scaling or from relaxing nearest
+    /// filtering.
+    private static let medKitGlowTexture: SKTexture = {
+        guard let cgImage = makeMedKitGlowCGImage() else {
+            // Should not happen with this fixed, valid CoreGraphics
+            // configuration (the same premultiplied-last RGBA8 context
+            // `ImagePixelSampling` already relies on for decoding); falling
+            // back to a blank texture rather than crashing construction if
+            // it ever does.
+            return SKTexture()
+        }
+        let texture = SKTexture(cgImage: cgImage)
+        texture.filteringMode = .nearest
+        texture.usesMipmaps = false
+        return texture
+    }()
+
+    /// Pure-CoreGraphics construction of the med kit glow's pixel data --
+    /// no SpriteKit/GPU dependency, so a test can sample it directly
+    /// (`medKitGlowCGImageForTesting()`) without going through
+    /// `SKTexture`'s own GPU-backed readback path.
+    private static func makeMedKitGlowCGImage() -> CGImage? {
+        let width = Int(padSize.width)
+        let height = Int(padSize.height)
+        guard width > 0, height > 0 else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        let accent = padColor(for: .medKit)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        accent.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+        guard let gradient = CGGradient(
+            colorsSpace: colorSpace,
+            colors: [
+                CGColor(red: red, green: green, blue: blue, alpha: 1),
+                CGColor(red: red, green: green, blue: blue, alpha: 0),
+            ] as CFArray,
+            locations: [0, 1]
+        ) else {
+            return nil
+        }
+
+        let center = CGPoint(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
+        let radius = min(CGFloat(width), CGFloat(height)) / 2
+        context.drawRadialGradient(
+            gradient,
+            startCenter: center, startRadius: 0,
+            endCenter: center, endRadius: radius,
+            options: []
+        )
+
+        return context.makeImage()
+    }
+
+    /// Test seam exposing the pure-CoreGraphics glow image so a test
+    /// (`PickupNodeTests
+    /// .test_medKitPad_glowTexture_hasSoftRadialFalloff_notAHardSquare`)
+    /// can sample its pixels directly -- the same seam role
+    /// `resetTextureCacheForTesting()` plays below for the atlas cache; not
+    /// used by any production path.
+    static func medKitGlowCGImageForTesting() -> CGImage? {
+        makeMedKitGlowCGImage()
+    }
+
     // MARK: - Test seam
 
     /// Empties `textureCache`, so the next `texture(forColumn:)` call
@@ -161,9 +251,16 @@ final class PickupNode: SKNode {
     /// composition.
     let icon: SKSpriteNode
 
-    /// The accent-tinted backing pad. A plain color fill (no texture --
-    /// there is no dedicated pad art in the pack), tinted per `kind` via
-    /// `PixelGritPalette`.
+    /// The backing pad `icon` sits on top of.
+    ///
+    /// **CYBERPUN-17-18:** `medKit`'s pad is a soft, circular radial-glow
+    /// texture (`Self.medKitGlowTexture`) rather than a flat color fill --
+    /// the original flat 40x40pt `neonAccent` square read as a hard-edged
+    /// cyan box around the icon rather than the glow the design intends
+    /// (bug report + grooming findings). `garbageCan`'s pad is explicitly
+    /// out of scope for that ticket and keeps the original plain color fill
+    /// (no texture -- there is no dedicated pad art for it in the pack),
+    /// tinted via `PixelGritPalette.neonSecondary`.
     let pad: SKSpriteNode
 
     init(kind: PickupKind) {
@@ -176,7 +273,15 @@ final class PickupNode: SKNode {
         icon.colorBlendFactor = 0
         icon.zPosition = Self.iconRelativeZ
 
-        pad = SKSpriteNode(color: Self.padColor(for: kind), size: Self.padSize)
+        // CYBERPUN-17-18: medKit's pad is a soft radial-glow texture;
+        // garbageCan (out of scope for that ticket) keeps the original
+        // flat color fill.
+        switch kind {
+        case .medKit:
+            pad = SKSpriteNode(texture: Self.medKitGlowTexture, size: Self.padSize)
+        case .garbageCan:
+            pad = SKSpriteNode(color: Self.padColor(for: kind), size: Self.padSize)
+        }
         pad.zPosition = Self.padRelativeZ
 
         super.init()

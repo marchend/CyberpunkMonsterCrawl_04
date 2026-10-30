@@ -46,20 +46,36 @@ final class PickupNodeTests: XCTestCase {
         XCTAssertEqual(la, ra, accuracy: 1e-6, message, file: file, line: line)
     }
 
-    func test_pad_isAccentTinted() {
-        for kind in PickupKind.allCases {
-            let node = PickupNode(kind: kind)
-            XCTAssertNotEqual(node.pad.color, .clear, "\(kind)'s pad must be visibly tinted, not clear")
-        }
+    /// `garbageCan` is explicitly out of scope for `CYBERPUN-17-18` and
+    /// keeps its original flat accent-tinted fill.
+    func test_garbageCanPad_isAccentTinted() {
+        let node = PickupNode(kind: .garbageCan)
+        XCTAssertNil(node.pad.texture, "garbageCan's pad must stay untextured (CYBERPUN-17-18 scope: med kit only)")
+        XCTAssertNotEqual(node.pad.color, .clear, "garbageCan's pad must be visibly tinted, not clear")
+        assertColorsMatch(
+            node.pad.color, PixelGritPalette.neonSecondary,
+            "garbageCan's pad accent color must be unchanged by CYBERPUN-17-18"
+        )
     }
 
-    func test_medKitAndGarbageCan_useDistinctPadAccentColors() {
+    /// `CYBERPUN-17-18`: medKit's pad moved from a flat `neonAccent` color
+    /// fill to a soft radial-glow texture (see
+    /// `test_medKitPad_glowTexture_hasSoftRadialFalloff_notAHardSquare`
+    /// below for the actual shape assertion); this pins the structural
+    /// change -- textured, untinted, sized to `padSize` -- that the old
+    /// `.color`-based assertion could no longer express.
+    func test_medKitPad_isGlowTextured_notAFlatColorFill() {
+        let node = PickupNode(kind: .medKit)
+        XCTAssertNotNil(node.pad.texture, "medKit's pad must use the glow texture, not a flat color fill")
+        XCTAssertEqual(node.pad.colorBlendFactor, 0, "medKit's pad must not additionally tint its glow texture")
+        XCTAssertEqual(node.pad.size, PickupNode.padSize)
+    }
+
+    func test_medKitAndGarbageCan_useDistinctPadTreatments() {
         let medKit = PickupNode(kind: .medKit)
         let garbageCan = PickupNode(kind: .garbageCan)
-        XCTAssertNotEqual(
-            medKit.pad.color, garbageCan.pad.color,
-            "the two pickup kinds should read as visually distinct via their pad accent color"
-        )
+        XCTAssertNotNil(medKit.pad.texture, "medKit's pad must be textured (the glow)")
+        XCTAssertNil(garbageCan.pad.texture, "garbageCan's pad must stay untextured (out of scope)")
     }
 
     // MARK: - Icon size
@@ -229,5 +245,79 @@ final class PickupNodeTests: XCTestCase {
     func test_icon_hasABobbingAction() {
         let node = PickupNode(kind: .medKit)
         XCTAssertNotNil(node.icon.action(forKey: PickupNode.bobActionKey))
+    }
+
+    // MARK: - Med kit pad glow shape (CYBERPUN-17-18)
+
+    /// The bug: the pad read as a flat, hard-edged cyan square around the
+    /// icon rather than a glow. Pinned here against the pure-CoreGraphics
+    /// image the production texture is built from (`PickupNode
+    /// .medKitGlowCGImageForTesting()`), decoded through the same
+    /// known-layout RGBA8 context `ImagePixelSampling` uses, rather than via
+    /// `SKTexture.cgImage()`'s GPU-backed readback -- so this assertion
+    /// does not depend on a GPU/Metal context being available to the test
+    /// process.
+    func test_medKitPad_glowTexture_hasSoftRadialFalloff_notAHardSquare() throws {
+        let cgImage = try XCTUnwrap(
+            PickupNode.medKitGlowCGImageForTesting(),
+            "the med kit glow image must be constructible from its fixed, valid CoreGraphics configuration"
+        )
+
+        let centerAlpha = try XCTUnwrap(
+            alpha(atX: cgImage.width / 2, y: cgImage.height / 2, in: cgImage),
+            "center pixel must be sampleable"
+        )
+        let cornerAlpha = try XCTUnwrap(
+            alpha(atX: 0, y: 0, in: cgImage),
+            "corner pixel must be sampleable"
+        )
+
+        XCTAssertGreaterThan(
+            centerAlpha, cornerAlpha,
+            "the glow must fade out toward the pad's corners (center alpha \(centerAlpha), corner alpha "
+                + "\(cornerAlpha)) -- a flat fill would read the same alpha everywhere"
+        )
+        XCTAssertLessThan(
+            cornerAlpha, 40,
+            "the pad's corners must read as (near-)transparent for a soft circular glow, not a filled square "
+                + "(measured corner alpha \(cornerAlpha) of 255)"
+        )
+    }
+
+    /// Decodes `cgImage` into a known-layout (premultiplied-last RGBA8)
+    /// buffer before sampling, the same approach `ImagePixelSampling
+    /// .pixels(ofImageNamed:)` uses for named catalog assets -- so the byte
+    /// offset read below does not depend on whatever internal pixel layout
+    /// `cgImage` itself happens to carry.
+    private func alpha(atX x: Int, y: Int, in cgImage: CGImage) -> UInt8? {
+        let width = cgImage.width
+        let height = cgImage.height
+        guard x >= 0, x < width, y >= 0, y < height else { return nil }
+
+        let byteCount = width * height * 4
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: byteCount)
+        buffer.initialize(repeating: 0, count: byteCount)
+        defer {
+            buffer.deinitialize(count: byteCount)
+            buffer.deallocate()
+        }
+
+        guard let context = CGContext(
+            data: buffer,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .none
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+
+        let offset = (y * width + x) * 4
+        return buffer[offset + 3]
     }
 }
