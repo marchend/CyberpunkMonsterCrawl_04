@@ -467,7 +467,7 @@ final class GameScene: SKScene {
         pickupManager = PickupManager(
             worldSeed: worldSeed,
             obstructionsProvider: { [weak self] in
-                self?.groundPlane?.streaming.residentChunks.values.flatMap(\.buildingPlacements) ?? []
+                self?.residentBuildingPlacementRecords() ?? []
             },
             // The real screen-space visibility question, asked with the
             // helper that already answers it for the raccoon swarm.
@@ -858,8 +858,24 @@ final class GameScene: SKScene {
     /// than assumed at each call site, so `PixelCrispness.snappedPosition(
     /// for:scale:)` always snaps to the grid the running device actually
     /// composites at.
-    private var deviceScale: CGFloat {
+    var deviceScale: CGFloat {
         view?.contentScaleFactor ?? 1
+    }
+
+    /// Every `BuildingPlacementRecord` in the resident chunk window, read
+    /// directly off `GroundPlaneStreamer.streaming.residentChunks` -- the
+    /// one place this scene reads that raw per-chunk list (`commonInit()`'s
+    /// own doc comment on `pickupManager`'s `obstructionsProvider`
+    /// explains why this, rather than `groundPlane?.residentObstructions`,
+    /// is the right source: that property is already a lossy projection
+    /// into `CollisionResolver.FootprintBounds`).
+    ///
+    /// Factored out so `pickupManager`'s `obstructionsProvider` closure
+    /// (`commonInit()`) and this scene's `HUDRunModel.radarBuildingRecords`
+    /// conformance (`CYBERPUN-17-23`) share one call site rather than each
+    /// re-deriving the same `flatMap` traversal.
+    private func residentBuildingPlacementRecords() -> [BuildingPlacementRecord] {
+        groundPlane?.streaming.residentChunks.values.flatMap(\.buildingPlacements) ?? []
     }
 
     /// Advances the run's movement pipeline for one frame, in a fixed order:
@@ -1924,4 +1940,28 @@ extension GameScene: HUDRunModel {
     func triggerPulse() {
         handlePulsePress()
     }
+
+    // MARK: - Radar live data (`CYBERPUN-17-23`)
+
+    /// Reuses `raccoonSpawnDirector.targetCandidates` -- the identical
+    /// per-frame snapshot `advanceMovementAndCamera(currentTime:)` already
+    /// feeds to `playerCombat`/`applyPulseTrigger(raccoons:)` -- so the
+    /// radar introduces no second traversal of the live swarm.
+    var radarRaccoonCandidates: [TargetSelection.Candidate] { raccoonSpawnDirector.targetCandidates }
+
+    /// `pickupManager.activePickups` filtered to live, uncollected med
+    /// kits -- the same `!$0.isConsumed` filter `syncPickupNodes()` already
+    /// applies, narrowed further to `.medKit` since the radar's live-data
+    /// overlay only shows med kits (garbage cans are a raccoon-diversion
+    /// mechanic, not a player-facing pickup the radar highlights).
+    var radarMedKitTiles: [TilePoint] {
+        pickupManager.activePickups
+            .filter { $0.kind == .medKit && !$0.isConsumed }
+            .map(\.position)
+    }
+
+    /// Every building placement record in the resident chunk window --
+    /// shared with `pickupManager`'s own `obstructionsProvider` via
+    /// `residentBuildingPlacementRecords()` rather than re-traversed here.
+    var radarBuildingRecords: [BuildingPlacementRecord] { residentBuildingPlacementRecords() }
 }

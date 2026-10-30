@@ -22,6 +22,10 @@ final class SwarmBannerEscalationTests: XCTestCase {
         var pulseCooldownFraction: CGFloat = 1
         var isPulseReady: Bool = true
         var onSwarmEscalation: (() -> Void)?
+        var radarRaccoonCandidates: [TargetSelection.Candidate] = []
+        var radarMedKitTiles: [TilePoint] = []
+        var radarBuildingRecords: [BuildingPlacementRecord] = []
+        var deviceScale: CGFloat = 1
 
         private(set) var triggerPulseCount = 0
         func triggerPulse() {

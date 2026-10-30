@@ -54,6 +54,31 @@ protocol HUDRunModel: AnyObject {
     /// swarm-escalation event occurs, so `HUDLayer` can show `SwarmBanner`
     /// without the run model needing to know `SwarmBanner` exists.
     var onSwarmEscalation: (() -> Void)? { get set }
+
+    // MARK: - Radar live data (`CYBERPUN-17-23`)
+
+    /// Live raccoon tile-space candidates for the radar's live-data
+    /// overlay -- the identical `RaccoonSpawnDirector.targetCandidates`
+    /// snapshot the player's auto-fire targeting and
+    /// `applyPulseTrigger(raccoons:)` already read each frame, so a
+    /// conformer reusing that same property for this requirement
+    /// introduces no second traversal of the swarm.
+    var radarRaccoonCandidates: [TargetSelection.Candidate] { get }
+
+    /// Live, uncollected med-kit tile positions for the radar's live-data
+    /// overlay -- `PickupManager.activePickups` filtered to `.medKit` and
+    /// not yet consumed.
+    var radarMedKitTiles: [TilePoint] { get }
+
+    /// Every building placement record in the resident chunk window, for
+    /// the radar backdrop's blocked/open classification
+    /// (`RadarBackdropRenderer.isTileBlocked`).
+    var radarBuildingRecords: [BuildingPlacementRecord] { get }
+
+    /// The device scale (`@1x`/`@2x`/`@3x`) the radar backdrop rasterizes
+    /// at -- `1` for a headless (view-less) scene, the same fallback
+    /// `PixelCrispness.snappedPosition(for:scale:)`'s own callers use.
+    var deviceScale: CGFloat { get }
 }
 
 /// Coarse device orientation, derived from a scene size's own aspect
