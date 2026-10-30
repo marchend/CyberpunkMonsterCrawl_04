@@ -282,6 +282,67 @@ final class PickupNodeTests: XCTestCase {
             "the pad's corners must read as (near-)transparent for a soft circular glow, not a filled square "
                 + "(measured corner alpha \(cornerAlpha) of 255)"
         )
+
+        // A hard-edged opaque disc also satisfies the two assertions above
+        // (alpha 255 everywhere inside the radius, 0 outside) -- the
+        // property that actually distinguishes a soft glow from that is the
+        // *ramp*: a mid-radius sample must sit strictly between the corner
+        // and the center, not jump straight from one to the other.
+        let midRadiusAlpha = try XCTUnwrap(
+            alpha(atX: cgImage.width / 2 + 10, y: cgImage.height / 2, in: cgImage),
+            "mid-radius pixel must be sampleable"
+        )
+        XCTAssertLessThan(
+            midRadiusAlpha, centerAlpha,
+            "a mid-radius sample must read softer than the opaque center (measured \(midRadiusAlpha) vs. "
+                + "\(centerAlpha)) -- a hard-edged disc would read the same alpha as the center here"
+        )
+        XCTAssertGreaterThan(
+            midRadiusAlpha, cornerAlpha,
+            "a mid-radius sample must still carry some of the glow (measured \(midRadiusAlpha) vs. corner "
+                + "\(cornerAlpha)) -- a hard-edged disc would already have dropped to the corner's alpha here"
+        )
+    }
+
+    /// The bug this ticket fixes is specifically about the pad's
+    /// *appearance*: a wrong or zeroed-out color renders a black/invisible
+    /// halo, which the alpha-only assertions above cannot catch -- this
+    /// pins the glow's actual hue to `padColor(for: .medKit)`
+    /// (`PixelGritPalette.neonAccent`), restoring the coverage the deleted
+    /// `.color`-based tests used to provide.
+    func test_medKitPad_glowTexture_centerColor_matchesNeonAccent() throws {
+        let cgImage = try XCTUnwrap(
+            PickupNode.medKitGlowCGImageForTesting(),
+            "the med kit glow image must be constructible from its fixed, valid CoreGraphics configuration"
+        )
+        let center = try XCTUnwrap(
+            components(atX: cgImage.width / 2, y: cgImage.height / 2, in: cgImage),
+            "center pixel must be sampleable"
+        )
+
+        var expectedRed: CGFloat = 0, expectedGreen: CGFloat = 0
+        var expectedBlue: CGFloat = 0, expectedAlpha: CGFloat = 0
+        PixelGritPalette.neonAccent.getRed(
+            &expectedRed, green: &expectedGreen, blue: &expectedBlue, alpha: &expectedAlpha
+        )
+
+        // The center pixel is drawn at the gradient's zero-radius stop, so
+        // (accounting for premultiplied-alpha storage and 8-bit rounding)
+        // it must read back as `neonAccent`'s own color, not some other
+        // palette entry or a zeroed-out (black) fallback.
+        let tolerance = 3.0
+        XCTAssertEqual(
+            Double(center.red), (expectedRed * expectedAlpha * 255).rounded(), accuracy: tolerance,
+            "center pixel's red component does not match neonAccent"
+        )
+        XCTAssertEqual(
+            Double(center.green), (expectedGreen * expectedAlpha * 255).rounded(), accuracy: tolerance,
+            "center pixel's green component does not match neonAccent"
+        )
+        XCTAssertEqual(
+            Double(center.blue), (expectedBlue * expectedAlpha * 255).rounded(), accuracy: tolerance,
+            "center pixel's blue component does not match neonAccent"
+        )
     }
 
     /// Decodes `cgImage` into a known-layout (premultiplied-last RGBA8)
@@ -289,7 +350,9 @@ final class PickupNodeTests: XCTestCase {
     /// .pixels(ofImageNamed:)` uses for named catalog assets -- so the byte
     /// offset read below does not depend on whatever internal pixel layout
     /// `cgImage` itself happens to carry.
-    private func alpha(atX x: Int, y: Int, in cgImage: CGImage) -> UInt8? {
+    private func components(
+        atX x: Int, y: Int, in cgImage: CGImage
+    ) -> (red: UInt8, green: UInt8, blue: UInt8, alpha: UInt8)? {
         let width = cgImage.width
         let height = cgImage.height
         guard x >= 0, x < width, y >= 0, y < height else { return nil }
@@ -318,6 +381,10 @@ final class PickupNodeTests: XCTestCase {
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
 
         let offset = (y * width + x) * 4
-        return buffer[offset + 3]
+        return (buffer[offset], buffer[offset + 1], buffer[offset + 2], buffer[offset + 3])
+    }
+
+    private func alpha(atX x: Int, y: Int, in cgImage: CGImage) -> UInt8? {
+        components(atX: x, y: y, in: cgImage)?.alpha
     }
 }

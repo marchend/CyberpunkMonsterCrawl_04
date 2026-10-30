@@ -8,16 +8,11 @@ import SpriteKit
 /// pad, with a gentle vertical bob and this repo's usual pixel-crispness /
 /// depth-sort conventions.
 ///
-/// **Scope of this PR (`CYBERPUN-17-11` PR 1).** Node assembly only -- no
-/// scene mount. `PickupManager` (this same PR) is pure spawn/lifetime logic
-/// with no SpriteKit dependency; a later PR is expected to mount one
-/// `PickupNode` per `Pickup` the manager reports, the same "logic first,
-/// mount later" split `ChunkStreamingManager`/`GroundPlaneStreamer` and
-/// `RaccoonSpawnDirector`/`RaccoonNode` both already follow in this
-/// codebase. The `CYBERPUN-17-11` entry in AGENT.md/CLAUDE.md is the
-/// authoritative implemented-vs-outstanding list for that deferral (no
-/// invented ticket ID here); until it lands, no pickup can appear in a real
-/// build, so product gate 5 is unverifiable on a device.
+/// **Scope of this PR (`CYBERPUN-17-11` PR 1), update.** Node assembly
+/// originally shipped with no scene mount; `GameScene` now constructs
+/// `PickupNode` directly and `PickupIntegrationTests` exercises the mounted
+/// path, so a pickup can appear in a real build and product gate 5 is
+/// verifiable on a device.
 final class PickupNode: SKNode {
 
     /// The icon's on-screen size, in points: the story's fixed 32x32pt icon
@@ -146,14 +141,17 @@ final class PickupNode: SKNode {
     /// exception needed -- the soft falloff comes entirely from the baked
     /// per-pixel alpha gradient, not from scaling or from relaxing nearest
     /// filtering.
-    private static let medKitGlowTexture: SKTexture = {
+    ///
+    /// `nil` if `makeMedKitGlowCGImage()` fails (should not happen with
+    /// this fixed, valid CoreGraphics configuration -- the same
+    /// premultiplied-last RGBA8 context `ImagePixelSampling` already relies
+    /// on for decoding). `PickupNode.init` falls back to the original flat
+    /// color fill in that case rather than rendering a blank/invisible pad:
+    /// a visible-but-wrong pad is strictly better than no pad at all, since
+    /// the bug this texture fixes is itself a visual regression.
+    private static let medKitGlowTexture: SKTexture? = {
         guard let cgImage = makeMedKitGlowCGImage() else {
-            // Should not happen with this fixed, valid CoreGraphics
-            // configuration (the same premultiplied-last RGBA8 context
-            // `ImagePixelSampling` already relies on for decoding); falling
-            // back to a blank texture rather than crashing construction if
-            // it ever does.
-            return SKTexture()
+            return nil
         }
         let texture = SKTexture(cgImage: cgImage)
         texture.filteringMode = .nearest
@@ -185,12 +183,19 @@ final class PickupNode: SKNode {
 
         let accent = padColor(for: .medKit)
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        accent.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        // `getRed(...)` fails for a non-RGB color (pattern/catalog colors);
+        // `PixelGritPalette.neonAccent` is `UIColor(red:green:blue:alpha:)`
+        // today so this always succeeds, but guard it rather than silently
+        // rendering a black glow from zeroed-out components if that ever
+        // changes.
+        guard accent.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return nil
+        }
 
         guard let gradient = CGGradient(
             colorsSpace: colorSpace,
             colors: [
-                CGColor(red: red, green: green, blue: blue, alpha: 1),
+                CGColor(red: red, green: green, blue: blue, alpha: alpha),
                 CGColor(red: red, green: green, blue: blue, alpha: 0),
             ] as CFArray,
             locations: [0, 1]
@@ -278,7 +283,13 @@ final class PickupNode: SKNode {
         // flat color fill.
         switch kind {
         case .medKit:
-            pad = SKSpriteNode(texture: Self.medKitGlowTexture, size: Self.padSize)
+            if let glow = Self.medKitGlowTexture {
+                pad = SKSpriteNode(texture: glow, size: Self.padSize)
+            } else {
+                // Degrade to the pre-fix flat color fill rather than an
+                // invisible pad -- see `medKitGlowTexture`'s doc comment.
+                pad = SKSpriteNode(color: Self.padColor(for: kind), size: Self.padSize)
+            }
         case .garbageCan:
             pad = SKSpriteNode(color: Self.padColor(for: kind), size: Self.padSize)
         }
