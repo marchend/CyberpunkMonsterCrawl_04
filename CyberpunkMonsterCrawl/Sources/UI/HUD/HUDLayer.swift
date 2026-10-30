@@ -54,6 +54,44 @@ protocol HUDRunModel: AnyObject {
     /// swarm-escalation event occurs, so `HUDLayer` can show `SwarmBanner`
     /// without the run model needing to know `SwarmBanner` exists.
     var onSwarmEscalation: (() -> Void)? { get set }
+
+    // MARK: - Radar live data (`CYBERPUN-17-23`)
+
+    /// Live raccoon tile-space candidates for the radar's live-data
+    /// overlay -- the same `RaccoonSpawnDirector.targetCandidates`
+    /// snapshot *shape* the player's auto-fire targeting and
+    /// `applyPulseTrigger(raccoons:)` already read each frame, so a
+    /// conformer can satisfy this requirement by forwarding that property
+    /// rather than inventing a second representation of the swarm.
+    ///
+    /// Note that forwarding it is not free: `targetCandidates` is a
+    /// *computed* `map` over the live swarm, so each read walks it and
+    /// allocates a fresh array -- a radar reading this per `refresh()` is
+    /// a genuine second traversal per frame. Bounded by
+    /// `maxConcurrentSwarmSize` (40), so cheap rather than a defect, but
+    /// a third consumer should cache rather than assume it is free.
+    var radarRaccoonCandidates: [TargetSelection.Candidate] { get }
+
+    /// Live, uncollected med-kit tile positions for the radar's live-data
+    /// overlay -- `PickupManager.activePickups` filtered to `.medKit` and
+    /// not yet consumed.
+    var radarMedKitTiles: [TilePoint] { get }
+
+    /// Every building placement record in the resident chunk window, for
+    /// the radar backdrop's blocked/open classification
+    /// (`RadarBackdropRenderer.isTileBlocked`).
+    var radarBuildingRecords: [BuildingPlacementRecord] { get }
+
+    /// The device scale (`@1x`/`@2x`/`@3x`) the radar backdrop rasterizes
+    /// at -- `1` for a headless (view-less) scene, the same fallback
+    /// `PixelCrispness.snappedPosition(for:scale:)`'s own callers use.
+    ///
+    /// Consumed by `RadarBackdropRenderer.makeBackdropTexture(playerTile:
+    /// seed:buildingRecords:scale:deviceScale:)`, which sizes its bitmap
+    /// `110 * deviceScale` **pixels** for the 110**pt** dial so the
+    /// texture lands 1:1 on the device's pixel grid instead of being
+    /// upscaled 2-3x into a blur.
+    var deviceScale: CGFloat { get }
 }
 
 /// Coarse device orientation, derived from a scene size's own aspect
