@@ -64,7 +64,7 @@ final class RaccoonSpawnDirector {
     /// Seconds between spawn attempts at the very start of a run (elapsed
     /// time `0`). `spawnInterval(atElapsedTime:)` ramps this down as the
     /// run continues -- the story's "pressure ramps with run time".
-    static let initialSpawnInterval: TimeInterval = 3.0
+    static let initialSpawnInterval: TimeInterval = 1.0
 
     /// The floor `spawnInterval(atElapsedTime:)`'s ramp decays toward, so
     /// an arbitrarily long run cannot spawn every single frame.
@@ -95,12 +95,14 @@ final class RaccoonSpawnDirector {
     /// never exceeds `nearAxisRange`'s bound plus `3`. With the far axis at
     /// least `farAxisMinimumTiles` in magnitude, `|dx - dy|` is therefore at
     /// least `farAxisMinimumTiles - (nearAxisRange bound + 3)` --
-    /// `40 - (15 + 3) = 22` tiles at the values below, i.e. at least
-    /// `22 * 48 = 1_056` screen points. That comfortably exceeds half the
-    /// width of the largest supported viewport
+    /// `33 - (15 + 3) = 15` tiles at the values below, i.e. at least
+    /// `15 * 48 = 720` screen points. That exceeds half the width of the
+    /// largest supported viewport
     /// (`ChunkStreamingManager.referenceViewportPoints`, `683pt`), in
     /// either screen axis and either device orientation, so a spawn is
-    /// never visible on the frame it lands. `RaccoonSpawnDirectorTests`
+    /// never visible on the frame it lands -- `CYBERPUN-17-20` retuned this
+    /// down from `40` (a `1_056`-point gap) to shrink the walk-in floor
+    /// while keeping that guarantee intact; `RaccoonSpawnDirectorTests`
     /// checks this directly against `isOnScreen(tile:cameraPosition:
     /// viewportSize:)` rather than trusting the arithmetic in prose.
     ///
@@ -110,7 +112,7 @@ final class RaccoonSpawnDirector {
     /// `ChunkStreamingManager`'s resident chunks alone, which guarantee only
     /// `ChunkStreamingManager.guaranteedMarginTiles` (`residentRadius * Chunk.size`
     /// = 24) tiles of margin around the camera -- less than
-    /// `farAxisMinimumTiles`. So for roughly the first 16-32 tiles of its
+    /// `farAxisMinimumTiles`. So for roughly the first 9-32 tiles of its
     /// walk a freshly-spawned raccoon steers against an obstruction set that
     /// contains no buildings near it, and will walk straight through
     /// footprints out there. The story's "they collide with building
@@ -131,7 +133,7 @@ final class RaccoonSpawnDirector {
     /// margin beyond the largest supported viewport. That trades a
     /// documented, off-screen steering gap for visible pop-in at the screen
     /// edge, so the bound is recorded here instead.
-    static let farAxisMinimumTiles: Double = 40
+    static let farAxisMinimumTiles: Double = 33
     static let farAxisMaximumTiles: Double = 56
 
     /// Range the *near* (lane-snapped) axis's pre-snap target is drawn
