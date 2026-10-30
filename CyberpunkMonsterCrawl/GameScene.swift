@@ -1194,13 +1194,33 @@ final class GameScene: SKScene {
             at: playerPosition,
             radius: Self.medKitCollectionRadiusTiles
         ) {
-            player?.heal(healedAmount)
+            let actuallyHealed = player?.heal(healedAmount) ?? 0
             // The manager marks the med kit consumed immediately but only
             // prunes it from `activePickups` on its *next* `update` call
             // (see that type's own doc comment) -- sync again right away so
             // the collected icon disappears on the very frame it was
             // collected rather than lingering one extra frame.
             syncPickupNodes()
+
+            // `CYBERPUN-17-21`: the floating "+N" heal indicator this med
+            // kit was previously missing entirely. `actuallyHealed` --
+            // `PlayerNode.heal(_:)`'s returned applied amount, not the raw
+            // roll `healedAmount` -- so a heal clamped by `maxHP` shows the
+            // true number rather than one the HP bar never reflected.
+            // Positioned above the player's head (offset by one sprite
+            // cell height) and converted into `effectsLayer`'s own space,
+            // the same `effectsSpacePoint(fromWorldSpace:)` conversion
+            // `applyPulseTrigger(raccoons:)` performs for `pulseRing`.
+            let basePosition = effectsSpacePoint(
+                fromWorldSpace: IsometricProjection.tileToScreen(playerPosition)
+            )
+            let indicatorPosition = CGPoint(
+                x: basePosition.x,
+                y: basePosition.y + PlayerSpriteSheet.cellSize.height
+            )
+            if let indicator = HealIndicatorNode.spawn(amount: actuallyHealed, at: indicatorPosition) {
+                effectsLayer.addChild(indicator)
+            }
         }
     }
 
