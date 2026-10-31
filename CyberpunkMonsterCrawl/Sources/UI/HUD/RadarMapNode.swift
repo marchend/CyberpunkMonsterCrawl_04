@@ -90,6 +90,61 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
     static let borderWidth: CGFloat = 1
     static let markerSize = CGSize(width: 6, height: 6)
 
+    // MARK: - Texture-backed fills (`CYBERPUN-17-23-t3`)
+
+    /// `SKCropNode.maskNode` compositing a color-only `SKSpriteNode`
+    /// against another color-only sprite (no `texture` on either side) is
+    /// the known-unreliable combination on device -- unlike `backdrop`,
+    /// which only ever showed correctly *because* it always carries a real
+    /// rasterized `texture` (`RadarBackdropRenderer.makeBackdropTexture`).
+    /// Before this fix `maskNode` and every marker (`playerMarker`, the
+    /// pooled raccoon/med-kit markers) were built via
+    /// `SKSpriteNode(color:size:)` with no texture at all, which matched
+    /// the reported symptom exactly: the textured backdrop rendered through
+    /// the crop while the textureless mask + textureless marker children
+    /// did not reliably composite. `makeSolidTexture(color:size:)` renders
+    /// a plain, single-color `UIImage` once (`UIGraphicsImageRenderer`) and
+    /// hands back an `SKTexture` from it, so every node below is
+    /// texture-backed exactly like `backdrop` already was.
+    private static func makeSolidTexture(color: UIColor, size: CGSize) -> SKTexture {
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            color.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        return SKTexture(image: image)
+    }
+
+    /// The crop mask's own backing texture -- solid white, `contentSize`
+    /// across. `SKCropNode` reads only the mask's alpha channel, so the
+    /// fill color itself is irrelevant; white matches the sentinel
+    /// `SKSpriteNode(color: .white, size:...)` this replaces.
+    private static let maskTexture = makeSolidTexture(color: .white, size: contentSize)
+
+    /// The player marker's own backing texture -- built once and reused
+    /// across every `RadarMapNode` instance, since the marker never
+    /// changes color.
+    private static let playerMarkerTexture = makeSolidTexture(
+        color: PixelGritPalette.neonAccent,
+        size: markerSize
+    )
+
+    /// The raccoon marker pool's shared backing texture -- built **once**,
+    /// not per-marker: every pooled raccoon marker (`syncMarkerPool`) reuses
+    /// this same `SKTexture` instance rather than rasterizing its own copy
+    /// each time the pool grows.
+    private static let raccoonMarkerTexture = makeSolidTexture(
+        color: PixelGritPalette.neonSecondary,
+        size: markerSize
+    )
+
+    /// The med-kit marker pool's shared backing texture -- see
+    /// `raccoonMarkerTexture`'s own doc comment; same "once, reused across
+    /// the pool" rule.
+    private static let medKitMarkerTexture = makeSolidTexture(
+        color: PixelGritPalette.radarMedKitAccent,
+        size: markerSize
+    )
+
     // MARK: - Nodes
 
     private let border: SKShapeNode
@@ -132,9 +187,9 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
     // MARK: - Init
 
     override init() {
-        maskNode = SKSpriteNode(color: .white, size: Self.contentSize)
+        maskNode = SKSpriteNode(texture: Self.maskTexture, size: Self.contentSize)
         backdrop = SKSpriteNode(color: PixelGritPalette.background, size: Self.contentSize)
-        playerMarker = SKSpriteNode(color: PixelGritPalette.neonAccent, size: Self.markerSize)
+        playerMarker = SKSpriteNode(texture: Self.playerMarkerTexture, size: Self.markerSize)
         border = SKShapeNode(rectOf: Self.outerSize)
 
         super.init()
@@ -235,7 +290,7 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
             &medKitMarkers,
             in: medKitContainer,
             count: medKitTiles.count,
-            color: PixelGritPalette.radarMedKitAccent,
+            texture: Self.medKitMarkerTexture,
             namePrefix: "radarMap.medKitMarker"
         )
         positionMarkers(medKitMarkers, tiles: medKitTiles, relativeTo: playerTile, deviceScale: deviceScale)
@@ -244,7 +299,7 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
             &raccoonMarkers,
             in: raccoonContainer,
             count: raccoonTiles.count,
-            color: PixelGritPalette.neonSecondary,
+            texture: Self.raccoonMarkerTexture,
             namePrefix: "radarMap.raccoonMarker"
         )
         positionMarkers(raccoonMarkers, tiles: raccoonTiles, relativeTo: playerTile, deviceScale: deviceScale)
@@ -292,15 +347,20 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
     /// `isHidden` on every pool slot from its index against `count` -- a
     /// surplus slot (left over from a higher-water-mark frame) is hidden,
     /// never removed.
+    ///
+    /// `texture` is the pool's own shared backing texture
+    /// (`raccoonMarkerTexture`/`medKitMarkerTexture`), built once at the
+    /// type level and reused by every marker this pool grows to -- not
+    /// rasterized per-marker.
     private func syncMarkerPool(
         _ pool: inout [SKSpriteNode],
         in container: SKNode,
         count: Int,
-        color: UIColor,
+        texture: SKTexture,
         namePrefix: String
     ) {
         while pool.count < count {
-            let marker = SKSpriteNode(color: color, size: Self.markerSize)
+            let marker = SKSpriteNode(texture: texture, size: Self.markerSize)
             marker.name = "\(namePrefix).\(pool.count)"
             marker.isAccessibilityElement = false
             container.addChild(marker)
