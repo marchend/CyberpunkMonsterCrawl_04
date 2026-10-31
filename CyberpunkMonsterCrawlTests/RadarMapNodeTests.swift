@@ -7,6 +7,27 @@ import XCTest
 /// marker pooling (no per-frame allocation once a pool's high-water mark is
 /// reached), the `SKCropNode` clip, the out-of-window marker-hiding rule
 /// and the player marker's fixed centre.
+///
+/// `CYBERPUN-17-23-t3` adds one rendering-level test at the bottom of this
+/// file: every test above only asserts *structural* state (`.position`,
+/// `.isHidden`, pool/container membership) -- never the real, composited
+/// pixels an `SKCropNode` actually produces.
+///
+/// **What that test is and is not** (PR #80 review asked for this to be
+/// measured rather than assumed, so it was): reverting `maskNode`,
+/// `playerMarker` and the pooled markers to the pre-`-t3`
+/// `SKSpriteNode(color:size:)` form and re-running the suite on the
+/// iPhone 16 simulator leaves it **green**. So it is *not* regression
+/// coverage pinning the texture-backing fix, and the defect it was written
+/// against remains a re-reading hypothesis rather than a reproduced
+/// failure. That is the expected result, not a surprise: the defect is
+/// described as a *device* `SKCropNode` compositing problem, and an
+/// offscreen `SKView.texture(from:)` render in the simulator is the
+/// environment least likely to reproduce it. What the test does buy is the
+/// only pixel-level coverage in this file -- that the crop/geometry
+/// pipeline composites *something* non-background at the three expected
+/// columns -- which would catch a mask, clip or marker-placement
+/// regression that flattens the dial outright.
 final class RadarMapNodeTests: XCTestCase {
 
     // MARK: - Helpers
@@ -335,4 +356,102 @@ final class RadarMapNodeTests: XCTestCase {
             "a changed radar scale changes the dial's field of view and must rebuild"
         )
     }
+
+    // MARK: - Rendering-level: markers are actually visible through the crop (`CYBERPUN-17-23-t3`)
+
+    /// Renders the real, composited `RadarMapNode` pixels via
+    /// `SKView.texture(from:)` and decodes them, rather than trusting
+    /// structural state alone.
+    ///
+    /// See this file's header for what this does *not* establish: it
+    /// passes against the pre-`-t3`, color-only node too, so read it as
+    /// pixel-level coverage of the crop/geometry pipeline, not as the
+    /// regression test for the texture-backing fix.
+    ///
+    /// The player, raccoon and med-kit tiles are chosen so every marker
+    /// lands on the same radar-space **row** (`y == 0`, the node's own
+    /// vertical centre -- `RadarGeometry.radarPoint(forTileOffset:scale:)`
+    /// is `x = (dx - dy) * scale`, `y = (dx + dy) * (scale / 2)`, so
+    /// `dy == -dx` forces `y == 0`), spread out only along **x**. That
+    /// deliberately sidesteps a genuine, irrelevant ambiguity -- whether a
+    /// decoded `CGImage`'s row 0 is the visual top or bottom of the
+    /// picture -- since the vertical centre row is the vertical centre
+    /// either way; only the horizontal (unambiguously left-is-left)
+    /// placement needs to be right for this test to mean anything.
+    func test_crop_rendersVisibleMarkers_atThePlayerRaccoonAndMedKitPositions() throws {
+        let node = RadarMapNode()
+        node.radarScale = 1
+
+        // radarPoint(forTileOffset: (10, -10), scale: 1) == (20, 0).
+        let raccoonTile = TileCoordinate(tileX: 10, tileY: -10)
+        // radarPoint(forTileOffset: (-10, 10), scale: 1) == (-20, 0).
+        let medKitTile = TileCoordinate(tileX: -10, tileY: 10)
+
+        node.update(
+            playerTile: TileCoordinate(tileX: 0, tileY: 0),
+            raccoonTiles: [raccoonTile],
+            medKitTiles: [medKitTile],
+            isTileBlocked: noBlocked,
+            deviceScale: 1
+        )
+
+        let frame = node.calculateAccumulatedFrame()
+        XCTAssertGreaterThan(frame.width, 0, "precondition: the node must have a real, non-empty drawn extent")
+        XCTAssertGreaterThan(frame.height, 0, "precondition: the node must have a real, non-empty drawn extent")
+
+        let view = SKView(frame: CGRect(origin: .zero, size: frame.size))
+        let texture = try XCTUnwrap(
+            view.texture(from: node),
+            "SKView must be able to render RadarMapNode's composited content to a texture"
+        )
+        let cgImage = try XCTUnwrap(texture.cgImage())
+        let pixels = try XCTUnwrap(CGImagePixels.rgbaBytes(of: cgImage))
+        let width = cgImage.width
+        let height = cgImage.height
+
+        func column(forNodeX x: CGFloat) -> Int {
+            let fraction = (x - frame.minX) / frame.width
+            return Int((fraction * CGFloat(width - 1)).rounded())
+        }
+
+        // `PixelGritPalette.background` is `UIColor(white: 0.04, alpha: 1)`
+        // -- ~10/255 per channel. A pixel well clear of that is not the
+        // plain backdrop fill the un-marked radar renders everywhere else.
+        func isNonBackground(row: Int, col: Int) -> Bool {
+            guard row >= 0, row < height, col >= 0, col < width else { return false }
+            let index = (row * width + col) * 4
+            guard index + 2 < pixels.count else { return false }
+            let (r, g, b) = (Int(pixels[index]), Int(pixels[index + 1]), Int(pixels[index + 2]))
+            return abs(r - 10) > 40 || abs(g - 10) > 40 || abs(b - 10) > 40
+        }
+
+        // A small box, not a single pixel: this does not need the
+        // node-to-pixel conversion to be bit-perfect, only close.
+        func anyNonBackground(aroundRow row: Int, col: Int, radius: Int = 4) -> Bool {
+            for deltaRow in -radius...radius {
+                for deltaCol in -radius...radius {
+                    if isNonBackground(row: row + deltaRow, col: col + deltaCol) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        let centreRow = height / 2
+
+        XCTAssertTrue(
+            anyNonBackground(aroundRow: centreRow, col: column(forNodeX: 0)),
+            "the player marker must render a non-background pixel at the radar's centre"
+        )
+        XCTAssertTrue(
+            anyNonBackground(aroundRow: centreRow, col: column(forNodeX: 20)),
+            "the raccoon marker must render a non-background pixel at its radar-space position"
+        )
+        XCTAssertTrue(
+            anyNonBackground(aroundRow: centreRow, col: column(forNodeX: -20)),
+            "the med-kit marker must render a non-background pixel at its radar-space position"
+        )
+    }
+
 }

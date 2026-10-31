@@ -90,6 +90,83 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
     static let borderWidth: CGFloat = 1
     static let markerSize = CGSize(width: 6, height: 6)
 
+    // MARK: - Texture-backed fills (`CYBERPUN-17-23-t3`)
+
+    /// `SKCropNode.maskNode` compositing a color-only `SKSpriteNode`
+    /// against another color-only sprite (no `texture` on either side) is
+    /// the known-unreliable combination on device -- unlike the *rebuilt*
+    /// `backdrop`, which only ever showed correctly once it carried a real
+    /// rasterized `texture` (`RadarBackdropRenderer.makeBackdropTexture`).
+    /// Before this fix `maskNode` and every marker (`playerMarker`, the
+    /// pooled raccoon/med-kit markers) were built via
+    /// `SKSpriteNode(color:size:)` with no texture at all, which matched
+    /// the reported symptom exactly: the textured backdrop rendered through
+    /// the crop while the textureless mask + textureless marker children
+    /// did not reliably composite. `makeSolidTexture(color:size:)` renders
+    /// a plain, single-color `UIImage` once (`UIGraphicsImageRenderer`) and
+    /// hands back an `SKTexture` from it.
+    ///
+    /// **Every child of `cropNode` is texture-backed by construction**,
+    /// `backdrop` included (PR #80 review). `backdrop` used to be the one
+    /// exception -- color-only from `init()` until the first
+    /// `update(...)`, and *permanently* color-only on the path where
+    /// `makeBackdropTexture` hands back a bare `SKTexture()` because
+    /// `CGContext` creation failed. Both are the very combination this fix
+    /// is predicated on being unreliable, so `backdropPlateTexture` gives
+    /// it a real rasterized plate from the moment it is built and
+    /// `rebuildBackdropIfNeeded` refuses to mount an empty texture over
+    /// it.
+    private static func makeSolidTexture(color: UIColor, size: CGSize) -> SKTexture {
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            color.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        return SKTexture(image: image)
+    }
+
+    /// The crop mask's own backing texture -- solid white, `contentSize`
+    /// across. `SKCropNode` reads only the mask's alpha channel, so the
+    /// fill color itself is irrelevant; white matches the sentinel
+    /// `SKSpriteNode(color: .white, size:...)` this replaces.
+    private static let maskTexture = makeSolidTexture(color: .white, size: contentSize)
+
+    /// The backdrop's own plain-plate texture -- `PixelGritPalette
+    /// .background`, `contentSize` across. This is what the dial shows
+    /// before the first `update(...)` rasterizes a real radar backdrop
+    /// over it, and what it falls back to if that rasterization ever
+    /// fails; baking the plate colour into a texture (rather than leaning
+    /// on `color` + `colorBlendFactor = 1`) is what keeps *every* child of
+    /// `cropNode` texture-backed on every path.
+    private static let backdropPlateTexture = makeSolidTexture(
+        color: PixelGritPalette.background,
+        size: contentSize
+    )
+
+    /// The player marker's own backing texture -- built once and reused
+    /// across every `RadarMapNode` instance, since the marker never
+    /// changes color.
+    private static let playerMarkerTexture = makeSolidTexture(
+        color: PixelGritPalette.neonAccent,
+        size: markerSize
+    )
+
+    /// The raccoon marker pool's shared backing texture -- built **once**,
+    /// not per-marker: every pooled raccoon marker (`syncMarkerPool`) reuses
+    /// this same `SKTexture` instance rather than rasterizing its own copy
+    /// each time the pool grows.
+    private static let raccoonMarkerTexture = makeSolidTexture(
+        color: PixelGritPalette.neonSecondary,
+        size: markerSize
+    )
+
+    /// The med-kit marker pool's shared backing texture -- see
+    /// `raccoonMarkerTexture`'s own doc comment; same "once, reused across
+    /// the pool" rule.
+    private static let medKitMarkerTexture = makeSolidTexture(
+        color: PixelGritPalette.radarMedKitAccent,
+        size: markerSize
+    )
+
     // MARK: - Nodes
 
     private let border: SKShapeNode
@@ -132,9 +209,9 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
     // MARK: - Init
 
     override init() {
-        maskNode = SKSpriteNode(color: .white, size: Self.contentSize)
-        backdrop = SKSpriteNode(color: PixelGritPalette.background, size: Self.contentSize)
-        playerMarker = SKSpriteNode(color: PixelGritPalette.neonAccent, size: Self.markerSize)
+        maskNode = SKSpriteNode(texture: Self.maskTexture, size: Self.contentSize)
+        backdrop = SKSpriteNode(texture: Self.backdropPlateTexture, size: Self.contentSize)
+        playerMarker = SKSpriteNode(texture: Self.playerMarkerTexture, size: Self.markerSize)
         border = SKShapeNode(rectOf: Self.outerSize)
 
         super.init()
@@ -160,10 +237,13 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
 
         backdrop.name = "radarMap.backdrop"
         backdrop.isAccessibilityElement = false
-        // No texture yet -- `update(...)`'s first call always rebuilds
-        // (`cachedPlayerTile` starts `nil`), so this plain plate color is
-        // only ever visible for the fraction of a frame before that.
-        backdrop.colorBlendFactor = 1
+        // Already texture-backed (`backdropPlateTexture`) rather than
+        // color-only, so the plate the dial shows for the fraction of a
+        // frame before `update(...)`'s first (always-rebuilding) call is
+        // itself a real rasterized texture -- never the color-only
+        // combination this fix exists to remove. The texture carries the
+        // plate colour, so this sprite's own `color` must not tint it.
+        backdrop.colorBlendFactor = 0
 
         playerMarker.name = "radarMap.playerMarker"
         playerMarker.isAccessibilityElement = false
@@ -235,7 +315,7 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
             &medKitMarkers,
             in: medKitContainer,
             count: medKitTiles.count,
-            color: PixelGritPalette.radarMedKitAccent,
+            texture: Self.medKitMarkerTexture,
             namePrefix: "radarMap.medKitMarker"
         )
         positionMarkers(medKitMarkers, tiles: medKitTiles, relativeTo: playerTile, deviceScale: deviceScale)
@@ -244,7 +324,7 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
             &raccoonMarkers,
             in: raccoonContainer,
             count: raccoonTiles.count,
-            color: PixelGritPalette.neonSecondary,
+            texture: Self.raccoonMarkerTexture,
             namePrefix: "radarMap.raccoonMarker"
         )
         positionMarkers(raccoonMarkers, tiles: raccoonTiles, relativeTo: playerTile, deviceScale: deviceScale)
@@ -265,17 +345,33 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
             residencyRevision: residencyRevision
         )
         guard cachedBackdropKey != key else { return }
-        cachedBackdropKey = key
 
-        backdrop.texture = RadarBackdropRenderer.makeBackdropTexture(
+        let rebuilt = RadarBackdropRenderer.makeBackdropTexture(
             playerTile: playerTile,
             scale: radarScale,
             deviceScale: deviceScale,
             isTileBlocked: isTileBlocked
         )
+
+        // `makeBackdropTexture` hands back a bare, zero-sized `SKTexture()`
+        // when its `CGContext` creation failed (its only `nil` path).
+        // Mounting that would leave the backdrop drawing *nothing* --
+        // strictly worse than the plain plate the pre-`-t3` node showed on
+        // the same path (PR #80 review) -- so keep whatever real texture is
+        // already up (`backdropPlateTexture` on the very first call) and
+        // leave `cachedBackdropKey` un-advanced, so the next `update(...)`
+        // retries rather than caching the failure until the player happens
+        // to cross a tile. The retry is cheap: the failure is detected at
+        // `CGContext` creation, before the rasterizer's pixel walk.
+        guard rebuilt.size().width > 0, rebuilt.size().height > 0 else { return }
+
+        cachedBackdropKey = key
+        backdrop.texture = rebuilt
         // The texture carries its own blocked/open coloring; this sprite's
-        // own `color` (the plain plate it shows before the first build)
-        // must never additionally tint it.
+        // own `color` must never additionally tint it. (Already `0` from
+        // `init()`, since the plate it starts on is a texture too --
+        // restated here so the invariant survives a future edit to either
+        // side.)
         backdrop.colorBlendFactor = 0
         PixelCrispness.apply(to: backdrop)
         // `PixelCrispness.apply(to:)` rounds `size`-independent state
@@ -292,15 +388,20 @@ final class RadarMapNode: SKNode, AccessibilityOpaqueNode {
     /// `isHidden` on every pool slot from its index against `count` -- a
     /// surplus slot (left over from a higher-water-mark frame) is hidden,
     /// never removed.
+    ///
+    /// `texture` is the pool's own shared backing texture
+    /// (`raccoonMarkerTexture`/`medKitMarkerTexture`), built once at the
+    /// type level and reused by every marker this pool grows to -- not
+    /// rasterized per-marker.
     private func syncMarkerPool(
         _ pool: inout [SKSpriteNode],
         in container: SKNode,
         count: Int,
-        color: UIColor,
+        texture: SKTexture,
         namePrefix: String
     ) {
         while pool.count < count {
-            let marker = SKSpriteNode(color: color, size: Self.markerSize)
+            let marker = SKSpriteNode(texture: texture, size: Self.markerSize)
             marker.name = "\(namePrefix).\(pool.count)"
             marker.isAccessibilityElement = false
             container.addChild(marker)
