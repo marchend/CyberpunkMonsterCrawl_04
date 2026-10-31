@@ -80,7 +80,30 @@ protocol HUDRunModel: AnyObject {
     /// Every building placement record in the resident chunk window, for
     /// the radar backdrop's blocked/open classification
     /// (`RadarBackdropRenderer.isTileBlocked`).
+    ///
+    /// **Read lazily, not once per frame.** `GameScene`'s conformance is
+    /// `residentChunks.values.flatMap(\.buildingPlacements)` across the
+    /// full 49-chunk resident window -- the exact per-frame allocation
+    /// `advanceMovementAndCamera(currentTime:)` was refactored to avoid
+    /// (see `GroundPlaneStreamer.residentObstructions`' own doc comment).
+    /// `HUDLayer.refresh()` therefore reads this *inside* the blocked-tile
+    /// predicate it hands `RadarMapNode`, so the traversal happens only on
+    /// the frames that actually rasterize a backdrop, not on all of them
+    /// (PR #79 review).
     var radarBuildingRecords: [BuildingPlacementRecord] { get }
+
+    /// A counter that changes whenever the resident chunk window does, and
+    /// therefore whenever `radarBuildingRecords` would answer differently
+    /// -- `ChunkStreamingManager.residencyRevision` in production.
+    ///
+    /// This is the radar backdrop cache's invalidation signal for the one
+    /// raster input it cannot see: `RadarMapNode` takes an opaque
+    /// `isTileBlocked` predicate, so it has no way to notice that the
+    /// records that predicate closes over have changed. Deliberately a
+    /// cheap scalar rather than a digest of the records themselves -- the
+    /// point is to invalidate in O(1), without walking the window that
+    /// `radarBuildingRecords` above exists to avoid walking per frame.
+    var radarResidencyRevision: Int { get }
 
     /// The device scale (`@1x`/`@2x`/`@3x`) the radar backdrop rasterizes
     /// at -- `1` for a headless (view-less) scene, the same fallback
@@ -320,18 +343,41 @@ final class HUDLayer: SKNode {
             return TileCoordinate(tileX: tile.tileX, tileY: tile.tileY)
         }
 
-        // Captures this frame's own `radarBuildingRecords`/`worldSeed`
-        // reading rather than handing `RadarMapNode` the raw seed/records
-        // types directly -- keeps that node's own API decoupled from
+        // Hands `RadarMapNode` a plain predicate rather than the raw
+        // seed/records types -- keeps that node's own API decoupled from
         // `WorldSeed`/`BuildingPlacementRecord`, the same "take a plain
         // predicate, not my internals" shape `TargetSelection.Candidate`
         // already uses to keep `TargetSelection` decoupled from
         // `RaccoonSpawnDirector`.
-        let buildingRecords = runModel.radarBuildingRecords
-        let seed = runModel.worldSeed
+        //
+        // The model reads happen *inside* the closure, not here: the only
+        // frames that invoke this predicate are the ones where
+        // `RadarMapNode` actually rasterizes a backdrop (maybe one in
+        // thirty), while `radarBuildingRecords` costs a `flatMap` across
+        // the whole 49-chunk resident window -- precisely the per-frame
+        // allocation `advanceMovementAndCamera(currentTime:)` was
+        // refactored out of the movement path, which an eager read here
+        // would have quietly reintroduced on the HUD path (PR #79 review).
+        //
+        // `inputs` memoizes that read for the duration of one rebuild: the
+        // rasterizer calls this predicate once per *distinct tile* (a few
+        // hundred times per rebuild), and re-traversing the resident window
+        // per tile would be far worse than the eager read it replaces.
+        // Captured strongly: the predicate is non-escaping and cannot
+        // outlive this `refresh()` call, so there is no cycle for a weak
+        // capture to break -- and no risk of the predicate silently
+        // answering "open everywhere" mid-raster if the model went away.
+        var inputs: (seed: WorldSeed, records: [BuildingPlacementRecord])?
         let isTileBlocked: (Int, Int) -> Bool = { tileX, tileY in
-            RadarBackdropRenderer.isTileBlocked(
-                tileX: tileX, tileY: tileY, seed: seed, buildingRecords: buildingRecords
+            let resolved: (seed: WorldSeed, records: [BuildingPlacementRecord])
+            if let memoized = inputs {
+                resolved = memoized
+            } else {
+                resolved = (seed: runModel.worldSeed, records: runModel.radarBuildingRecords)
+                inputs = resolved
+            }
+            return RadarBackdropRenderer.isTileBlocked(
+                tileX: tileX, tileY: tileY, seed: resolved.seed, buildingRecords: resolved.records
             )
         }
 
@@ -340,7 +386,8 @@ final class HUDLayer: SKNode {
             raccoonTiles: raccoonTiles,
             medKitTiles: medKitTiles,
             isTileBlocked: isTileBlocked,
-            deviceScale: runModel.deviceScale
+            deviceScale: runModel.deviceScale,
+            residencyRevision: runModel.radarResidencyRevision
         )
     }
 }

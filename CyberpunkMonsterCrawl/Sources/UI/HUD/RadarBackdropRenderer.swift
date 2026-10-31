@@ -109,6 +109,25 @@ enum RadarBackdropRenderer {
     /// changes (or when the resident chunk window does), not once per
     /// `update(_:)`.
     ///
+    /// **Measured, rather than asserted** (PR #79 review, which asked for
+    /// a number before anyone widened that cadence): one `@3x` rebuild
+    /// over the 498 building records of a real fully-streamed resident
+    /// window takes **~25 ms** on an iPhone 16 simulator in a **Debug,
+    /// unoptimized** build -- `RadarGeometryTests
+    /// .test_makeBackdropImage_oneRebuildAtThreeX_staysWithinItsRegressionBudget`
+    /// re-measures it every run and fails on an order-of-magnitude
+    /// regression. `-Onone` punishes a 108,900-iteration pixel loop out of
+    /// all proportion, so treat that as an upper bound rather than the
+    /// shipping cost -- but it is far enough past a 16.7 ms frame that
+    /// `RadarMapNode` calling this *synchronously on the gameplay update
+    /// thread* wants a Release profile on a device, and very likely one of
+    /// the usual escapes (rasterize off-thread and swap the texture in
+    /// when ready, or rasterize an oversized window and pan the sprite
+    /// within it). Deliberately not attempted in the mounting PR: the
+    /// blocked-tile predicate closes over the scene's own resident
+    /// records, so handing it to another thread is a thread-safety change
+    /// in its own right, not a tidy-up.
+    ///
     /// `deviceScale` is the view's `contentScaleFactor` (`1` headless) --
     /// see `contentSquarePixelSize(forDeviceScale:)` for why the bitmap is
     /// sized in device pixels rather than points.

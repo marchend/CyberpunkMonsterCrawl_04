@@ -248,4 +248,91 @@ final class RadarMapNodeTests: XCTestCase {
         )
         XCTAssertGreaterThan(callCount, countAfterFirstBuild, "a changed player tile must rebuild the backdrop")
     }
+
+    /// The other half of `RadarBackdropRenderer`'s stated cadence -- "a
+    /// rebuild when the player's tile changes **or when the resident chunk
+    /// window does**". A predicate that has changed its answers while the
+    /// player stood still (the spawn case: `HUDLayer.bind(to:)` builds the
+    /// first backdrop before a single chunk has streamed in) must not be
+    /// served from the cache (PR #79 review).
+    func test_backdrop_isRebuilt_whenTheResidencyRevisionChanges_onAStationaryPlayer() {
+        let node = RadarMapNode()
+        node.radarScale = 1
+        var callCount = 0
+        var blockedAnswer = false
+        let countingPredicate: (Int, Int) -> Bool = { _, _ in
+            callCount += 1
+            return blockedAnswer
+        }
+        let tile = TileCoordinate(tileX: 0, tileY: 0)
+
+        node.update(
+            playerTile: tile, raccoonTiles: [], medKitTiles: [],
+            isTileBlocked: countingPredicate, deviceScale: 1, residencyRevision: 0
+        )
+        let countAfterFirstBuild = callCount
+        XCTAssertGreaterThan(countAfterFirstBuild, 0, "precondition: the first update builds the backdrop")
+
+        // Same tile, same revision -- still cached.
+        node.update(
+            playerTile: tile, raccoonTiles: [], medKitTiles: [],
+            isTileBlocked: countingPredicate, deviceScale: 1, residencyRevision: 0
+        )
+        XCTAssertEqual(callCount, countAfterFirstBuild, "an unchanged input set must not rebuild")
+
+        // The resident chunk window moved under a stationary player, and
+        // the predicate now answers differently.
+        blockedAnswer = true
+        node.update(
+            playerTile: tile, raccoonTiles: [], medKitTiles: [],
+            isTileBlocked: countingPredicate, deviceScale: 1, residencyRevision: 1
+        )
+        XCTAssertGreaterThan(
+            callCount, countAfterFirstBuild,
+            "a resident-window change must rebuild the backdrop even on an unchanged player tile"
+        )
+    }
+
+    /// The remaining two raster inputs. `deviceScale` changes when the node
+    /// is first mounted into a real view (headless `1` -> the device's own
+    /// `@2x`/`@3x`) and `radarScale` on every rotation, and either leaves
+    /// the cached texture the wrong *size* for what is being drawn, not
+    /// merely stale.
+    func test_backdrop_isRebuilt_whenTheDeviceScaleOrRadarScaleChanges() {
+        let node = RadarMapNode()
+        node.radarScale = 1
+        var callCount = 0
+        let countingPredicate: (Int, Int) -> Bool = { _, _ in
+            callCount += 1
+            return false
+        }
+        let tile = TileCoordinate(tileX: 0, tileY: 0)
+
+        node.update(
+            playerTile: tile, raccoonTiles: [], medKitTiles: [],
+            isTileBlocked: countingPredicate, deviceScale: 1
+        )
+        let afterFirstBuild = callCount
+
+        node.update(
+            playerTile: tile, raccoonTiles: [], medKitTiles: [],
+            isTileBlocked: countingPredicate, deviceScale: 3
+        )
+        let afterDeviceScaleChange = callCount
+        XCTAssertGreaterThan(
+            afterDeviceScaleChange, afterFirstBuild,
+            "a changed device scale rasterizes a different-sized bitmap and must rebuild"
+        )
+
+        // `HUDLayer.applyLayout(...)` writes this on every rotation.
+        node.radarScale = 2.5
+        node.update(
+            playerTile: tile, raccoonTiles: [], medKitTiles: [],
+            isTileBlocked: countingPredicate, deviceScale: 3
+        )
+        XCTAssertGreaterThan(
+            callCount, afterDeviceScaleChange,
+            "a changed radar scale changes the dial's field of view and must rebuild"
+        )
+    }
 }

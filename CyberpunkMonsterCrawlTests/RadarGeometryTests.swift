@@ -318,6 +318,80 @@ final class RadarGeometryTests: XCTestCase {
         XCTAssertEqual(RadarBackdropRenderer.contentSquarePixelSize(forDeviceScale: 3), 330)
     }
 
+    // MARK: - (e) Measured rebuild cost at @3x
+
+    /// Puts a **number** on one backdrop rebuild, which the mounting PR
+    /// (`CYBERPUN-17-23-t2`) was asked for and did not have: the
+    /// rasterization runs synchronously on the gameplay update thread
+    /// (`advanceMovementAndCamera(currentTime:)` -> `hudLayer?.refresh()`)
+    /// and is triggered by the player crossing a tile boundary, which at
+    /// walking speed is several times a second (PR #79 review). "Not every
+    /// frame" is not the same claim as "cheap enough for the frame it
+    /// lands on".
+    ///
+    /// Deliberately the worst realistic case: `@3x` (330x330 = 108,900
+    /// pixel fills) against the building records of a real, fully-streamed
+    /// resident window, so each *distinct* tile pays a
+    /// `CityLatticeGenerator.classify` hash plus a linear
+    /// `BuildingObstruction.isObstructed` scan of the whole record set --
+    /// the same work production does, not a synthetic empty-records run.
+    ///
+    /// **Measured: ~25 ms** for one rebuild over 498 resident records
+    /// (iPhone 16 simulator, **Debug/unoptimized**, 2026-10-30). That is
+    /// well past a 16.7 ms frame, so it is recorded in
+    /// `RadarBackdropRenderer`'s cost note and `RadarMapNode`'s caching
+    /// note as a known cost rather than left as prose. A Debug pixel loop
+    /// is not the shipping figure -- `-Onone` penalizes this kind of inner
+    /// loop heavily -- but it is the number this PR actually has, and it
+    /// is large enough that the off-thread/oversized-window escapes the
+    /// reviewer named want a Release profile on a device before anyone
+    /// calls this settled.
+    ///
+    /// The threshold below is an order-of-magnitude regression alarm, not
+    /// a frame budget: a shared CI host is far too noisy to assert the
+    /// measured figure itself without flaking, so the test takes the
+    /// *fastest* of several runs (the least noise-contaminated sample) and
+    /// fails only if even that is wildly out -- ~6x headroom over the
+    /// figure above.
+    func test_makeBackdropImage_oneRebuildAtThreeX_staysWithinItsRegressionBudget() throws {
+        let seed = WorldSeed(rawValue: 2_024)
+        let streaming = ChunkStreamingManager(seed: seed)
+        streaming.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        let buildingRecords = streaming.residentChunks.values.flatMap(\.buildingPlacements)
+        XCTAssertFalse(buildingRecords.isEmpty, "precondition: a real resident window places buildings")
+
+        let scale = RadarGeometry.radarScale(for: Self.rasterSceneSize)
+        let playerTile = TileCoordinate(tileX: 0, tileY: 0)
+
+        var best = Double.greatestFiniteMagnitude
+        for iteration in 0..<5 {
+            let start = Date()
+            let image = RadarBackdropRenderer.makeBackdropImage(
+                playerTile: TileCoordinate(tileX: playerTile.tileX + iteration, tileY: playerTile.tileY),
+                seed: seed,
+                buildingRecords: buildingRecords,
+                scale: scale,
+                deviceScale: 3
+            )
+            let elapsed = Date().timeIntervalSince(start)
+            XCTAssertNotNil(image, "the rasterizer must produce an image to have measured anything")
+            best = min(best, elapsed)
+        }
+
+        let milliseconds = best * 1_000
+        print(
+            "MEASURED RadarBackdropRenderer.makeBackdropImage @3x "
+                + "(\(buildingRecords.count) resident records): \(String(format: "%.2f", milliseconds)) ms"
+        )
+
+        XCTAssertLessThan(
+            milliseconds, 150,
+            "one @3x backdrop rebuild over \(buildingRecords.count) resident records took "
+                + "\(String(format: "%.2f", milliseconds)) ms -- an order-of-magnitude regression on the "
+                + "~25 ms this was measured at, and it runs synchronously on the gameplay update thread"
+        )
+    }
+
     // MARK: - (e) helpers
 
     /// Renders the backdrop twice -- once with no placement records, once

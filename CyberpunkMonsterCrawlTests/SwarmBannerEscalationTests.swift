@@ -28,6 +28,7 @@ final class SwarmBannerEscalationTests: XCTestCase {
         var deviceScale: CGFloat = 1
         var radarPlayerTile = TileCoordinate(tileX: 0, tileY: 0)
         var worldSeed = WorldSeed(rawValue: 0)
+        var radarResidencyRevision = 0
 
         private(set) var triggerPulseCount = 0
         func triggerPulse() {

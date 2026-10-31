@@ -1971,7 +1971,22 @@ extension GameScene: HUDRunModel {
     /// Every building placement record in the resident chunk window --
     /// shared with `pickupManager`'s own `obstructionsProvider` via
     /// `residentBuildingPlacementRecords()` rather than re-traversed here.
+    ///
+    /// A full `flatMap` across the resident window, so `HUDLayer.refresh()`
+    /// deliberately reads this only from inside the backdrop's blocked-tile
+    /// predicate -- see this requirement's own doc comment on `HUDRunModel`.
     var radarBuildingRecords: [BuildingPlacementRecord] { residentBuildingPlacementRecords() }
+
+    /// The streamer's own residency counter, forwarded unchanged -- the
+    /// radar backdrop cache's O(1) "the resident window moved, so
+    /// `radarBuildingRecords` would answer differently now" signal.
+    ///
+    /// `0` before `startGroundPlane()` has built the streamer, which is
+    /// also the value a never-streamed window reports, so the first real
+    /// `updateCamera` (which streams the whole spawn window in) always
+    /// moves this off its initial reading and invalidates the backdrop
+    /// built against the empty window.
+    var radarResidencyRevision: Int { groundPlane?.streaming.residencyRevision ?? 0 }
 
     /// The player's current world tile -- `RadarMapNode`'s own centre
     /// (`CYBERPUN-17-23-t2`). `playerWorldPosition` is `nil` before the
