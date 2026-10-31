@@ -287,4 +287,99 @@ final class CityLatticeGeneratorTests: XCTestCase {
 
         XCTAssertTrue(anyDifference, "Two different seeds produced identical block decisions everywhere sampled")
     }
+
+    // MARK: - CYBERPUN-17-26 regression: kerb tiles are never floating
+
+    /// The 8 neighbour offsets (orthogonal + diagonal) a kerb tile is
+    /// checked against below \u2014 a lattice-crossing corner tile only ever
+    /// touches the block it kerbs *diagonally*, never orthogonally (it sits
+    /// one tile off on both axes from the block's own corner tile), so
+    /// 4-connectivity alone would under-report and fail every legitimate
+    /// corner.
+    private var neighborOffsets: [(Int, Int)] {
+        [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    }
+
+    /// Black-box regression for CYBERPUN-17-26 (\"building sidewalks not
+    /// rendered correctly\" \u2014 stray `.kerbSidewalk` squares reported with no
+    /// building actually next to them). Independently proves the ticket's
+    /// literal acceptance criterion by calling `classify` on a tile's
+    /// *actual* neighbouring coordinates, rather than re-deriving
+    /// `blockBorderedByEdge`'s internal block-index arithmetic the way
+    /// `test_classify_crossing_pinsCentreLaneMouthAndCornerSubKinds` and
+    /// `test_classify_sidewalkRingAroundABlockInterior_matchesItsOwnBuildingFootprintState`
+    /// do above. A regression that broke the adjacency guarantee while still
+    /// agreeing with itself on those two self-referential tests would still
+    /// be caught here, because this test never consults the generator's
+    /// internal formula \u2014 only its public output at real neighbour tiles.
+    func test_everyKerbSidewalkTile_hasAnActualBuildingFootprintNeighbor_acrossManySeeds() {
+        var sawAnyKerbTile = false
+
+        for seed in someSeeds(8) {
+            for tileX in stride(from: -24, through: 24, by: 1) {
+                for tileY in stride(from: -24, through: 24, by: 1) {
+                    let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
+                    guard info.kind == .kerbSidewalk else { continue }
+                    sawAnyKerbTile = true
+
+                    let hasBuildingNeighbor = neighborOffsets.contains { dx, dy in
+                        CityLatticeGenerator.classify(
+                            tileX: tileX + dx, tileY: tileY + dy, seed: seed
+                        ).kind == .buildingFootprint
+                    }
+
+                    XCTAssertTrue(
+                        hasBuildingNeighbor,
+                        "(\(tileX), \(tileY)) under seed \(seed.rawValue) rendered .kerbSidewalk with no "
+                            + ".buildingFootprint tile among its 8 neighbours - a floating sidewalk square."
+                    )
+                }
+            }
+        }
+
+        XCTAssertTrue(sawAnyKerbTile, "Test fixture sampled no .kerbSidewalk tile at all - strengthen the range/seed")
+    }
+
+    /// The sibling half of the same acceptance criterion: a street edge or
+    /// lattice-crossing corner bordering a block the seed chose to leave as
+    /// an empty `.lot` must never read as `.kerbSidewalk`, independent of
+    /// which specific edge/corner position it is. Picks fixture coordinates
+    /// via `isEmptyLotBlock` but never uses it to compute the *expected*
+    /// kind \u2014 the expectation checked here is simply \"never kerb\", not a
+    /// restatement of the generator's own formula.
+    func test_streetEdgesAndCornersBorderingAnEmptyLotBlock_neverRenderAsKerbSidewalk() {
+        let seed = WorldSeed(rawValue: 2024)
+        var sawEmptyLotBlock = false
+
+        for blockX in -6..<6 {
+            for blockY in -6..<6 {
+                guard CityLatticeGenerator.isEmptyLotBlock(blockX: blockX, blockY: blockY, seed: seed) else {
+                    continue
+                }
+                sawEmptyLotBlock = true
+
+                let originX = blockX * CityLatticeGenerator.period
+                let originY = blockY * CityLatticeGenerator.period
+
+                for local in -1...3 {
+                    let ringTiles = [
+                        (originX + local, originY - 1),
+                        (originX + local, originY + 3),
+                        (originX - 1, originY + local),
+                        (originX + 3, originY + local)
+                    ]
+                    for (tileX, tileY) in ringTiles {
+                        let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
+                        XCTAssertNotEqual(
+                            info.kind, .kerbSidewalk,
+                            "(\(tileX), \(tileY)) borders empty-lot block (\(blockX), \(blockY)) but rendered "
+                                + ".kerbSidewalk - an empty lot has nothing to kerb."
+                        )
+                    }
+                }
+            }
+        }
+
+        XCTAssertTrue(sawEmptyLotBlock, "Test fixture sampled no empty-lot block - strengthen the seed/range")
+    }
 }
