@@ -80,7 +80,30 @@ protocol HUDRunModel: AnyObject {
     /// Every building placement record in the resident chunk window, for
     /// the radar backdrop's blocked/open classification
     /// (`RadarBackdropRenderer.isTileBlocked`).
+    ///
+    /// **Read lazily, not once per frame.** `GameScene`'s conformance is
+    /// `residentChunks.values.flatMap(\.buildingPlacements)` across the
+    /// full 49-chunk resident window -- the exact per-frame allocation
+    /// `advanceMovementAndCamera(currentTime:)` was refactored to avoid
+    /// (see `GroundPlaneStreamer.residentObstructions`' own doc comment).
+    /// `HUDLayer.refresh()` therefore reads this *inside* the blocked-tile
+    /// predicate it hands `RadarMapNode`, so the traversal happens only on
+    /// the frames that actually rasterize a backdrop, not on all of them
+    /// (PR #79 review).
     var radarBuildingRecords: [BuildingPlacementRecord] { get }
+
+    /// A counter that changes whenever the resident chunk window does, and
+    /// therefore whenever `radarBuildingRecords` would answer differently
+    /// -- `ChunkStreamingManager.residencyRevision` in production.
+    ///
+    /// This is the radar backdrop cache's invalidation signal for the one
+    /// raster input it cannot see: `RadarMapNode` takes an opaque
+    /// `isTileBlocked` predicate, so it has no way to notice that the
+    /// records that predicate closes over have changed. Deliberately a
+    /// cheap scalar rather than a digest of the records themselves -- the
+    /// point is to invalidate in O(1), without walking the window that
+    /// `radarBuildingRecords` above exists to avoid walking per frame.
+    var radarResidencyRevision: Int { get }
 
     /// The device scale (`@1x`/`@2x`/`@3x`) the radar backdrop rasterizes
     /// at -- `1` for a headless (view-less) scene, the same fallback
@@ -92,6 +115,26 @@ protocol HUDRunModel: AnyObject {
     /// texture lands 1:1 on the device's pixel grid instead of being
     /// upscaled 2-3x into a blur.
     var deviceScale: CGFloat { get }
+
+    /// The player's current world tile -- the radar's own centre, and the
+    /// reference every other radar-space point (`RadarMapNode`'s raccoon/
+    /// med-kit markers, `RadarBackdropRenderer`'s backdrop) is projected
+    /// relative to. Rounded from the player's own (fractional) world
+    /// position via `IsometricProjection.tile(containing:)`'s pinned seam
+    /// rule, the same rounding every other "which tile owns this
+    /// continuous position" question in this codebase already uses.
+    ///
+    /// Added alongside `RadarMapNode` (`CYBERPUN-17-23-t2`) -- PR 1 wired
+    /// every other radar live-data accessor but, since no node yet
+    /// consumed an absolute reference tile, did not need this one.
+    var radarPlayerTile: TileCoordinate { get }
+
+    /// The world seed `RadarBackdropRenderer.isTileBlocked` classifies
+    /// tiles against -- the same seed the resident city streams from, so
+    /// the radar backdrop always matches the exact city the player is
+    /// walking through. `GameScene`'s existing `worldSeed` stored property
+    /// already satisfies this requirement with no extra conformance code.
+    var worldSeed: WorldSeed { get }
 }
 
 /// Coarse device orientation, derived from a scene size's own aspect
@@ -135,6 +178,7 @@ final class HUDLayer: SKNode {
     let runTimer = RunTimerLabel()
     let killCount = KillCountLabel()
     let swarmBanner = SwarmBanner()
+    let radarMap = RadarMapNode()
 
     /// Built after `super.init()` (see `init()`) because its `onPress`
     /// closure needs to reference `self` -- the same "implicitly-unwrapped,
@@ -177,6 +221,7 @@ final class HUDLayer: SKNode {
         addChild(runTimer)
         addChild(killCount)
         addChild(swarmBanner)
+        addChild(radarMap)
 
         pulseButton = HUDPulseButton(onPress: { [weak self] in
             self?.pulseTriggerHandler?()
@@ -202,6 +247,16 @@ final class HUDLayer: SKNode {
         position(killCount, at: .killCount, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
         position(pulseButton, at: .pulseButton, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
         position(swarmBanner, at: .swarmBanner, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
+        position(radarMap, at: .radarMap, sceneSize: sceneSize, safeAreaInsets: safeAreaInsets)
+
+        // The radar's own points-per-tile scale depends on `sceneSize`
+        // alone (`RadarGeometry.radarScale(for:)`'s own "same field of
+        // view in either orientation" contract), not on anything
+        // `refresh()` reads per frame -- so it is set here, alongside
+        // this node's position/size, rather than threaded through
+        // `RadarMapNode.update(...)`'s live-data parameter list.
+        radarMap.radarScale = RadarGeometry.radarScale(for: sceneSize)
+
         currentOrientation = orientation
     }
 
@@ -272,5 +327,67 @@ final class HUDLayer: SKNode {
         runTimer.update(elapsedSeconds: runModel.elapsedSeconds)
         killCount.update(kills: runModel.kills)
         pulseButton.update(cooldownFraction: runModel.pulseCooldownFraction, isReady: runModel.isPulseReady)
+
+        // Raccoon/med-kit live positions arrive as the model's own
+        // fractional `TilePoint`s (`TargetSelection.Candidate.position`,
+        // `radarMedKitTiles`); `RadarMapNode` only needs the *tile* each
+        // currently occupies, via the same seam-rounding rule every other
+        // "which tile owns this continuous position" call site in this
+        // codebase already uses.
+        let raccoonTiles = runModel.radarRaccoonCandidates.map { candidate -> TileCoordinate in
+            let tile = IsometricProjection.tile(containing: candidate.position)
+            return TileCoordinate(tileX: tile.tileX, tileY: tile.tileY)
+        }
+        let medKitTiles = runModel.radarMedKitTiles.map { position -> TileCoordinate in
+            let tile = IsometricProjection.tile(containing: position)
+            return TileCoordinate(tileX: tile.tileX, tileY: tile.tileY)
+        }
+
+        // Hands `RadarMapNode` a plain predicate rather than the raw
+        // seed/records types -- keeps that node's own API decoupled from
+        // `WorldSeed`/`BuildingPlacementRecord`, the same "take a plain
+        // predicate, not my internals" shape `TargetSelection.Candidate`
+        // already uses to keep `TargetSelection` decoupled from
+        // `RaccoonSpawnDirector`.
+        //
+        // The model reads happen *inside* the closure, not here: the only
+        // frames that invoke this predicate are the ones where
+        // `RadarMapNode` actually rasterizes a backdrop (maybe one in
+        // thirty), while `radarBuildingRecords` costs a `flatMap` across
+        // the whole 49-chunk resident window -- precisely the per-frame
+        // allocation `advanceMovementAndCamera(currentTime:)` was
+        // refactored out of the movement path, which an eager read here
+        // would have quietly reintroduced on the HUD path (PR #79 review).
+        //
+        // `inputs` memoizes that read for the duration of one rebuild: the
+        // rasterizer calls this predicate once per *distinct tile* (a few
+        // hundred times per rebuild), and re-traversing the resident window
+        // per tile would be far worse than the eager read it replaces.
+        // Captured strongly: the predicate is non-escaping and cannot
+        // outlive this `refresh()` call, so there is no cycle for a weak
+        // capture to break -- and no risk of the predicate silently
+        // answering "open everywhere" mid-raster if the model went away.
+        var inputs: (seed: WorldSeed, records: [BuildingPlacementRecord])?
+        let isTileBlocked: (Int, Int) -> Bool = { tileX, tileY in
+            let resolved: (seed: WorldSeed, records: [BuildingPlacementRecord])
+            if let memoized = inputs {
+                resolved = memoized
+            } else {
+                resolved = (seed: runModel.worldSeed, records: runModel.radarBuildingRecords)
+                inputs = resolved
+            }
+            return RadarBackdropRenderer.isTileBlocked(
+                tileX: tileX, tileY: tileY, seed: resolved.seed, buildingRecords: resolved.records
+            )
+        }
+
+        radarMap.update(
+            playerTile: runModel.radarPlayerTile,
+            raccoonTiles: raccoonTiles,
+            medKitTiles: medKitTiles,
+            isTileBlocked: isTileBlocked,
+            deviceScale: runModel.deviceScale,
+            residencyRevision: runModel.radarResidencyRevision
+        )
     }
 }

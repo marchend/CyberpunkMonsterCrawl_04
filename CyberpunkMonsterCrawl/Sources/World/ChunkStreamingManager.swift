@@ -184,6 +184,25 @@ final class ChunkStreamingManager {
     /// mutate it out from under `updateCamera`.
     private(set) var residentChunks: [ChunkCoordinate: Chunk] = [:]
 
+    /// Monotonic counter bumped by `updateCamera` on every call that
+    /// actually *changes* the resident set (a chunk streamed in, or one was
+    /// evicted) and left alone on an idempotent call.
+    ///
+    /// Exists so a consumer that caches something derived from the whole
+    /// resident window can invalidate in O(1), without re-deriving (or even
+    /// counting) that window every frame to notice it moved. `residentChunks
+    /// .count` cannot serve: it is `residentWindowSize` both before and
+    /// after a camera step, so every steady-state residency change is
+    /// invisible to it.
+    ///
+    /// Today's only consumer is the radar backdrop cache
+    /// (`HUDRunModel.radarResidencyRevision` -> `RadarMapNode`), whose
+    /// raster is a function of the resident building records; it was
+    /// rebuilding only on a player-tile change, so the window streaming in
+    /// around a *stationary* player at spawn never invalidated it (PR #79
+    /// review).
+    private(set) var residencyRevision: Int = 0
+
     init(seed: WorldSeed) {
         self.seed = seed
     }
@@ -224,6 +243,14 @@ final class ChunkStreamingManager {
         let coordinatesToEvict = residentChunks.keys.filter { !desired.contains($0) }
         for coordinate in coordinatesToEvict {
             residentChunks.removeValue(forKey: coordinate)
+        }
+
+        // Bumped only when the set actually moved, so "the revision is
+        // unchanged" is a sound cache key rather than a heuristic -- an
+        // idempotent call (a camera that never left its chunk) must leave
+        // every downstream cache valid.
+        if !newlyLoaded.isEmpty || !coordinatesToEvict.isEmpty {
+            residencyRevision += 1
         }
 
         return newlyLoaded

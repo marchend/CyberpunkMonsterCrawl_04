@@ -65,11 +65,13 @@ final class HUDLayoutTests: XCTestCase {
         assertAllSlotsInsideSafeArea(sceneSize: compactLandscapeSize, safeAreaInsets: compactLandscapeInsets)
     }
 
-    // MARK: - Exactly six slots
+    // MARK: - Exactly seven slots
 
-    func test_allFrames_producesExactlySixSlots() {
+    /// Six from `CYBERPUN-17-12`, plus the minimap radar
+    /// (`CYBERPUN-17-23-t2`).
+    func test_allFrames_producesExactlySevenSlots() {
         let frames = HUDLayout.allFrames(sceneSize: portraitSize, safeAreaInsets: portraitInsets)
-        XCTAssertEqual(frames.count, 6)
+        XCTAssertEqual(frames.count, 7)
         XCTAssertEqual(Set(frames.keys), Set(HUDSlot.allCases))
     }
 
@@ -219,5 +221,27 @@ final class HUDLayoutTests: XCTestCase {
 
         XCTAssertTrue(xp.maxY <= hp.minY + 1e-6, "\(xp) must sit at or below \(hp)")
         XCTAssertFalse(hp.intersects(xp))
+    }
+
+    // MARK: - Radar map: hung below the right column, 112x112pt
+
+    func test_radarMap_sitsBelowKillCount_withNoOverlap() {
+        let killCount = HUDLayout.frame(for: .killCount, sceneSize: portraitSize, safeAreaInsets: portraitInsets)
+        let radarMap = HUDLayout.frame(for: .radarMap, sceneSize: portraitSize, safeAreaInsets: portraitInsets)
+
+        XCTAssertLessThan(radarMap.minY, killCount.minY, "\(radarMap) must sit below \(killCount)")
+        XCTAssertFalse(killCount.intersects(radarMap))
+    }
+
+    func test_radarMap_isExactly112x112Points() {
+        for (sceneSize, insets) in [
+            (portraitSize, portraitInsets),
+            (landscapeSize, landscapeInsets),
+            (compactLandscapeSize, compactLandscapeInsets),
+        ] {
+            let radarMap = HUDLayout.frame(for: .radarMap, sceneSize: sceneSize, safeAreaInsets: insets)
+            XCTAssertEqual(radarMap.width, 112, accuracy: 1e-6)
+            XCTAssertEqual(radarMap.height, 112, accuracy: 1e-6)
+        }
     }
 }

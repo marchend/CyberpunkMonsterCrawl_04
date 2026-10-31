@@ -53,6 +53,40 @@ final class ChunkStreamingManagerTests: XCTestCase {
         XCTAssertEqual(manager.residentChunks.count, ChunkStreamingManager.residentWindowSize)
     }
 
+    // MARK: - residencyRevision: an O(1) "the window moved" signal
+
+    /// Downstream caches key off this instead of re-deriving the resident
+    /// window per frame (`HUDRunModel.radarResidencyRevision` ->
+    /// `RadarMapNode`'s backdrop), so both halves matter: it must move
+    /// when residency does, and must *not* move when it doesn't.
+    func test_residencyRevision_movesOnlyWhenTheResidentSetActuallyChanges() {
+        let manager = ChunkStreamingManager(seed: seed)
+        XCTAssertEqual(manager.residencyRevision, 0, "a never-streamed window starts at zero")
+
+        manager.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        let afterFirstStream = manager.residencyRevision
+        XCTAssertGreaterThan(
+            afterFirstStream, 0,
+            "streaming the first window in is a residency change -- the spawn case a stale radar backdrop missed"
+        )
+
+        // Idempotent calls: the camera never left its chunk, so every
+        // downstream cache must stay valid.
+        manager.updateCamera(worldPosition: TilePoint(x: 0, y: 0))
+        manager.updateCamera(worldPosition: TilePoint(x: 0.25, y: 0.25))
+        XCTAssertEqual(
+            manager.residencyRevision, afterFirstStream,
+            "a camera that has not left its chunk must not invalidate anything"
+        )
+
+        // Far enough to change the resident set outright.
+        manager.updateCamera(worldPosition: TilePoint(x: 1_000, y: -1_000))
+        XCTAssertGreaterThan(
+            manager.residencyRevision, afterFirstStream,
+            "a camera crossing into a new chunk changes residency and must bump the revision"
+        )
+    }
+
     // MARK: - Worst-case viewport coverage (the claim, not just the bound)
 
     func test_residentWindow_coversTheReferenceViewport_inBothOrientations() {

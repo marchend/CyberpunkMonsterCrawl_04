@@ -109,6 +109,25 @@ enum RadarBackdropRenderer {
     /// changes (or when the resident chunk window does), not once per
     /// `update(_:)`.
     ///
+    /// **Measured, rather than asserted** (PR #79 review, which asked for
+    /// a number before anyone widened that cadence): one `@3x` rebuild
+    /// over the 498 building records of a real fully-streamed resident
+    /// window takes **~25 ms** on an iPhone 16 simulator in a **Debug,
+    /// unoptimized** build -- `RadarGeometryTests
+    /// .test_makeBackdropImage_oneRebuildAtThreeX_staysWithinItsRegressionBudget`
+    /// re-measures it every run and fails on an order-of-magnitude
+    /// regression. `-Onone` punishes a 108,900-iteration pixel loop out of
+    /// all proportion, so treat that as an upper bound rather than the
+    /// shipping cost -- but it is far enough past a 16.7 ms frame that
+    /// `RadarMapNode` calling this *synchronously on the gameplay update
+    /// thread* wants a Release profile on a device, and very likely one of
+    /// the usual escapes (rasterize off-thread and swap the texture in
+    /// when ready, or rasterize an oversized window and pan the sprite
+    /// within it). Deliberately not attempted in the mounting PR: the
+    /// blocked-tile predicate closes over the scene's own resident
+    /// records, so handing it to another thread is a thread-safety change
+    /// in its own right, not a tidy-up.
+    ///
     /// `deviceScale` is the view's `contentScaleFactor` (`1` headless) --
     /// see `contentSquarePixelSize(forDeviceScale:)` for why the bitmap is
     /// sized in device pixels rather than points.
@@ -119,12 +138,34 @@ enum RadarBackdropRenderer {
         scale: CGFloat,
         deviceScale: CGFloat
     ) -> SKTexture {
+        makeBackdropTexture(playerTile: playerTile, scale: scale, deviceScale: deviceScale) { tileX, tileY in
+            isTileBlocked(tileX: tileX, tileY: tileY, seed: seed, buildingRecords: buildingRecords)
+        }
+    }
+
+    /// The same rasterizer as above, generalized over an injected
+    /// `isTileBlocked` predicate rather than a concrete `seed`/
+    /// `buildingRecords` pair (`CYBERPUN-17-23-t2`).
+    ///
+    /// `RadarMapNode` -- the first and, today, only caller -- stays
+    /// decoupled from `WorldSeed`/`BuildingPlacementRecord` this way, the
+    /// same "take a plain predicate/value, not my internals" shape
+    /// `TargetSelection.Candidate` already uses to keep that file decoupled
+    /// from `RaccoonSpawnDirector`. The `seed`/`buildingRecords` overload
+    /// above is kept as a thin convenience over this one (rather than
+    /// removed) so `RadarGeometryTests`' existing calls keep compiling
+    /// unchanged.
+    static func makeBackdropTexture(
+        playerTile: TileCoordinate,
+        scale: CGFloat,
+        deviceScale: CGFloat,
+        isTileBlocked: (_ tileX: Int, _ tileY: Int) -> Bool
+    ) -> SKTexture {
         guard let image = makeBackdropImage(
             playerTile: playerTile,
-            seed: seed,
-            buildingRecords: buildingRecords,
             scale: scale,
-            deviceScale: deviceScale
+            deviceScale: deviceScale,
+            isTileBlocked: isTileBlocked
         ) else {
             return SKTexture()
         }
@@ -147,6 +188,22 @@ enum RadarBackdropRenderer {
         buildingRecords: [BuildingPlacementRecord],
         scale: CGFloat,
         deviceScale: CGFloat
+    ) -> CGImage? {
+        makeBackdropImage(playerTile: playerTile, scale: scale, deviceScale: deviceScale) { tileX, tileY in
+            isTileBlocked(tileX: tileX, tileY: tileY, seed: seed, buildingRecords: buildingRecords)
+        }
+    }
+
+    /// The closure-based generalization of the rasterizer above -- see the
+    /// closure-based `makeBackdropTexture(playerTile:scale:deviceScale:
+    /// isTileBlocked:)` overload's own doc comment for why this exists
+    /// alongside (rather than instead of) the `seed`/`buildingRecords`
+    /// overload.
+    static func makeBackdropImage(
+        playerTile: TileCoordinate,
+        scale: CGFloat,
+        deviceScale: CGFloat,
+        isTileBlocked: (_ tileX: Int, _ tileY: Int) -> Bool
     ) -> CGImage? {
         let pixelScale = max(deviceScale, 1)
         let size = contentSquarePixelSize(forDeviceScale: pixelScale)
@@ -201,12 +258,7 @@ enum RadarBackdropRenderer {
                 if let memoized = blockedByTile[tile] {
                     blocked = memoized
                 } else {
-                    blocked = isTileBlocked(
-                        tileX: tile.tileX,
-                        tileY: tile.tileY,
-                        seed: seed,
-                        buildingRecords: buildingRecords
-                    )
+                    blocked = isTileBlocked(tile.tileX, tile.tileY)
                     blockedByTile[tile] = blocked
                 }
 

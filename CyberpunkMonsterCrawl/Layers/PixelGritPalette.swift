@@ -23,4 +23,10 @@ enum PixelGritPalette {
     /// Plain dark plate fill for non-primary buttons (RUN AGAIN, back-to-menu,
     /// the HIGH SCORES placeholder entry).
     static let plate = UIColor(white: 0.12, alpha: 1.0)
+
+    /// Hot neon lime, reserved for the minimap radar's med-kit marker
+    /// (`CYBERPUN-17-23`) -- a third hue alongside `neonAccent`/
+    /// `neonSecondary` so the radar's three live-data markers (player,
+    /// raccoon, med kit) never share a color.
+    static let radarMedKitAccent = UIColor(red: 0.55, green: 0.95, blue: 0.15, alpha: 1.0)
 }
