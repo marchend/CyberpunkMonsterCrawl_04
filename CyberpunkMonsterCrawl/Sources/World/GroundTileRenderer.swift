@@ -73,7 +73,6 @@ enum GroundTileRenderer {
 
         let groundKind = groundTileKind(for: tileKind, at: tileCoordinate)
         let pixelRect = GroundTileCatalog.pixelRect(for: groundKind)
-        let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: pixelRect)
 
         // The node keeps SpriteKit's default `anchorPoint` (0.5, 0.5), which
         // is what puts the diamond's centre on the tile's screen point. That
@@ -85,8 +84,24 @@ enum GroundTileRenderer {
         // extra 16px of overhang is split evenly, so the crop's midpoint is
         // still the diamond's midpoint. Alignment depends on that measured
         // fact, not on an assumption about where the overhang sits.
-        node.texture = texture
-        node.size = texture.size()
+        switch groundKind {
+        case .asphaltEastWest, .asphaltNorthSouth:
+            // CYBERPUN-17-27: the lane diamonds' painted yellow divider
+            // dash reads wrong on-device, so street corridors render as a
+            // plain solid-black fill instead of the textured crop --
+            // same size (from the measured lane rect, so depth/position
+            // math below is unaffected), position, zPosition and
+            // pixel-crispness treatment as every other ground tile, just
+            // no texture.
+            node.texture = nil
+            node.color = .black
+            node.colorBlendFactor = 1
+            node.size = pixelRect.size
+        default:
+            let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: pixelRect)
+            node.texture = texture
+            node.size = texture.size()
+        }
         node.position = IsometricProjection.tileToScreen(
             tileX: Double(tileCoordinate.tileX),
             tileY: Double(tileCoordinate.tileY)

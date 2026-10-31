@@ -200,12 +200,47 @@ final class GroundTileRendererTests: XCTestCase {
         XCTAssertFalse(nodes.isEmpty)
 
         for node in nodes {
-            XCTAssertEqual(node.texture?.filteringMode, .nearest)
-            XCTAssertEqual(node.texture?.usesMipmaps, false)
+            // CYBERPUN-17-27: asphalt nodes are now a flat color fill with
+            // no texture, so `PixelCrispness.apply(to:)`'s texture-filtering
+            // checks only apply when a texture is actually present.
+            if let texture = node.texture {
+                XCTAssertEqual(texture.filteringMode, .nearest)
+                XCTAssertEqual(texture.usesMipmaps, false)
+            }
             assertIsWholeNumber(node.xScale, label: "xScale")
             assertIsWholeNumber(node.yScale, label: "yScale")
             assertIsWholeNumber(node.position.x, label: "position.x")
             assertIsWholeNumber(node.position.y, label: "position.y")
+        }
+    }
+
+    // MARK: - Asphalt renders as a flat black fill (CYBERPUN-17-27)
+
+    /// The street tiles' yellow lane-divider dash read as visually wrong
+    /// on-device, so both asphalt orientations must render as a plain
+    /// solid-black fill rather than the textured lane crop -- while still
+    /// taking the same footprint the lane diamond was measured at, so
+    /// depth/position math is unaffected.
+    func test_asphaltKinds_renderAsSolidBlackFill_withNoTexture() {
+        // tileX:4, tileY:0 maps to .asphaltNorthSouth; tileX:0, tileY:4 maps
+        // to .asphaltEastWest (see test_asphalt_onXAxisStreetBand_mapsToNorthSouthLane
+        // / test_asphalt_onYAxisStreetBand_mapsToEastWestLane above).
+        let northSouthCoordinate = TileCoordinate(tileX: 4, tileY: 0)
+        let eastWestCoordinate = TileCoordinate(tileX: 0, tileY: 4)
+
+        for (coordinate, groundKind) in [
+            (northSouthCoordinate, GroundTileKind.asphaltNorthSouth),
+            (eastWestCoordinate, GroundTileKind.asphaltEastWest),
+        ] {
+            let node = GroundTileRenderer.node(for: .asphalt, at: coordinate)
+
+            XCTAssertNil(node.texture, "\(groundKind) must render as a flat fill, not a textured crop.")
+            XCTAssertEqual(node.color, .black, "\(groundKind) must fill solid black.")
+            XCTAssertEqual(node.colorBlendFactor, 1, "\(groundKind) must fully blend its color over (no) texture.")
+            XCTAssertEqual(
+                node.size, GroundTileCatalog.pixelRect(for: groundKind).size,
+                "\(groundKind) must keep the lane diamond's measured footprint even without its texture."
+            )
         }
     }
 
