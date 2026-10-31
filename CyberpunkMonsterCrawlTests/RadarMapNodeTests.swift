@@ -11,9 +11,23 @@ import XCTest
 /// `CYBERPUN-17-23-t3` adds one rendering-level test at the bottom of this
 /// file: every test above only asserts *structural* state (`.position`,
 /// `.isHidden`, pool/container membership) -- never the real, composited
-/// pixels an `SKCropNode` actually produces -- which is exactly the gap
-/// that let a color-only mask + color-only marker children ship invisible
-/// on device while every one of these tests stayed green.
+/// pixels an `SKCropNode` actually produces.
+///
+/// **What that test is and is not** (PR #80 review asked for this to be
+/// measured rather than assumed, so it was): reverting `maskNode`,
+/// `playerMarker` and the pooled markers to the pre-`-t3`
+/// `SKSpriteNode(color:size:)` form and re-running the suite on the
+/// iPhone 16 simulator leaves it **green**. So it is *not* regression
+/// coverage pinning the texture-backing fix, and the defect it was written
+/// against remains a re-reading hypothesis rather than a reproduced
+/// failure. That is the expected result, not a surprise: the defect is
+/// described as a *device* `SKCropNode` compositing problem, and an
+/// offscreen `SKView.texture(from:)` render in the simulator is the
+/// environment least likely to reproduce it. What the test does buy is the
+/// only pixel-level coverage in this file -- that the crop/geometry
+/// pipeline composites *something* non-background at the three expected
+/// columns -- which would catch a mask, clip or marker-placement
+/// regression that flattens the dial outright.
 final class RadarMapNodeTests: XCTestCase {
 
     // MARK: - Helpers
@@ -345,9 +359,14 @@ final class RadarMapNodeTests: XCTestCase {
 
     // MARK: - Rendering-level: markers are actually visible through the crop (`CYBERPUN-17-23-t3`)
 
-    /// Closes the exact gap described in this file's header: renders the
-    /// real, composited `RadarMapNode` pixels via `SKView.texture(from:)`
-    /// and decodes them, rather than trusting structural state alone.
+    /// Renders the real, composited `RadarMapNode` pixels via
+    /// `SKView.texture(from:)` and decodes them, rather than trusting
+    /// structural state alone.
+    ///
+    /// See this file's header for what this does *not* establish: it
+    /// passes against the pre-`-t3`, color-only node too, so read it as
+    /// pixel-level coverage of the crop/geometry pipeline, not as the
+    /// regression test for the texture-backing fix.
     ///
     /// The player, raccoon and med-kit tiles are chosen so every marker
     /// lands on the same radar-space **row** (`y == 0`, the node's own
@@ -386,7 +405,7 @@ final class RadarMapNodeTests: XCTestCase {
             "SKView must be able to render RadarMapNode's composited content to a texture"
         )
         let cgImage = try XCTUnwrap(texture.cgImage())
-        let pixels = try XCTUnwrap(rgbaBytes(of: cgImage))
+        let pixels = try XCTUnwrap(CGImagePixels.rgbaBytes(of: cgImage))
         let width = cgImage.width
         let height = cgImage.height
 
@@ -435,32 +454,4 @@ final class RadarMapNodeTests: XCTestCase {
         )
     }
 
-    /// `cgImage`'s pixels as top-down RGBA8 rows -- the same
-    /// redraw-into-a-known-layout-bitmap-context technique
-    /// `RadarGeometryTests.rgbaBytes(of:)` uses, duplicated here (rather
-    /// than shared) since that one is `private` to its own file and a
-    /// `CGImage`'s backing store is not directly addressable without it.
-    private func rgbaBytes(of image: CGImage) -> [UInt8]? {
-        let width = image.width
-        let height = image.height
-        var bytes = [UInt8](repeating: 0, count: width * height * 4)
-
-        let drew = bytes.withUnsafeMutableBytes { raw -> Bool in
-            guard let context = CGContext(
-                data: raw.baseAddress,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else {
-                return false
-            }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-
-        return drew ? bytes : nil
-    }
 }

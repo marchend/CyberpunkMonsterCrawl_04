@@ -436,8 +436,8 @@ final class RadarGeometryTests: XCTestCase {
             playerTile: playerTile, seed: seed, buildingRecords: [record], scale: scale, deviceScale: 1
         ))
 
-        let baselineBytes = try XCTUnwrap(rgbaBytes(of: baseline))
-        let recordBytes = try XCTUnwrap(rgbaBytes(of: withRecord))
+        let baselineBytes = try XCTUnwrap(CGImagePixels.rgbaBytes(of: baseline))
+        let recordBytes = try XCTUnwrap(CGImagePixels.rgbaBytes(of: withRecord))
         XCTAssertEqual(baselineBytes.count, recordBytes.count)
 
         let width = baseline.width
@@ -453,32 +453,4 @@ final class RadarGeometryTests: XCTestCase {
         return rows
     }
 
-    /// `image`'s pixels as top-down RGBA8 rows, by redrawing it into a
-    /// bitmap context of known layout (a `CGImage`'s own backing store is
-    /// not directly addressable, and an `SKTexture`'s needs a live
-    /// renderer -- which is why `makeBackdropImage` is split out of
-    /// `makeBackdropTexture` at all).
-    private func rgbaBytes(of image: CGImage) -> [UInt8]? {
-        let width = image.width
-        let height = image.height
-        var bytes = [UInt8](repeating: 0, count: width * height * 4)
-
-        let drew = bytes.withUnsafeMutableBytes { raw -> Bool in
-            guard let context = CGContext(
-                data: raw.baseAddress,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else {
-                return false
-            }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-
-        return drew ? bytes : nil
-    }
 }
