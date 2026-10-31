@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Selects the run's starting tile: a street-intersection tile the player
@@ -25,6 +26,24 @@ import Foundation
 /// always spawns a run at the same junction, and two different seeds
 /// overwhelmingly choose two different junctions
 /// (`RunSpawnSelectorTests` checks this holds across many seeds).
+///
+/// **Visual clearance, not just footprint adjacency.** A junction centre
+/// always sits at `junctionCentreOffset` (local offset 4 of the 6-tile
+/// period), while a building footprint only ever occupies local offsets
+/// 0-2 of its own block -- so the nearest building tile is always *two or
+/// more* tiles away from any junction centre on each axis. A naive
+/// "candidate tile + its 8 neighbours clear of building footprint" rule
+/// (`PickupManager.isLegalPlacement`'s rule, built for pickups scattered
+/// across a whole visible rect) can therefore never fire here: its ±1 tile
+/// reach never touches a building tile, no matter how the city generates.
+/// That is a *different* question from the one this type has to answer --
+/// not "is a building directly adjacent", but "does a nearby tall
+/// building's sprite, drawn upward from its own base tile under this
+/// game's isometric projection and painter's-algorithm depth ordering,
+/// visually reach far enough on screen to cover the junction". See
+/// `isTileVisuallyOccluded(_:byAnyOf:)` for that check, and
+/// `candidateJunction(forAttempt:seed:)` for the deterministic fallback
+/// `selectSpawnTile` walks through when a candidate fails it.
 ///
 /// **That variety reaches the player via `GameScene.worldSeed`.**
 /// `GameScene.startNewRun()` (`CYBERPUN-17-13` PR 3) draws a fresh random
@@ -110,23 +129,180 @@ enum RunSpawnSelector {
     /// arithmetic.
     static let junctionCentreOffset = CityLatticeGenerator.blockSize + CityLatticeGenerator.streetWidth / 2
 
+    /// Safety ceiling on fallback attempts `selectSpawnTile` will try before
+    /// giving up and returning the last candidate anyway, rather than
+    /// looping forever. A real city can occlude at most a small, bounded
+    /// fraction of junctions (a junction is only ever occluded by a tall
+    /// building on one of its 4 bordering blocks, and most blocks are
+    /// empty lots or hold a short building), so this is many, many times
+    /// more attempts than any real seed should ever need -- it exists only
+    /// so a pathological `buildingsProvider` (e.g. a test double that
+    /// always reports an occluding building) cannot hang the game.
+    static let maxFallbackAttempts = 10_000
+
     /// Selects the run's starting tile for `seed`.
     ///
     /// The result always satisfies
     /// `DepthModel.isWithinSupportedDepthRange(forTile:)`, with
     /// `roamMarginTiles` of headroom on each axis -- see
     /// `selectionRadiusBlocks` for the derivation, and
-    /// `RunSpawnSelectorTests` for the sweep that checks it.
-    static func selectSpawnTile(seed: WorldSeed) -> TileCoordinate {
+    /// `RunSpawnSelectorTests` for the sweep that checks it. It is also
+    /// always clear of visual building occlusion
+    /// (`isTileVisuallyOccluded(_:byAnyOf:)`): `candidateJunction(
+    /// forAttempt:seed:)` draws a deterministic sequence of candidate
+    /// junctions purely from `seed` and the attempt index (no added
+    /// randomness, so a given seed always walks the exact same sequence),
+    /// and this method returns the first one that passes the occlusion
+    /// check.
+    ///
+    /// `buildingsProvider` defaults to `BuildingPlacement.generate`, the
+    /// production building generator; a test can inject a different
+    /// closure to exercise the fallback against a synthetic occluding
+    /// building without needing to brute-force a seed that happens to
+    /// generate one.
+    static func selectSpawnTile(
+        seed: WorldSeed,
+        buildingsProvider: (BlockCoordinate, WorldSeed) -> [BuildingPlacementRecord] = BuildingPlacement.generate
+    ) -> TileCoordinate {
+        var attempt = 0
+        var lastCandidate: TileCoordinate?
+        while attempt < maxFallbackAttempts {
+            let (candidate, blockX, blockY) = candidateJunction(forAttempt: attempt, seed: seed)
+            let obstructions = neighboringBlocks(blockX: blockX, blockY: blockY)
+                .flatMap { buildingsProvider($0, seed) }
+            if !isTileVisuallyOccluded(candidate, byAnyOf: obstructions) {
+                return candidate
+            }
+            lastCandidate = candidate
+            attempt += 1
+        }
+        // Practically unreachable (see `maxFallbackAttempts`); returning the
+        // last candidate rather than trapping keeps this a total function.
+        return lastCandidate ?? candidateJunction(forAttempt: 0, seed: seed).candidate
+    }
+
+    /// The `attempt`-th deterministic candidate junction for `seed`, plus
+    /// the block coordinate it was derived from (so callers can look up
+    /// that block's bordering buildings without re-deriving it).
+    ///
+    /// `attempt` is folded into the existing `SeedMixer` hash as its own
+    /// coordinate input (the same mechanism every other per-tile/per-block
+    /// seed decision in `World` already uses to vary its hash stream) --
+    /// not added entropy, since the result is still a pure function of
+    /// `(seed, attempt)` alone and every attempt for a given seed is fixed
+    /// in advance.
+    private static func candidateJunction(
+        forAttempt attempt: Int, seed: WorldSeed
+    ) -> (candidate: TileCoordinate, blockX: Int, blockY: Int) {
         let span = UInt64(selectionRadiusBlocks * 2 + 1)
-        let blockX = Int(SeedMixer.bounded(seed: seed.rawValue ^ blockXSalt, tileX: 0, tileY: 0, modulus: span))
+        let blockX = Int(SeedMixer.bounded(seed: seed.rawValue ^ blockXSalt, tileX: attempt, tileY: 0, modulus: span))
             - selectionRadiusBlocks
-        let blockY = Int(SeedMixer.bounded(seed: seed.rawValue ^ blockYSalt, tileX: 0, tileY: 0, modulus: span))
+        let blockY = Int(SeedMixer.bounded(seed: seed.rawValue ^ blockYSalt, tileX: attempt, tileY: 0, modulus: span))
             - selectionRadiusBlocks
 
         let tileX = blockX * CityLatticeGenerator.period + junctionCentreOffset
         let tileY = blockY * CityLatticeGenerator.period + junctionCentreOffset
-        return TileCoordinate(tileX: tileX, tileY: tileY)
+        return (TileCoordinate(tileX: tileX, tileY: tileY), blockX, blockY)
+    }
+
+    /// The (up to) 4 blocks whose interior can border the lattice crossing
+    /// at block coordinate `(blockX, blockY)` -- see `junctionCentreOffset`:
+    /// a junction's tile is `blockX * period + junctionCentreOffset` on
+    /// each axis, which sits between block `blockX`/`blockY`'s own interior
+    /// and the next block up on each axis. The diagonal block `(blockX + 1,
+    /// blockY + 1)` can never actually be nearer the camera than the
+    /// junction itself (every one of its tiles has a strictly greater tile
+    /// sum), but it costs nothing to include it here rather than special-
+    /// case it out -- `isTileVisuallyOccluded` already filters on tile sum.
+    private static func neighboringBlocks(blockX: Int, blockY: Int) -> [BlockCoordinate] {
+        [
+            BlockCoordinate(x: blockX, y: blockY),
+            BlockCoordinate(x: blockX + 1, y: blockY),
+            BlockCoordinate(x: blockX, y: blockY + 1),
+            BlockCoordinate(x: blockX + 1, y: blockY + 1)
+        ]
+    }
+
+    /// A conservative (never-undercounts) approximate pixel height for a
+    /// building's `BuildingCatalog.HeightClass`, used only to test whether
+    /// a building's sprite could visually reach tall enough on screen to
+    /// occlude a tile behind it (`isTileVisuallyOccluded`).
+    ///
+    /// Mirrors the measured pixel heights `Sources/Assets/
+    /// BuildingSprite.declaredPixelSize` already documents per entry
+    /// (`CityReadComparisonTests` cross-checks those against the shipped
+    /// art) -- duplicated here as plain numbers, not imported, for the same
+    /// "`World` stays SpriteKit-free" reason `BuildingCatalog` itself
+    /// already duplicates `BuildingSprite`'s footprint/height-class table
+    /// rather than importing it. Each class takes its *tallest* member's
+    /// measured height (e.g. `.mid` takes `building_04`'s 176px over
+    /// `building_06`/`07`'s 144px and `building_08`/`09`'s 136px), so this
+    /// can only ever *overestimate* a shorter member's reach -- an
+    /// overestimate costs only an extra fallback attempt; an underestimate
+    /// would silently let an occluding building through, the exact defect
+    /// this type exists to fix.
+    static func approximatePixelHeight(forHeightClass heightClass: BuildingCatalog.HeightClass) -> Double {
+        switch heightClass {
+        case .lowest: return 80 // building_10
+        case .low: return 112 // building_00...03
+        case .mid: return 176 // tallest of building_04/06/07/08/09
+        case .tall: return 240 // building_05
+        case .large: return 192 // building_11
+        }
+    }
+
+    /// Whether `tile` could be visually occluded -- under this game's
+    /// isometric projection and `DepthModel`'s painter's-algorithm depth
+    /// ordering -- by any building in `records`.
+    ///
+    /// Unlike `PickupManager.isLegalPlacement`'s "tile + 8 neighbours
+    /// clear" building-adjacency rule -- which only ever asks about
+    /// footprint tiles directly touching the candidate, and so can never
+    /// fire for a junction centre tile (see this file's own doc comment) --
+    /// this asks the question that actually determines visibility: does a
+    /// nearby building's *sprite*, drawn upward from its base tile in
+    /// screen space, reach tall enough on screen to cover `tile`'s own
+    /// screen position?
+    ///
+    /// A building can only ever occlude `tile` if both hold:
+    /// - **It draws in front of `tile`.** `DepthModel`'s band ordering is
+    ///   strictly per-diagonal (`tileX + tileY`): any tile with a *strictly
+    ///   smaller* tile sum sits in a band with a higher zPosition than
+    ///   `tile` -- `DepthModel.bandSpacing` (10) is wider than both
+    ///   `DepthModel.buildingContentRange` and `DepthModel.actorOffsetRange`
+    ///   combined, so this holds regardless of either tile's in-band offset
+    ///   -- and so draws on top of it; any tile with an equal or greater
+    ///   sum draws behind or beside it and can never visually cover it.
+    /// - **It lines up with `tile` on screen, and reaches tall enough.**
+    ///   `IsometricProjection.tileToScreen` gives each tile's on-screen
+    ///   point; a building's sprite is anchored at its base tile and
+    ///   extends upward (screen `+y`) by its own approximate pixel height
+    ///   (`approximatePixelHeight(forHeightClass:)`). If the horizontal gap
+    ///   between the two tiles' screen points is within one tile's
+    ///   half-width and the building's height clears the vertical gap, its
+    ///   sprite's on-screen footprint covers `tile`'s point.
+    static func isTileVisuallyOccluded(_ tile: TileCoordinate, byAnyOf records: [BuildingPlacementRecord]) -> Bool {
+        let tileSum = tile.tileX + tile.tileY
+        let tileScreen = IsometricProjection.tileToScreen(tileX: Double(tile.tileX), tileY: Double(tile.tileY))
+
+        for record in records {
+            let buildingHeight = approximatePixelHeight(forHeightClass: record.building.heightClass)
+            for footprintTile in record.footprintTiles {
+                guard footprintTile.tileX + footprintTile.tileY < tileSum else { continue }
+
+                let buildingScreen = IsometricProjection.tileToScreen(
+                    tileX: Double(footprintTile.tileX), tileY: Double(footprintTile.tileY)
+                )
+                let horizontalGap = abs(Double(buildingScreen.x - tileScreen.x))
+                guard horizontalGap < IsometricProjection.tileHalfWidth else { continue }
+
+                let verticalGap = Double(tileScreen.y - buildingScreen.y)
+                if verticalGap >= 0 && verticalGap < buildingHeight {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Whether `(tileX, tileY)` falls inside a lattice crossing -- both
