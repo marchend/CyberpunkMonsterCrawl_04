@@ -410,15 +410,13 @@ final class PixelCrispnessSweepTests: XCTestCase {
             assertPixelCrisp(
                 node.icon, "PickupNode.icon(\(kind))", accepted: Self.pickupIconAcceptedMagnification
             )
-            // `CYBERPUN-17-18`: `garbageCan`'s pad is still an untextured
-            // color fill -- `assertPixelCrisp` skips the (vacuous)
-            // filtering checks for it, but scale/position still apply
-            // since `PixelCrispness.apply(to:)` is called on it too.
-            // `medKit`'s pad is now a generated glow texture, rendered at
-            // exactly `PickupNode.padSize`'s pixel dimensions, so it holds
-            // to the whole-integer (1x) magnification rule with no
-            // accepted exception, and its filtering checks now actually
-            // run (not vacuous).
+            // `CYBERPUN-17-18` / `CYBERPUN-17-25`: both `medKit`'s and
+            // `garbageCan`'s pads are now generated glow textures, each
+            // rendered at exactly `PickupNode.padSize`'s pixel dimensions,
+            // so both hold to the whole-integer (1x) magnification rule
+            // with no accepted exception, and `assertPixelCrisp`'s
+            // nearest/no-mipmaps filtering checks actually run for both
+            // (no longer vacuous for either kind).
             assertPixelCrisp(node.pad, "PickupNode.pad(\(kind))")
         }
     }

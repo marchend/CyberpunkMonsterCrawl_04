@@ -32,7 +32,7 @@ final class PickupNodeTests: XCTestCase {
     /// difference alone, not on any actual color discrepancy, so the
     /// comparison is done on extracted RGBA components instead.
     private func assertColorsMatch(
-        _ lhs: SKColor, _ rhs: SKColor, _ message: String = "",
+        _ lhs: SKColor, _ rhs: SKColor, _ message: String = "", accuracy: CGFloat = 1e-6,
         file: StaticString = #filePath, line: UInt = #line
     ) {
         var lr: CGFloat = 0, lg: CGFloat = 0, lb: CGFloat = 0, la: CGFloat = 0
@@ -40,10 +40,10 @@ final class PickupNodeTests: XCTestCase {
         lhs.getRed(&lr, green: &lg, blue: &lb, alpha: &la)
         rhs.getRed(&rr, green: &rg, blue: &rb, alpha: &ra)
 
-        XCTAssertEqual(lr, rr, accuracy: 1e-6, message, file: file, line: line)
-        XCTAssertEqual(lg, rg, accuracy: 1e-6, message, file: file, line: line)
-        XCTAssertEqual(lb, rb, accuracy: 1e-6, message, file: file, line: line)
-        XCTAssertEqual(la, ra, accuracy: 1e-6, message, file: file, line: line)
+        XCTAssertEqual(lr, rr, accuracy: accuracy, message, file: file, line: line)
+        XCTAssertEqual(lg, rg, accuracy: accuracy, message, file: file, line: line)
+        XCTAssertEqual(lb, rb, accuracy: accuracy, message, file: file, line: line)
+        XCTAssertEqual(la, ra, accuracy: accuracy, message, file: file, line: line)
     }
 
     /// `CYBERPUN-17-25`: `garbageCan`'s pad moved from a flat
@@ -79,6 +79,54 @@ final class PickupNodeTests: XCTestCase {
         XCTAssertFalse(
             medKit.pad.texture === garbageCan.pad.texture,
             "medKit and garbageCan must use their own distinct glow textures (different accent colors)"
+        )
+    }
+
+    /// Pins AC2 ("use `neonSecondary` as the glow's base color, same accent
+    /// as today") as a *measured* fact rather than leaving it to the
+    /// `=== `-identity check above, which can never fail for a color reason
+    /// (`makeGlowTexture(forColor:)` always returns two distinct `SKTexture`
+    /// instances, whatever color each is built from). Samples each glow's
+    /// center pixel -- opaque per `makeGlowCGImage(accent:)`'s "opaque at
+    /// the center, fading to transparent" contract, so no premultiply
+    /// correction is needed there -- straight off the same `CGImage` the
+    /// production texture is built from (PR #83 review).
+    func test_medKitAndGarbageCanGlows_useTheirOwnAccentColor() throws {
+        let medKitImage = try XCTUnwrap(
+            PickupNode.medKitGlowCGImageForTesting(),
+            "the medKit glow image must be constructible from its fixed, valid CoreGraphics configuration"
+        )
+        let garbageCanImage = try XCTUnwrap(
+            PickupNode.garbageCanGlowCGImageForTesting(),
+            "the garbage can glow image must be constructible from its fixed, valid CoreGraphics configuration"
+        )
+
+        let medKitCenter = try XCTUnwrap(
+            rgba(atX: medKitImage.width / 2, y: medKitImage.height / 2, in: medKitImage),
+            "medKit center pixel must be sampleable"
+        )
+        let garbageCanCenter = try XCTUnwrap(
+            rgba(atX: garbageCanImage.width / 2, y: garbageCanImage.height / 2, in: garbageCanImage),
+            "garbageCan center pixel must be sampleable"
+        )
+
+        assertColorsMatch(
+            SKColor(
+                red: CGFloat(medKitCenter.r) / 255, green: CGFloat(medKitCenter.g) / 255,
+                blue: CGFloat(medKitCenter.b) / 255, alpha: CGFloat(medKitCenter.a) / 255
+            ),
+            PixelGritPalette.neonAccent,
+            "medKit's glow must be tinted with neonAccent at its (opaque) center",
+            accuracy: 1.0 / 255.0
+        )
+        assertColorsMatch(
+            SKColor(
+                red: CGFloat(garbageCanCenter.r) / 255, green: CGFloat(garbageCanCenter.g) / 255,
+                blue: CGFloat(garbageCanCenter.b) / 255, alpha: CGFloat(garbageCanCenter.a) / 255
+            ),
+            PixelGritPalette.neonSecondary,
+            "garbageCan's glow must be tinted with neonSecondary at its (opaque) center",
+            accuracy: 1.0 / 255.0
         )
     }
 
@@ -325,6 +373,14 @@ final class PickupNodeTests: XCTestCase {
     /// offset read below does not depend on whatever internal pixel layout
     /// `cgImage` itself happens to carry.
     private func alpha(atX x: Int, y: Int, in cgImage: CGImage) -> UInt8? {
+        rgba(atX: x, y: y, in: cgImage)?.a
+    }
+
+    /// Same decode as `alpha(atX:y:in:)`, widened to the full RGBA8 tuple
+    /// (PR #83 review) so a test can pin a glow's *color*, not just its
+    /// alpha falloff shape -- e.g.
+    /// `test_medKitAndGarbageCanGlows_useTheirOwnAccentColor` above.
+    private func rgba(atX x: Int, y: Int, in cgImage: CGImage) -> (r: UInt8, g: UInt8, b: UInt8, a: UInt8)? {
         let width = cgImage.width
         let height = cgImage.height
         guard x >= 0, x < width, y >= 0, y < height else { return nil }
@@ -353,6 +409,6 @@ final class PickupNodeTests: XCTestCase {
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
 
         let offset = (y * width + x) * 4
-        return buffer[offset + 3]
+        return (r: buffer[offset], g: buffer[offset + 1], b: buffer[offset + 2], a: buffer[offset + 3])
     }
 }
