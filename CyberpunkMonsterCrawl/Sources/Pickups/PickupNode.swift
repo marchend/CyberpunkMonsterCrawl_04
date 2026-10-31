@@ -130,11 +130,11 @@ final class PickupNode: SKNode {
         return texture
     }
 
-    // MARK: - Med kit pad glow (CYBERPUN-17-18)
+    // MARK: - Pickup pad glow (CYBERPUN-17-18, CYBERPUN-17-25)
 
-    /// `medKit`'s pad texture: a soft circular radial gradient from
-    /// `padColor(for: .medKit)` (opaque at the center) fading to fully
-    /// transparent at `padSize`'s half-width -- drawn once with pure
+    /// Each kind's pad texture: a soft circular radial gradient from that
+    /// kind's `padColor(for:)` accent (opaque at the center) fading to
+    /// fully transparent at `padSize`'s half-width -- drawn once with pure
     /// CoreGraphics (`CGContext.drawRadialGradient`), cached the same
     /// "compute once, reuse" way `cachedSheet`/`textureCache` are, since a
     /// `PickupNode` is expected to be constructed far more often than this
@@ -146,26 +146,36 @@ final class PickupNode: SKNode {
     /// exception needed -- the soft falloff comes entirely from the baked
     /// per-pixel alpha gradient, not from scaling or from relaxing nearest
     /// filtering.
-    private static let medKitGlowTexture: SKTexture = {
-        guard let cgImage = makeMedKitGlowCGImage() else {
-            // Should not happen with this fixed, valid CoreGraphics
-            // configuration (the same premultiplied-last RGBA8 context
-            // `ImagePixelSampling` already relies on for decoding); falling
-            // back to a blank texture rather than crashing construction if
-            // it ever does.
+    ///
+    /// **CYBERPUN-17-18** introduced this treatment for `medKit` only;
+    /// **CYBERPUN-17-25** generalized the factory below to also cover
+    /// `garbageCan` -- same glow shape, each kind keeps its own existing
+    /// accent color.
+    private static let medKitGlowTexture: SKTexture = makeGlowTexture(forColor: padColor(for: .medKit))
+    private static let garbageCanGlowTexture: SKTexture = makeGlowTexture(forColor: padColor(for: .garbageCan))
+
+    /// Builds (and wraps as a pixel-crisp `SKTexture`) one kind's glow
+    /// image from `makeGlowCGImage(accent:)`, falling back to a blank
+    /// texture -- rather than crashing construction -- if that fixed,
+    /// valid CoreGraphics configuration ever fails (the same
+    /// premultiplied-last RGBA8 context `ImagePixelSampling` already
+    /// relies on for decoding).
+    private static func makeGlowTexture(forColor color: SKColor) -> SKTexture {
+        guard let cgImage = makeGlowCGImage(accent: color) else {
             return SKTexture()
         }
         let texture = SKTexture(cgImage: cgImage)
         texture.filteringMode = .nearest
         texture.usesMipmaps = false
         return texture
-    }()
+    }
 
-    /// Pure-CoreGraphics construction of the med kit glow's pixel data --
-    /// no SpriteKit/GPU dependency, so a test can sample it directly
-    /// (`medKitGlowCGImageForTesting()`) without going through
+    /// Pure-CoreGraphics construction of a pad glow's pixel data for a
+    /// given accent color -- no SpriteKit/GPU dependency, so a test can
+    /// sample it directly (`medKitGlowCGImageForTesting()` /
+    /// `garbageCanGlowCGImageForTesting()`) without going through
     /// `SKTexture`'s own GPU-backed readback path.
-    private static func makeMedKitGlowCGImage() -> CGImage? {
+    private static func makeGlowCGImage(accent color: SKColor) -> CGImage? {
         let width = Int(padSize.width)
         let height = Int(padSize.height)
         guard width > 0, height > 0 else { return nil }
@@ -183,9 +193,8 @@ final class PickupNode: SKNode {
             return nil
         }
 
-        let accent = padColor(for: .medKit)
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        accent.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
 
         guard let gradient = CGGradient(
             colorsSpace: colorSpace,
@@ -217,7 +226,15 @@ final class PickupNode: SKNode {
     /// `resetTextureCacheForTesting()` plays below for the atlas cache; not
     /// used by any production path.
     static func medKitGlowCGImageForTesting() -> CGImage? {
-        makeMedKitGlowCGImage()
+        makeGlowCGImage(accent: padColor(for: .medKit))
+    }
+
+    /// Same test seam as `medKitGlowCGImageForTesting()`, for
+    /// `garbageCan`'s glow (`CYBERPUN-17-25`;
+    /// `PickupNodeTests
+    /// .test_garbageCanPad_glowTexture_hasSoftRadialFalloff_notAHardSquare`).
+    static func garbageCanGlowCGImageForTesting() -> CGImage? {
+        makeGlowCGImage(accent: padColor(for: .garbageCan))
     }
 
     // MARK: - Test seam
@@ -257,10 +274,13 @@ final class PickupNode: SKNode {
     /// texture (`Self.medKitGlowTexture`) rather than a flat color fill --
     /// the original flat 40x40pt `neonAccent` square read as a hard-edged
     /// cyan box around the icon rather than the glow the design intends
-    /// (bug report + grooming findings). `garbageCan`'s pad is explicitly
-    /// out of scope for that ticket and keeps the original plain color fill
-    /// (no texture -- there is no dedicated pad art for it in the pack),
-    /// tinted via `PixelGritPalette.neonSecondary`.
+    /// (bug report + grooming findings). **CYBERPUN-17-25** gave
+    /// `garbageCan`'s pad (`Self.garbageCanGlowTexture`) the identical
+    /// treatment -- it had the same flat-fill bug (a hard-edged magenta
+    /// square) and was explicitly called out as out of scope for
+    /// `CYBERPUN-17-18`. Both pads now share one glow-texture factory,
+    /// each keeping its own existing accent color
+    /// (`PixelGritPalette.neonAccent` / `.neonSecondary`).
     let pad: SKSpriteNode
 
     init(kind: PickupKind) {
@@ -273,14 +293,13 @@ final class PickupNode: SKNode {
         icon.colorBlendFactor = 0
         icon.zPosition = Self.iconRelativeZ
 
-        // CYBERPUN-17-18: medKit's pad is a soft radial-glow texture;
-        // garbageCan (out of scope for that ticket) keeps the original
-        // flat color fill.
+        // CYBERPUN-17-18 / CYBERPUN-17-25: both kinds' pads are soft
+        // radial-glow textures, differing only by accent color.
         switch kind {
         case .medKit:
             pad = SKSpriteNode(texture: Self.medKitGlowTexture, size: Self.padSize)
         case .garbageCan:
-            pad = SKSpriteNode(color: Self.padColor(for: kind), size: Self.padSize)
+            pad = SKSpriteNode(texture: Self.garbageCanGlowTexture, size: Self.padSize)
         }
         pad.zPosition = Self.padRelativeZ
 
