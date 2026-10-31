@@ -87,19 +87,32 @@ enum GroundTileRenderer {
         switch groundKind {
         case .asphaltEastWest, .asphaltNorthSouth:
             // CYBERPUN-17-27: the lane diamonds' painted yellow divider
-            // dash reads wrong on-device, so street corridors render as a
-            // plain solid-black fill instead of the textured crop --
-            // same size (from the measured lane rect, so depth/position
-            // math below is unaffected), position, zPosition and
-            // pixel-crispness treatment as every other ground tile, just
-            // no texture.
-            node.texture = nil
+            // dash reads wrong on-device, so street corridors render
+            // solid black. The lane crop is still the texture -- it is
+            // *tinted* to black at full strength (`colorBlendFactor = 1`)
+            // rather than dropped for a textureless colour fill, because
+            // the crop is what carries the diamond's alpha silhouette.
+            // An untextured `SKSpriteNode` fills its whole rectangular
+            // `size`, so a 96x60 opaque black rectangle would overpaint
+            // the corners of the four neighbouring diamonds; tinting
+            // keeps the painted pixels (now black, dash included) and
+            // keeps the transparent corners transparent. Size, position,
+            // zPosition and pixel-crispness treatment are identical to
+            // every other ground tile.
+            let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: pixelRect)
+            node.texture = texture
             node.color = .black
             node.colorBlendFactor = 1
-            node.size = pixelRect.size
+            node.size = texture.size()
         default:
             let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: pixelRect)
             node.texture = texture
+            // `configure` must be *total* over the node it is handed:
+            // `GroundPlaneStreamer` recycles pooled nodes across kinds, so
+            // a node that last rendered asphalt arrives here still fully
+            // tinted black. Reset the blend rather than leaving it to the
+            // previous configuration.
+            node.colorBlendFactor = 0
             node.size = texture.size()
         }
         node.position = IsometricProjection.tileToScreen(
