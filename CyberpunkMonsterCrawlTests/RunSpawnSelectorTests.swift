@@ -156,4 +156,193 @@ final class RunSpawnSelectorTests: XCTestCase {
         // Also holds on the negative side of the origin.
         XCTAssertTrue(RunSpawnSelector.isIntersectionTile(tileX: -2, tileY: -2))
     }
+
+    // MARK: - Visual occlusion (CYBERPUN-17-19): the real check
+
+    /// A synthetic building record occupying a single footprint tile, built
+    /// the same way other test suites fabricate one (`CollisionResolverTests
+    /// .makeRecord`) -- via `BuildingCatalog.entry(atIndex:)` so the
+    /// `heightClass` is a real catalog entry, not a hand-invented value.
+    private func makeRecord(atTile tile: TileCoordinate, buildingIndex: Int) -> BuildingPlacementRecord {
+        BuildingPlacementRecord(
+            lotTile: tile,
+            building: BuildingCatalog.entry(atIndex: buildingIndex),
+            footprintTiles: [tile],
+            farCornerTile: tile
+        )
+    }
+
+    /// Index 5 is `.tall` (`building_05`, 240px) -- the tallest single-tile
+    /// catalog entry, and the one `RunSpawnSelector
+    /// .approximatePixelHeight(forHeightClass:)` gives the most screen
+    /// reach.
+    private static let tallBuildingIndex = 5
+    /// Index 0 is `.low` (`building_00`, 112px) -- a much shorter building,
+    /// used to prove the occlusion check actually consults height and does
+    /// not just fire for any nearby building.
+    private static let lowBuildingIndex = 0
+
+    func test_isTileVisuallyOccluded_trueForATallBuilding_inFrontAndScreenAligned() {
+        // tile (10, 10): tile sum 20, screen-x diff 0.
+        // building (6, 6): tile sum 12 (8 less -- 8 * tileHalfHeight(24) =
+        // 192px vertical gap), screen-x diff 0 (perfectly aligned). A
+        // `.tall` (240px) building's sprite clears that 192px gap.
+        let tile = TileCoordinate(tileX: 10, tileY: 10)
+        let building = makeRecord(atTile: TileCoordinate(tileX: 6, tileY: 6), buildingIndex: Self.tallBuildingIndex)
+
+        XCTAssertTrue(RunSpawnSelector.isTileVisuallyOccluded(tile, byAnyOf: [building]))
+    }
+
+    func test_isTileVisuallyOccluded_falseForAShorterBuilding_atTheIdenticalAlignedPosition() {
+        // Identical geometry to the test above (192px vertical gap, exact
+        // screen alignment) but a `.low` (112px) building, which cannot
+        // clear a 192px gap -- proving the check actually consults height,
+        // not just "is any building nearby and aligned".
+        let tile = TileCoordinate(tileX: 10, tileY: 10)
+        let building = makeRecord(atTile: TileCoordinate(tileX: 6, tileY: 6), buildingIndex: Self.lowBuildingIndex)
+
+        XCTAssertFalse(RunSpawnSelector.isTileVisuallyOccluded(tile, byAnyOf: [building]))
+    }
+
+    func test_isTileVisuallyOccluded_falseWhenHorizontallyMisaligned() {
+        // Same tile sums (and so the same 192px vertical gap) as the
+        // occluding case above, but shifted so the building's screen-x no
+        // longer lines up with the target tile's -- a tall building off to
+        // the side must not occlude a tile it never actually covers on
+        // screen.
+        let tile = TileCoordinate(tileX: 10, tileY: 10)
+        let building = makeRecord(atTile: TileCoordinate(tileX: 11, tileY: 1), buildingIndex: Self.tallBuildingIndex)
+
+        XCTAssertFalse(RunSpawnSelector.isTileVisuallyOccluded(tile, byAnyOf: [building]))
+    }
+
+    func test_isTileVisuallyOccluded_falseWhenTheBuildingIsNotStrictlyInFront() {
+        // Same screen-x alignment as the occluding case, but the
+        // "building" sits on (and beyond) the target tile's own tile sum --
+        // `DepthModel`'s band ordering means it never draws on top of the
+        // target, however tall, so it can never occlude it.
+        let tile = TileCoordinate(tileX: 10, tileY: 10)
+        let sameBand = makeRecord(atTile: TileCoordinate(tileX: 10, tileY: 10), buildingIndex: Self.tallBuildingIndex)
+        let behind = makeRecord(atTile: TileCoordinate(tileX: 11, tileY: 11), buildingIndex: Self.tallBuildingIndex)
+
+        XCTAssertFalse(RunSpawnSelector.isTileVisuallyOccluded(tile, byAnyOf: [sameBand]))
+        XCTAssertFalse(RunSpawnSelector.isTileVisuallyOccluded(tile, byAnyOf: [behind]))
+    }
+
+    /// The 4 blocks `RunSpawnSelector.neighboringBlocks(blockX:blockY:)`
+    /// would hand a `buildingsProvider` for the junction at block
+    /// `(blockX, blockY)` -- duplicated here (that helper is private) so
+    /// this test can ask a fallback candidate's own obstructions after the
+    /// fact, exactly as `selectSpawnTile` itself does internally.
+    private func neighboringBlocks(blockX: Int, blockY: Int) -> [BlockCoordinate] {
+        [
+            BlockCoordinate(x: blockX, y: blockY),
+            BlockCoordinate(x: blockX + 1, y: blockY),
+            BlockCoordinate(x: blockX, y: blockY + 1),
+            BlockCoordinate(x: blockX + 1, y: blockY + 1)
+        ]
+    }
+
+    /// The block coordinate a junction tile `selectSpawnTile` could have
+    /// returned was derived from -- the exact inverse of
+    /// `junctionCentreOffset`'s forward arithmetic. Exact (no truncation
+    /// surprises) because `tile - junctionCentreOffset` is always a whole
+    /// multiple of `CityLatticeGenerator.period` by construction, on
+    /// either side of the origin.
+    private func owningBlockCoordinate(forJunctionTileAxis axisValue: Int) -> Int {
+        (axisValue - RunSpawnSelector.junctionCentreOffset) / CityLatticeGenerator.period
+    }
+
+    /// A tall (`.tall`, 240px) building placed at a block's interior corner
+    /// nearest the street -- `blockSize - 1` local offset on each axis --
+    /// which this file's own geometry tests above already establish
+    /// occludes that block's own junction (a 192px vertical gap, exact
+    /// screen alignment, well within `.tall`'s 240px reach).
+    private func tallOccludingRecord(forBlock block: BlockCoordinate) -> BuildingPlacementRecord {
+        let lotTile = TileCoordinate(
+            tileX: block.x * CityLatticeGenerator.period + CityLatticeGenerator.blockSize - 1,
+            tileY: block.y * CityLatticeGenerator.period + CityLatticeGenerator.blockSize - 1
+        )
+        return makeRecord(atTile: lotTile, buildingIndex: Self.tallBuildingIndex)
+    }
+
+    /// The regression this whole gate exists for: construct a tall building
+    /// that visually occludes a seed's default spawn junction, and prove
+    /// `selectSpawnTile` moves the spawn to a different, clear junction
+    /// instead of returning the occluded one -- exactly what the old
+    /// "tile + 8 neighbours" rule could never detect (`junctionCentreOffset`
+    /// sits 2 tiles clear of any building footprint, so that rule saw
+    /// nothing wrong no matter how tall or close a building was).
+    func test_selectSpawnTile_fallsBackDeterministically_whenTheDefaultJunctionIsVisuallyOccludedByATallBuilding() {
+        let seed = WorldSeed(rawValue: 42)
+
+        // The seed's naive candidate junction, with no buildings generated
+        // at all -- the baseline this test then deliberately occludes.
+        let clearTile = RunSpawnSelector.selectSpawnTile(seed: seed) { _, _ in [] }
+        let occludedBlock = BlockCoordinate(
+            x: owningBlockCoordinate(forJunctionTileAxis: clearTile.tileX),
+            y: owningBlockCoordinate(forJunctionTileAxis: clearTile.tileY)
+        )
+
+        // Sanity check on the test's own fixture: the synthetic building
+        // really does occlude the naive candidate, or the rest of this test
+        // would pass for the wrong reason.
+        XCTAssertTrue(
+            RunSpawnSelector.isTileVisuallyOccluded(clearTile, byAnyOf: [tallOccludingRecord(forBlock: occludedBlock)]),
+            "test setup bug: the synthetic tall building must actually occlude the default candidate junction"
+        )
+
+        // A `buildingsProvider` that reports the occluding tall building for
+        // exactly the default candidate's own block, and nothing anywhere
+        // else -- so any fallback candidate the selector reaches is
+        // genuinely clear, not just clear of this one hand-placed building.
+        func occludingProvider(_ block: BlockCoordinate, _ seed: WorldSeed) -> [BuildingPlacementRecord] {
+            guard block.x == occludedBlock.x, block.y == occludedBlock.y else { return [] }
+            return [tallOccludingRecord(forBlock: block)]
+        }
+
+        let fallbackTile = RunSpawnSelector.selectSpawnTile(seed: seed, buildingsProvider: occludingProvider)
+
+        XCTAssertNotEqual(
+            fallbackTile, clearTile,
+            "selectSpawnTile must not return a junction it knows is visually occluded"
+        )
+        XCTAssertTrue(
+            RunSpawnSelector.isIntersectionTile(tileX: fallbackTile.tileX, tileY: fallbackTile.tileY),
+            "the fallback candidate must still be a genuine lattice crossing"
+        )
+
+        let fallbackBlock = BlockCoordinate(
+            x: owningBlockCoordinate(forJunctionTileAxis: fallbackTile.tileX),
+            y: owningBlockCoordinate(forJunctionTileAxis: fallbackTile.tileY)
+        )
+        let fallbackObstructions = neighboringBlocks(blockX: fallbackBlock.x, blockY: fallbackBlock.y)
+            .flatMap { occludingProvider($0, seed) }
+        XCTAssertFalse(
+            RunSpawnSelector.isTileVisuallyOccluded(fallbackTile, byAnyOf: fallbackObstructions),
+            "the fallback candidate must itself be visually clear, not just different from the occluded one"
+        )
+    }
+
+    /// `selectSpawnTile`'s fallback loop is a pure function of `(seed,
+    /// attempt)` -- repeating the exact same occluded-default scenario
+    /// twice must walk the exact same fallback sequence and land on the
+    /// exact same junction both times.
+    func test_selectSpawnTile_fallbackIsDeterministic_forTheSameOccludedScenario() {
+        let seed = WorldSeed(rawValue: 42)
+        let clearTile = RunSpawnSelector.selectSpawnTile(seed: seed) { _, _ in [] }
+        let occludedBlock = BlockCoordinate(
+            x: owningBlockCoordinate(forJunctionTileAxis: clearTile.tileX),
+            y: owningBlockCoordinate(forJunctionTileAxis: clearTile.tileY)
+        )
+
+        func occludingProvider(_ block: BlockCoordinate, _ seed: WorldSeed) -> [BuildingPlacementRecord] {
+            guard block.x == occludedBlock.x, block.y == occludedBlock.y else { return [] }
+            return [tallOccludingRecord(forBlock: block)]
+        }
+
+        let first = RunSpawnSelector.selectSpawnTile(seed: seed, buildingsProvider: occludingProvider)
+        let second = RunSpawnSelector.selectSpawnTile(seed: seed, buildingsProvider: occludingProvider)
+        XCTAssertEqual(first, second)
+    }
 }
