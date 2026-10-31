@@ -46,16 +46,16 @@ final class PickupNodeTests: XCTestCase {
         XCTAssertEqual(la, ra, accuracy: 1e-6, message, file: file, line: line)
     }
 
-    /// `garbageCan` is explicitly out of scope for `CYBERPUN-17-18` and
-    /// keeps its original flat accent-tinted fill.
-    func test_garbageCanPad_isAccentTinted() {
+    /// `CYBERPUN-17-25`: `garbageCan`'s pad moved from a flat
+    /// `neonSecondary` color fill to a soft radial-glow texture (see
+    /// `test_garbageCanPad_glowTexture_hasSoftRadialFalloff_notAHardSquare`
+    /// below for the actual shape assertion) -- the same treatment
+    /// `CYBERPUN-17-18` gave `medKit`'s pad.
+    func test_garbageCanPad_isGlowTextured_notAFlatColorFill() {
         let node = PickupNode(kind: .garbageCan)
-        XCTAssertNil(node.pad.texture, "garbageCan's pad must stay untextured (CYBERPUN-17-18 scope: med kit only)")
-        XCTAssertNotEqual(node.pad.color, .clear, "garbageCan's pad must be visibly tinted, not clear")
-        assertColorsMatch(
-            node.pad.color, PixelGritPalette.neonSecondary,
-            "garbageCan's pad accent color must be unchanged by CYBERPUN-17-18"
-        )
+        XCTAssertNotNil(node.pad.texture, "garbageCan's pad must use the glow texture, not a flat color fill")
+        XCTAssertEqual(node.pad.colorBlendFactor, 0, "garbageCan's pad must not additionally tint its glow texture")
+        XCTAssertEqual(node.pad.size, PickupNode.padSize)
     }
 
     /// `CYBERPUN-17-18`: medKit's pad moved from a flat `neonAccent` color
@@ -75,7 +75,11 @@ final class PickupNodeTests: XCTestCase {
         let medKit = PickupNode(kind: .medKit)
         let garbageCan = PickupNode(kind: .garbageCan)
         XCTAssertNotNil(medKit.pad.texture, "medKit's pad must be textured (the glow)")
-        XCTAssertNil(garbageCan.pad.texture, "garbageCan's pad must stay untextured (out of scope)")
+        XCTAssertNotNil(garbageCan.pad.texture, "garbageCan's pad must be textured (the glow, CYBERPUN-17-25)")
+        XCTAssertFalse(
+            medKit.pad.texture === garbageCan.pad.texture,
+            "medKit and garbageCan must use their own distinct glow textures (different accent colors)"
+        )
     }
 
     // MARK: - Icon size
@@ -247,7 +251,7 @@ final class PickupNodeTests: XCTestCase {
         XCTAssertNotNil(node.icon.action(forKey: PickupNode.bobActionKey))
     }
 
-    // MARK: - Med kit pad glow shape (CYBERPUN-17-18)
+    // MARK: - Pickup pad glow shape (CYBERPUN-17-18, CYBERPUN-17-25)
 
     /// The bug: the pad read as a flat, hard-edged cyan square around the
     /// icon rather than a glow. Pinned here against the pure-CoreGraphics
@@ -261,6 +265,37 @@ final class PickupNodeTests: XCTestCase {
         let cgImage = try XCTUnwrap(
             PickupNode.medKitGlowCGImageForTesting(),
             "the med kit glow image must be constructible from its fixed, valid CoreGraphics configuration"
+        )
+
+        let centerAlpha = try XCTUnwrap(
+            alpha(atX: cgImage.width / 2, y: cgImage.height / 2, in: cgImage),
+            "center pixel must be sampleable"
+        )
+        let cornerAlpha = try XCTUnwrap(
+            alpha(atX: 0, y: 0, in: cgImage),
+            "corner pixel must be sampleable"
+        )
+
+        XCTAssertGreaterThan(
+            centerAlpha, cornerAlpha,
+            "the glow must fade out toward the pad's corners (center alpha \(centerAlpha), corner alpha "
+                + "\(cornerAlpha)) -- a flat fill would read the same alpha everywhere"
+        )
+        XCTAssertLessThan(
+            cornerAlpha, 40,
+            "the pad's corners must read as (near-)transparent for a soft circular glow, not a filled square "
+                + "(measured corner alpha \(cornerAlpha) of 255)"
+        )
+    }
+
+    /// `CYBERPUN-17-25`: the identical bug for `garbageCan`'s pad -- a
+    /// flat, hard-edged magenta square rather than a glow -- pinned the
+    /// same way as `test_medKitPad_glowTexture_hasSoftRadialFalloff_notAHardSquare`
+    /// above, against `PickupNode.garbageCanGlowCGImageForTesting()`.
+    func test_garbageCanPad_glowTexture_hasSoftRadialFalloff_notAHardSquare() throws {
+        let cgImage = try XCTUnwrap(
+            PickupNode.garbageCanGlowCGImageForTesting(),
+            "the garbage can glow image must be constructible from its fixed, valid CoreGraphics configuration"
         )
 
         let centerAlpha = try XCTUnwrap(
