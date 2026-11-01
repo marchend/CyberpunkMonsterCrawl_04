@@ -85,6 +85,7 @@ final class GroundTileSemanticsTests: XCTestCase {
     /// corridor along tile Y to the *other* (`IsometricProjection
     /// .tileToScreen`), so the two readings are opposite and a swapped pair
     /// cannot satisfy both assertions.
+    ///
     func test_eachLaneCrop_carriesPaintElongatedAlongTheAxisItsCaseNameClaims() throws {
         let pixels = try groundPixels()
 
@@ -123,6 +124,50 @@ final class GroundTileSemanticsTests: XCTestCase {
             "The two lane crops measure the same dominant paint axis, so they are not the two corridor "
                 + "orientations the catalog treats them as."
         )
+    }
+
+    // MARK: - No forbidden lane-divider paint on a street tile
+
+    /// The actual acceptance criterion behind CYBERPUN-17-27/-28: no
+    /// street tile may carry a yellow lane-divider pixel, under any tint.
+    /// Unlike `GroundTileRendererTests
+    /// .test_asphaltKinds_renderAsBlackTintOverPlainLotCrop_neverTheLaneCrop`,
+    /// this does not compare `textureRect()`s (which can only confirm
+    /// *which* rect was cropped, not whether that rect's art is safe) -- it
+    /// scans the actual decoded pixels `plainLot` crops.
+    func test_plainLot_hasNoSaturatedYellowPixels_measuredFromPixels() throws {
+        let pixels = try groundPixels()
+        let lot = Crop(kind: .lot, pixels: pixels)
+
+        XCTAssertEqual(
+            lot.saturatedYellowPixelCount, 0,
+            "plainLot's crop carries \(lot.saturatedYellowPixelCount) saturated-yellow pixel(s) -- "
+                + "GroundTileRenderer crops this diamond for every asphalt tile, so any such pixel is a "
+                + "lane-divider mark that will render on a street tile."
+        )
+    }
+
+    /// Scans every `GroundTileKind`'s crop, not just `plainLot`'s, for the
+    /// same saturated-yellow signature. CYBERPUN-17-27 and -28 each "fixed"
+    /// the asphalt branch and shipped green while the symptom recurred,
+    /// which is evidence the yellow was never conclusively tied to the
+    /// asphalt crop at all -- this is the check that would name the real
+    /// offender (`kerbSidewalk`'s `kerbTransition` crop, `buildingFootprint`'s
+    /// `overhangLot` crop, or `lot`'s own `plainLot` crop) if it turns out to
+    /// be one of the untinted kinds instead.
+    func test_noGroundTileKind_cropsSaturatedYellowPixels_measuredFromPixels() throws {
+        let pixels = try groundPixels()
+
+        for kind in GroundTileKind.allCases {
+            let crop = Crop(kind: kind, pixels: pixels)
+            XCTAssertEqual(
+                crop.saturatedYellowPixelCount, 0,
+                "\(kind)'s crop \(crop.rect) carries \(crop.saturatedYellowPixelCount) saturated-yellow "
+                    + "pixel(s). Every GroundTileKind can end up rendered untinted (only "
+                    + ".asphaltEastWest/.asphaltNorthSouth are tinted black), so any kind with yellow "
+                    + "paint is a potential source of the forbidden lane-divider marks."
+            )
+        }
     }
 
     /// Pins the axis frame the measurement above is expressed in, straight
@@ -185,6 +230,27 @@ final class GroundTileSemanticsTests: XCTestCase {
                 }
             }
             return result
+        }
+
+        /// Count of opaque pixels that read as "saturated yellow
+        /// lane-divider paint" (high red, high green, low blue) -- the
+        /// signature CYBERPUN-17-27, -28 and -29 all trace back to. Used to
+        /// pin that a given crop carries none of that paint, independent of
+        /// any tint applied at render time.
+        var saturatedYellowPixelCount: Int {
+            var count = 0
+            for y in rows {
+                for x in columns where pixels.isOpaque(x: x, y: y) {
+                    let base = (y * pixels.width + x) * 4
+                    let red = pixels.rgba[base]
+                    let green = pixels.rgba[base + 1]
+                    let blue = pixels.rgba[base + 2]
+                    if red >= 200, green >= 180, blue <= 100 {
+                        count += 1
+                    }
+                }
+            }
+            return count
         }
 
         /// Content fingerprint of just this crop's pixels.

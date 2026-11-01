@@ -214,15 +214,19 @@ final class GroundTileRendererTests: XCTestCase {
         }
     }
 
-    // MARK: - Asphalt renders solid black (CYBERPUN-17-27)
+    // MARK: - Asphalt renders solid black, never the lane-divider art (CYBERPUN-17-27)
 
     /// The street tiles' yellow lane-divider dash read as visually wrong
-    /// on-device, so both asphalt orientations must render solid black --
-    /// as a **full-strength black tint over the lane crop**, not as a
-    /// textureless colour fill. Keeping the texture is what preserves the
-    /// diamond's alpha silhouette: an untextured `SKSpriteNode` fills its
-    /// whole rectangular `size`, so a 96x60 opaque black rectangle would
-    /// overpaint the corners of the four neighbouring diamonds.
+    /// on-device, because the lane crop was rendered textureless at the
+    /// time. CYBERPUN-17-27 fixed this by keeping the lane diamond's own
+    /// crop (so the alpha silhouette -- an untextured `SKSpriteNode` fills
+    /// its whole rectangular `size`, which would overpaint the corners of
+    /// the four neighbouring diamonds -- stays correct) and tinting it at
+    /// full strength black instead. `colorBlendFactor = 1` with
+    /// `color = .black` fully replaces the cropped texel's RGB before it
+    /// reaches the framebuffer, so the lane-divider paint sampled
+    /// underneath can never actually render; only the alpha channel (the
+    /// silhouette) survives the tint.
     ///
     /// Blackness is asserted on the **RGBA components**, never with
     /// `XCTAssertEqual(node.color, .black)`. `SKSpriteNode` normalises an
@@ -231,7 +235,7 @@ final class GroundTileRendererTests: XCTestCase {
     /// `UIExtendedGrayColorSpace 0 1`; `UIColor` equality is colour-space
     /// sensitive, so that assertion fails for a node that is in fact
     /// perfectly black.
-    func test_asphaltKinds_renderAsBlackTintOverTheirLaneCrop() throws {
+    func test_asphaltKinds_renderAsBlackTintOverTheirOwnLaneCrop() throws {
         // tileX:4, tileY:0 maps to .asphaltNorthSouth; tileX:0, tileY:4 maps
         // to .asphaltEastWest (see test_asphalt_onXAxisStreetBand_mapsToNorthSouthLane
         // / test_asphalt_onYAxisStreetBand_mapsToEastWestLane above).
@@ -244,15 +248,21 @@ final class GroundTileRendererTests: XCTestCase {
         ] {
             let node = GroundTileRenderer.node(for: .asphalt, at: coordinate)
 
-            XCTAssertNotNil(
+            let texture = try XCTUnwrap(
                 node.texture,
-                "\(groundKind) must keep its lane crop so the tint inherits the diamond's alpha mask."
+                "\(groundKind) must keep a crop so the tint inherits a diamond's alpha mask."
             )
             XCTAssertEqual(node.colorBlendFactor, 1, "\(groundKind) must tint its crop at full strength.")
             assertIsBlack(node.color, label: "\(groundKind)'s tint")
+            let expectedRect = GroundTileCatalog.pixelRect(for: groundKind)
             XCTAssertEqual(
-                node.size, GroundTileCatalog.pixelRect(for: groundKind).size,
-                "\(groundKind) must keep the lane diamond's measured footprint."
+                node.size, expectedRect.size,
+                "\(groundKind) must keep its own lane diamond's measured footprint."
+            )
+            XCTAssertEqual(
+                texture.textureRect(),
+                AtlasSheet.groundTiles.sheet.texture(forPixelRect: expectedRect).textureRect(),
+                "\(groundKind) must crop its own lane diamond, not a different kind's rect."
             )
         }
     }
@@ -285,7 +295,7 @@ final class GroundTileRendererTests: XCTestCase {
 
     /// Asserts `color` is black by reading its RGBA **components**, which is
     /// colour-space agnostic, rather than comparing `UIColor` instances --
-    /// see `test_asphaltKinds_renderAsBlackTintOverTheirLaneCrop` for why
+    /// see `test_asphaltKinds_renderAsBlackTintOverPlainLotCrop_neverTheLaneCrop` for why
     /// the equality form is unusable on a colour read back off a node.
     private func assertIsBlack(
         _ color: UIColor,

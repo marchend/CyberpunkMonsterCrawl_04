@@ -4,10 +4,11 @@ import CoreGraphics
 /// separate from `TileKind` (the world generator's walkability/lattice
 /// vocabulary) because `TileKind.asphalt` alone does not say which way the
 /// street corridor runs, and the ground plane needs that to pick between
-/// the sheet's two lane diamonds. `GroundTileRenderer` is the one place
-/// that maps a `TileKind` (plus its tile coordinate, for asphalt's
-/// orientation) onto one of these six cases.
+/// `.asphaltEastWest` and `.asphaltNorthSouth`. `GroundTileRenderer` is the
+/// one place that maps a `TileKind` (plus its tile coordinate, for
+/// asphalt's orientation) onto one of these six cases.
 ///
+
 /// This intentionally covers exactly the sheet's six diamonds — no more,
 /// no fewer — so `GroundTileCatalogTests` can assert a 1:1, exhaustive
 /// correspondence with `AtlasGroundDiamond.allCases`.

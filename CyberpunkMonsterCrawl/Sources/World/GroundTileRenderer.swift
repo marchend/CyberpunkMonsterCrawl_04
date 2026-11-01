@@ -86,19 +86,22 @@ enum GroundTileRenderer {
         // fact, not on an assumption about where the overhang sits.
         switch groundKind {
         case .asphaltEastWest, .asphaltNorthSouth:
-            // CYBERPUN-17-27: the lane diamonds' painted yellow divider
-            // dash reads wrong on-device, so street corridors render
-            // solid black. The lane crop is still the texture -- it is
-            // *tinted* to black at full strength (`colorBlendFactor = 1`)
-            // rather than dropped for a textureless colour fill, because
-            // the crop is what carries the diamond's alpha silhouette.
-            // An untextured `SKSpriteNode` fills its whole rectangular
-            // `size`, so a 96x60 opaque black rectangle would overpaint
-            // the corners of the four neighbouring diamonds; tinting
-            // keeps the painted pixels (now black, dash included) and
-            // keeps the transparent corners transparent. Size, position,
-            // zPosition and pixel-crispness treatment are identical to
-            // every other ground tile.
+            // CYBERPUN-17-27: tint the lane diamond's own crop to
+            // full-strength black (`colorBlendFactor = 1`) rather than
+            // dropping the texture for a textureless colour fill, because an
+            // untextured `SKSpriteNode` fills its whole rectangular `size` --
+            // a 96x60 opaque black rectangle would overpaint the corners of
+            // the four neighbouring diamonds. A later attempt (CYBERPUN-17-29)
+            // tried swapping this crop to `AtlasGroundDiamond.plainLot` on
+            // the unverified assumption that its alpha silhouette matches the
+            // lane diamonds'; it does not (measured in
+            // `GroundTileSemanticsTests`), and the colour swap could never
+            // have changed the rendered pixels anyway, since
+            // `colorBlendFactor = 1` with `color = .black` fully replaces the
+            // cropped texel's RGB before it reaches the framebuffer -- only
+            // the alpha channel (the silhouette) survives the tint. Cropping
+            // the lane diamond's own, correctly measured rect is what keeps
+            // the silhouette right.
             let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: pixelRect)
             node.texture = texture
             node.color = .black
@@ -171,6 +174,13 @@ enum GroundTileRenderer {
     /// renders the kind it is handed; reintroducing junction paint anywhere
     /// in a crossing would mean changing that lattice decision (and its
     /// tests), not the crop table.
+    ///
+    /// `configure(_:for:at:)` crops each `GroundTileKind`'s own measured
+    /// lane-diamond rect (see that method's comment for why the
+    /// full-strength black tint already makes the underlying lane-divider
+    /// paint invisible without needing to crop a different diamond), so
+    /// this mapping still picks between two visually distinct source rects
+    /// even though both render fully black on screen.
     private static func asphaltOrientation(at tileCoordinate: TileCoordinate) -> GroundTileKind {
         let xMod = mod(tileCoordinate.tileX, CityLatticeGenerator.period)
         let yMod = mod(tileCoordinate.tileY, CityLatticeGenerator.period)
