@@ -8,15 +8,7 @@ import CoreGraphics
 /// one place that maps a `TileKind` (plus its tile coordinate, for
 /// asphalt's orientation) onto one of these six cases.
 ///
-/// As of CYBERPUN-17-29, `GroundTileRenderer.configure(_:for:at:)` crops
-/// `AtlasGroundDiamond.plainLot` for *both* asphalt orientations (the
-/// lane diamonds' yellow divider paint is never safe to render, tinted or
-/// not -- see that method's doc comment), so the orientation pick no
-/// longer selects between two visually distinct diamonds. It is retained
-/// for the exhaustive 1:1 `GroundTileKind` <-> `AtlasGroundDiamond`
-/// correspondence below, and because it would matter again if the art
-/// regains a lane marking that is safe to ship.
-///
+
 /// This intentionally covers exactly the sheet's six diamonds — no more,
 /// no fewer — so `GroundTileCatalogTests` can assert a 1:1, exhaustive
 /// correspondence with `AtlasGroundDiamond.allCases`.

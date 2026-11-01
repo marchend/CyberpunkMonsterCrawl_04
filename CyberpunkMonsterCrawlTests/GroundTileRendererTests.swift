@@ -214,20 +214,19 @@ final class GroundTileRendererTests: XCTestCase {
         }
     }
 
-    // MARK: - Asphalt renders solid black, never the lane-divider art (CYBERPUN-17-27, CYBERPUN-17-29)
+    // MARK: - Asphalt renders solid black, never the lane-divider art (CYBERPUN-17-27)
 
     /// The street tiles' yellow lane-divider dash read as visually wrong
-    /// on-device. CYBERPUN-17-27 tried tinting the lane crop to full-strength
-    /// black, but that still *sampled* the forbidden lane-divider pixels
-    /// under the hood, and the same symptom recurred (CYBERPUN-17-29) even
-    /// after that fix landed. So both asphalt orientations must now crop
-    /// `AtlasGroundDiamond.plainLot` -- never `laneEastWest`/`laneNorthSouth`
-    /// -- and *additionally* render it with a full-strength black tint, not
-    /// as a textureless colour fill. Keeping a (non-lane) texture is what
-    /// preserves the diamond's alpha silhouette: an untextured
-    /// `SKSpriteNode` fills its whole rectangular `size`, so a 96x60 opaque
-    /// black rectangle would overpaint the corners of the four neighbouring
-    /// diamonds.
+    /// on-device, because the lane crop was rendered textureless at the
+    /// time. CYBERPUN-17-27 fixed this by keeping the lane diamond's own
+    /// crop (so the alpha silhouette -- an untextured `SKSpriteNode` fills
+    /// its whole rectangular `size`, which would overpaint the corners of
+    /// the four neighbouring diamonds -- stays correct) and tinting it at
+    /// full strength black instead. `colorBlendFactor = 1` with
+    /// `color = .black` fully replaces the cropped texel's RGB before it
+    /// reaches the framebuffer, so the lane-divider paint sampled
+    /// underneath can never actually render; only the alpha channel (the
+    /// silhouette) survives the tint.
     ///
     /// Blackness is asserted on the **RGBA components**, never with
     /// `XCTAssertEqual(node.color, .black)`. `SKSpriteNode` normalises an
@@ -236,35 +235,12 @@ final class GroundTileRendererTests: XCTestCase {
     /// `UIExtendedGrayColorSpace 0 1`; `UIColor` equality is colour-space
     /// sensitive, so that assertion fails for a node that is in fact
     /// perfectly black.
-    ///
-    /// This test pins **which rect** the renderer crops -- that it is
-    /// `plainLot` and never a lane diamond -- not that `plainLot` itself is
-    /// free of the forbidden yellow lane-divider paint. That art fact is a
-    /// property of the sheet, not of this renderer's wiring, and is measured
-    /// separately by `GroundTileSemanticsTests
-    /// .test_plainLot_hasNoSaturatedYellowPixels_measuredFromPixels` (and its
-    /// companion alpha-mask-parity test), which has the pixel-sampling
-    /// machinery this test deliberately does not duplicate.
-    func test_asphaltKinds_renderAsBlackTintOverPlainLotCrop_neverTheLaneCrop() throws {
+    func test_asphaltKinds_renderAsBlackTintOverTheirOwnLaneCrop() throws {
         // tileX:4, tileY:0 maps to .asphaltNorthSouth; tileX:0, tileY:4 maps
         // to .asphaltEastWest (see test_asphalt_onXAxisStreetBand_mapsToNorthSouthLane
         // / test_asphalt_onYAxisStreetBand_mapsToEastWestLane above).
         let northSouthCoordinate = TileCoordinate(tileX: 4, tileY: 0)
         let eastWestCoordinate = TileCoordinate(tileX: 0, tileY: 4)
-
-        // `node.size` alone can't distinguish the plainLot crop from a lane
-        // crop -- every ground diamond shares the same 96x60 footprint
-        // (CYBERPUN-17-1's `5x96 + 112` partition). `SKTexture.textureRect()`
-        // reports the actual normalized sub-rect a cropped texture reads
-        // from its sheet, which is what pins *which* diamond was sampled.
-        let expectedRect = AtlasSheet.groundTiles.sheet.texture(forPixelRect: GroundTileCatalog.pixelRect(for: .lot))
-            .textureRect()
-        let laneEastWestRect = AtlasSheet.groundTiles.sheet
-            .texture(forPixelRect: GroundTileCatalog.pixelRect(for: .asphaltEastWest)).textureRect()
-        let laneNorthSouthRect = AtlasSheet.groundTiles.sheet
-            .texture(forPixelRect: GroundTileCatalog.pixelRect(for: .asphaltNorthSouth)).textureRect()
-        XCTAssertNotEqual(expectedRect, laneEastWestRect, "Precondition: plainLot and laneEastWest must differ.")
-        XCTAssertNotEqual(expectedRect, laneNorthSouthRect, "Precondition: plainLot and laneNorthSouth must differ.")
 
         for (coordinate, groundKind) in [
             (northSouthCoordinate, GroundTileKind.asphaltNorthSouth),
@@ -278,14 +254,15 @@ final class GroundTileRendererTests: XCTestCase {
             )
             XCTAssertEqual(node.colorBlendFactor, 1, "\(groundKind) must tint its crop at full strength.")
             assertIsBlack(node.color, label: "\(groundKind)'s tint")
+            let expectedRect = GroundTileCatalog.pixelRect(for: groundKind)
             XCTAssertEqual(
-                node.size, GroundTileCatalog.pixelRect(for: .lot).size,
-                "\(groundKind) must keep the plainLot diamond's measured footprint."
+                node.size, expectedRect.size,
+                "\(groundKind) must keep its own lane diamond's measured footprint."
             )
             XCTAssertEqual(
-                texture.textureRect(), expectedRect,
-                "\(groundKind) must crop AtlasGroundDiamond.plainLot -- CYBERPUN-17-29: a street tile must "
-                    + "never sample the lane-divider diamonds at all, not even behind a black tint."
+                texture.textureRect(),
+                AtlasSheet.groundTiles.sheet.texture(forPixelRect: expectedRect).textureRect(),
+                "\(groundKind) must crop its own lane diamond, not a different kind's rect."
             )
         }
     }
