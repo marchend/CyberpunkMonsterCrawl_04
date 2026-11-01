@@ -16,6 +16,8 @@ final class GroundTileRendererTests: XCTestCase {
         let cases: [(TileKind, GroundTileKind)] = [
             (.junctionStopLine, .junctionStopLine),
             (.kerbSidewalk, .kerbSidewalk),
+            // CYBERPUN-17-30: the crossing corner draws the kerb diamond.
+            (.cornerSidewalk, .kerbSidewalk),
             (.lot, .lot),
             (.buildingFootprint, .buildingFootprint),
         ]
@@ -181,7 +183,9 @@ final class GroundTileRendererTests: XCTestCase {
 
     // MARK: - Pixel crispness sweep (AC5)
 
-    private static let allTileKinds: [TileKind] = [.asphalt, .junctionStopLine, .kerbSidewalk, .lot, .buildingFootprint]
+    private static let allTileKinds: [TileKind] = [
+        .asphalt, .junctionStopLine, .kerbSidewalk, .cornerSidewalk, .lot, .buildingFootprint,
+    ]
     private static let sampleCoordinates: [TileCoordinate] = [
         TileCoordinate(tileX: 0, tileY: 0),
         TileCoordinate(tileX: 4, tileY: 0),
@@ -291,6 +295,38 @@ final class GroundTileRendererTests: XCTestCase {
             node.size, GroundTileCatalog.pixelRect(for: .kerbSidewalk).size,
             "A recycled node must take its new kind's measured footprint."
         )
+    }
+
+    // MARK: - A crossing corner reads as sidewalk, not a black gap (CYBERPUN-17-30)
+
+    /// The ticket's headline AC. A lattice crossing's corner beside a
+    /// building used to classify as `.asphalt` and therefore render through
+    /// the `colorBlendFactor = 1` black-tint path (CYBERPUN-17-27),
+    /// punching a solid black square into the building's corner.
+    /// `TileKind.cornerSidewalk` must instead render the *kerb* crop,
+    /// un-tinted, so it reads as a continuation of the sidewalk.
+    ///
+    /// Asserted on the rendered node rather than only on the kind mapping:
+    /// mapping to `.kerbSidewalk` would still produce a black square if the
+    /// tint path ever claimed the kind, and a black corner is precisely the
+    /// defect under repair.
+    func test_cornerSidewalk_rendersTheUntintedKerbCrop_neverTheBlackAsphaltTint() throws {
+        // xMod 3 / yMod 3: both axes on a band edge, i.e. a true crossing corner.
+        let cornerCoordinate = TileCoordinate(tileX: 3, tileY: 3)
+        let node = GroundTileRenderer.node(for: .cornerSidewalk, at: cornerCoordinate)
+
+        let texture = try XCTUnwrap(node.texture, "A corner sidewalk must carry the kerb diamond's crop.")
+        XCTAssertEqual(
+            node.colorBlendFactor, 0,
+            "A crossing corner must not take asphalt's full-strength black tint -- that is the black-gap defect."
+        )
+        let expectedRect = GroundTileCatalog.pixelRect(for: .kerbSidewalk)
+        XCTAssertEqual(
+            texture.textureRect(),
+            AtlasSheet.groundTiles.sheet.texture(forPixelRect: expectedRect).textureRect(),
+            "A corner sidewalk must crop the kerb transition diamond."
+        )
+        XCTAssertEqual(node.size, expectedRect.size, "A corner sidewalk takes the kerb diamond's measured footprint.")
     }
 
     /// Asserts `color` is black by reading its RGBA **components**, which is

@@ -27,12 +27,24 @@ enum TileKind: Equatable, CaseIterable {
     /// CYBERPUN-17-28: a lattice crossing's four corner tiles never read as
     /// this case either \u2014 a corner only ever touches the block it borders
     /// *diagonally*, never through a true edge-sharing neighbour, so it
-    /// always reads as `.asphalt` instead of continuing the sidewalk ring
-    /// through the junction. Walkable \u2014 the player and the raccoon swarm
-    /// cross it exactly like asphalt; it exists as a separate case purely
-    /// so the ground-plane renderer can draw a kerb/sidewalk texture
-    /// instead of asphalt there.
+    /// always reads as `.asphalt` or `.cornerSidewalk` (CYBERPUN-17-30)
+    /// instead of continuing the sidewalk ring through the junction.
+    /// Walkable \u2014 the player and the raccoon swarm cross it exactly like
+    /// asphalt; it exists as a separate case purely so the ground-plane
+    /// renderer can draw a kerb/sidewalk texture instead of asphalt there.
     case kerbSidewalk
+    /// CYBERPUN-17-30: a lattice crossing's corner tile (both axes on a
+    /// band edge, i.e. the full nine-tile crossing's four true corners),
+    /// drawn as sidewalk when the single block it touches *diagonally* is
+    /// a `.buildingFootprint`. Kept distinct from `.kerbSidewalk` rather
+    /// than reusing it, because `.kerbSidewalk` carries a stricter,
+    /// test-pinned invariant (CYBERPUN-17-28): it requires a true
+    /// edge-sharing (4-connected) building neighbour, which a corner tile
+    /// can never have. Without this case a building-adjacent corner read
+    /// as a fully black-tinted `.asphalt` tile (CYBERPUN-17-27), producing
+    /// a visually jarring black gap at the building's corner. Walkable,
+    /// exactly like every other street/sidewalk surface.
+    case cornerSidewalk
     /// A block interior left empty by the seed's ~1-in-4 decision: bare,
     /// permanently walkable ground.
     ///
@@ -78,7 +90,7 @@ enum TileKind: Equatable, CaseIterable {
     ///   brief).
     var isWalkable: Bool {
         switch self {
-        case .asphalt, .junctionStopLine, .kerbSidewalk, .lot:
+        case .asphalt, .junctionStopLine, .kerbSidewalk, .cornerSidewalk, .lot:
             return true
         case .buildingFootprint:
             return false

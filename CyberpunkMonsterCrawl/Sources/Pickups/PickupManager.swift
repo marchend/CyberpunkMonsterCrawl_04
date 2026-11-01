@@ -408,14 +408,19 @@ final class PickupManager {
         }
     }
 
-    /// Whether `kind` is one of the three street sub-kinds
+    /// Whether `kind` is one of the four street sub-kinds
     /// (`CityLatticeGenerator`'s own asphalt / junction-stop-line /
-    /// kerb-sidewalk vocabulary) rather than a block interior (`.lot`,
-    /// which is walkable open ground but not street, or
+    /// kerb-sidewalk / corner-sidewalk vocabulary) rather than a block
+    /// interior (`.lot`, which is walkable open ground but not street, or
     /// `.buildingFootprint`).
+    ///
+    /// CYBERPUN-17-30: `.cornerSidewalk` is street for spawning purposes
+    /// exactly as `.kerbSidewalk` is -- it is a lattice crossing's corner
+    /// tile, inside the street band, and walkable. Excluding it would carve
+    /// spawn holes out of every building-adjacent junction corner.
     private static func isStreetKind(_ kind: TileKind) -> Bool {
         switch kind {
-        case .asphalt, .junctionStopLine, .kerbSidewalk:
+        case .asphalt, .junctionStopLine, .kerbSidewalk, .cornerSidewalk:
             return true
         case .lot, .buildingFootprint:
             return false

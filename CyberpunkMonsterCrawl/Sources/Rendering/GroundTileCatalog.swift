@@ -22,8 +22,17 @@ enum GroundTileKind: CaseIterable {
     case asphaltNorthSouth
     /// The painted stop-line dash at a lattice crossing's lane mouths.
     case junctionStopLine
-    /// The kerb/sidewalk band bordering a street corridor (including a
-    /// crossing's four sidewalk corners).
+    /// The kerb/sidewalk band bordering a street corridor. CYBERPUN-17-30:
+    /// this is also what a lattice crossing's building-adjacent *corner*
+    /// (`TileKind.cornerSidewalk`) draws with. The two stay separate
+    /// `TileKind`s because they carry different adjacency invariants
+    /// (edge-sharing vs diagonal), but they are the same *picture*: the
+    /// shipped `tileset_ground` sheet has exactly six measured diamonds
+    /// and no spare art for a dedicated diagonal corner-wrap graphic, so
+    /// adding a seventh `GroundTileKind` would have broken this enum's
+    /// one-case-per-diamond contract to express a distinction the ground
+    /// plane cannot draw. The mapping lives in
+    /// `GroundTileRenderer.groundTileKind(for:at:)` instead.
     case kerbSidewalk
     /// A seed-chosen empty block interior: bare walkable ground.
     case lot

@@ -41,6 +41,17 @@ final class TileWalkabilityTests: XCTestCase {
         XCTAssertTrue(TileKind.kerbSidewalk.isWalkable, "the sidewalk bordering a street band must be walkable")
     }
 
+    /// CYBERPUN-17-30: a lattice crossing's building-adjacent corner is a
+    /// sidewalk surface too, and sits inside the street band, so it is
+    /// walkable exactly like `.kerbSidewalk`. A corner that went solid
+    /// would plug one diagonal of every built junction.
+    func test_cornerSidewalk_isWalkable() {
+        XCTAssertTrue(
+            TileKind.cornerSidewalk.isWalkable,
+            "a lattice crossing's corner sidewalk must be walkable, exactly like the kerb it continues"
+        )
+    }
+
     // MARK: - Empty lot (also walkable ground, never solid)
 
     func test_lot_isWalkable() {
@@ -84,7 +95,7 @@ final class TileWalkabilityTests: XCTestCase {
     /// are no *un*-named cases left over.
     func test_everyTileKindCase_isCoveredByAPerCaseAssertionInThisFile() {
         let casesAssertedIndividually: [TileKind] = [
-            .asphalt, .junctionStopLine, .kerbSidewalk, .lot, .buildingFootprint,
+            .asphalt, .junctionStopLine, .kerbSidewalk, .cornerSidewalk, .lot, .buildingFootprint,
         ]
 
         for kind in TileKind.allCases {

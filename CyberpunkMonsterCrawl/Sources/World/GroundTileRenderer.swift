@@ -141,6 +141,19 @@ enum GroundTileRenderer {
             return .junctionStopLine
         case .kerbSidewalk:
             return .kerbSidewalk
+        case .cornerSidewalk:
+            // CYBERPUN-17-30: a lattice crossing's building-adjacent corner
+            // draws the kerb diamond -- the same un-tinted picture
+            // `.kerbSidewalk` draws, which is what makes the corner stop
+            // reading as a black `.asphalt` gap. The two `TileKind`s stay
+            // distinct because their adjacency invariants differ
+            // (edge-sharing vs diagonal), but the shipped `tileset_ground`
+            // sheet has exactly six measured diamonds and no dedicated
+            // corner-wrap art, so there is deliberately no seventh
+            // `GroundTileKind`: the kind-collapse happens here, in the one
+            // file whose job is TileKind -> GroundTileKind, rather than by
+            // weakening `GroundTileCatalog`'s one-case-per-diamond contract.
+            return .kerbSidewalk
         case .lot:
             return .lot
         case .buildingFootprint:
