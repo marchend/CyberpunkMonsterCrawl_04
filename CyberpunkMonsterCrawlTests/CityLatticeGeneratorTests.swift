@@ -296,6 +296,19 @@ final class CityLatticeGeneratorTests: XCTestCase {
     /// one tile off on both axes from the block's own corner tile), so
     /// 4-connectivity alone would under-report and fail every legitimate
     /// corner.
+    ///
+    /// OPEN QUESTION (CYBERPUN-17-26 review): this 8-connectivity
+    /// definition was chosen specifically because the implementation's
+    /// crossing-corner tiles (e.g. `(6b+3, 6c+3)` for built block `(b,
+    /// c)`) touch their block's nearest interior tile (`(6b+2, 6c+2)`)
+    /// only diagonally \u2014 all four orthogonal neighbours of such a corner
+    /// are themselves street tiles, never `.buildingFootprint`. In the
+    /// isometric renderer those two diamonds meet at a single point, which
+    /// is a plausible match for the ticket's "floating sidewalk square"
+    /// screenshot. Whether that diagonal-only corner touch is the intended
+    /// visual design (sidewalks wrap corners) or the reported defect
+    /// (sidewalks must only ever edge-share with a building) is a product
+    /// call this test cannot make on its own \u2014 see the fix plan.
     private var neighborOffsets: [(Int, Int)] {
         [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
     }
@@ -322,9 +335,9 @@ final class CityLatticeGeneratorTests: XCTestCase {
                     guard info.kind == .kerbSidewalk else { continue }
                     sawAnyKerbTile = true
 
-                    let hasBuildingNeighbor = neighborOffsets.contains { dx, dy in
+                    let hasBuildingNeighbor = neighborOffsets.contains { offset in
                         CityLatticeGenerator.classify(
-                            tileX: tileX + dx, tileY: tileY + dy, seed: seed
+                            tileX: tileX + offset.0, tileY: tileY + offset.1, seed: seed
                         ).kind == .buildingFootprint
                     }
 
@@ -340,46 +353,13 @@ final class CityLatticeGeneratorTests: XCTestCase {
         XCTAssertTrue(sawAnyKerbTile, "Test fixture sampled no .kerbSidewalk tile at all - strengthen the range/seed")
     }
 
-    /// The sibling half of the same acceptance criterion: a street edge or
-    /// lattice-crossing corner bordering a block the seed chose to leave as
-    /// an empty `.lot` must never read as `.kerbSidewalk`, independent of
-    /// which specific edge/corner position it is. Picks fixture coordinates
-    /// via `isEmptyLotBlock` but never uses it to compute the *expected*
-    /// kind \u2014 the expectation checked here is simply \"never kerb\", not a
-    /// restatement of the generator's own formula.
-    func test_streetEdgesAndCornersBorderingAnEmptyLotBlock_neverRenderAsKerbSidewalk() {
-        let seed = WorldSeed(rawValue: 2024)
-        var sawEmptyLotBlock = false
-
-        for blockX in -6..<6 {
-            for blockY in -6..<6 {
-                guard CityLatticeGenerator.isEmptyLotBlock(blockX: blockX, blockY: blockY, seed: seed) else {
-                    continue
-                }
-                sawEmptyLotBlock = true
-
-                let originX = blockX * CityLatticeGenerator.period
-                let originY = blockY * CityLatticeGenerator.period
-
-                for local in -1...3 {
-                    let ringTiles = [
-                        (originX + local, originY - 1),
-                        (originX + local, originY + 3),
-                        (originX - 1, originY + local),
-                        (originX + 3, originY + local)
-                    ]
-                    for (tileX, tileY) in ringTiles {
-                        let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
-                        XCTAssertNotEqual(
-                            info.kind, .kerbSidewalk,
-                            "(\(tileX), \(tileY)) borders empty-lot block (\(blockX), \(blockY)) but rendered "
-                                + ".kerbSidewalk - an empty lot has nothing to kerb."
-                        )
-                    }
-                }
-            }
-        }
-
-        XCTAssertTrue(sawEmptyLotBlock, "Test fixture sampled no empty-lot block - strengthen the seed/range")
-    }
+    // Note: a sibling "street edges/corners bordering an empty-lot block
+    // never render .kerbSidewalk" case is deliberately not duplicated here.
+    // It would sweep the exact same ring coordinates as
+    // `test_classify_sidewalkRingAroundABlockInterior_matchesItsOwnBuildingFootprintState`
+    // above, while asserting the strictly weaker `XCTAssertNotEqual(kind,
+    // .kerbSidewalk)` where that test already asserts
+    // `XCTAssertEqual(kind, .asphalt)` over the same tiles across a wider
+    // seed sweep \u2014 anything that would fail the weaker check already fails
+    // the existing, stronger one, so it is tracked in one place.
 }
