@@ -86,19 +86,24 @@ enum GroundTileRenderer {
         // fact, not on an assumption about where the overhang sits.
         switch groundKind {
         case .asphaltEastWest, .asphaltNorthSouth:
-            // CYBERPUN-17-27: the lane diamonds' painted yellow divider
-            // dash reads wrong on-device, so street corridors render
-            // solid black. The lane crop is still the texture -- it is
-            // *tinted* to black at full strength (`colorBlendFactor = 1`)
-            // rather than dropped for a textureless colour fill, because
-            // the crop is what carries the diamond's alpha silhouette.
-            // An untextured `SKSpriteNode` fills its whole rectangular
-            // `size`, so a 96x60 opaque black rectangle would overpaint
-            // the corners of the four neighbouring diamonds; tinting
-            // keeps the painted pixels (now black, dash included) and
-            // keeps the transparent corners transparent. Size, position,
-            // zPosition and pixel-crispness treatment are identical to
-            // every other ground tile.
+            // CYBERPUN-17-27 tinted the lane diamonds' crop to full-strength
+            // black (`colorBlendFactor = 1`) rather than dropping it for a
+            // textureless colour fill, specifically to keep the diamond's
+            // alpha silhouette (an untextured `SKSpriteNode` fills its whole
+            // rectangular `size`, so a 96x60 opaque black rectangle would
+            // overpaint the corners of the four neighbouring diamonds). That
+            // tint still *sampled* the yellow lane-divider paint under the
+            // hood, and the same "yellow dividers visible on street tiles"
+            // report recurred twice more (CYBERPUN-17-28, CYBERPUN-17-29)
+            // even after that fix landed. CYBERPUN-17-29: street corridors
+            // now crop `AtlasGroundDiamond.plainLot` instead of the lane
+            // diamonds -- the same measured 96x60 diamond silhouette, but
+            // carrying no painted marking at all -- so the forbidden
+            // lane-divider pixels are never sampled or composited in the
+            // first place. The black tint is kept anyway, defensively, so a
+            // street corridor still reads as solid black even if
+            // `plainLot`'s own base art is not already pure black.
+            let pixelRect = GroundTileCatalog.pixelRect(for: .lot)
             let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: pixelRect)
             node.texture = texture
             node.color = .black
