@@ -109,11 +109,14 @@ enum CityLatticeGenerator {
     /// `.kerbSidewalk` when the specific block interior it borders
     /// actually has a building edge to kerb (`.buildingFootprint`); an edge
     /// bordering an empty `.lot` interior has nothing to kerb and reads as
-    /// `.asphalt` instead. CYBERPUN-17-28: a lattice crossing (both axes
-    /// street) never reaches that lookup at all \u2014 every position in a
-    /// crossing's 3x3 area reads as plain `.asphalt`, since a crossing
-    /// corner only ever borders its nearest block diagonally, never through
-    /// a true edge-sharing neighbour. That lookup (`isEmptyLotBlock`) is
+    /// `.asphalt` instead. CYBERPUN-17-28/CYBERPUN-17-30: a lattice
+    /// crossing's centre and lane-mouth positions (both axes street) never
+    /// reach that lookup \u2014 they always read as plain `.asphalt`. A
+    /// crossing's corner positions do consult the same lookup, but only
+    /// ever against the one block they border *diagonally* (never through
+    /// a true edge-sharing neighbour), so a corner reads as the dedicated
+    /// `.cornerSidewalk` case rather than `.kerbSidewalk` itself when that
+    /// diagonal block is built. That lookup (`isEmptyLotBlock`) is
     /// itself a pure function of block coordinates derived from
     /// `tileX`/`tileY` plus `seed` \u2014 the same three inputs `classify`
     /// already takes \u2014 so this stays a pure function of its inputs and the
@@ -139,25 +142,36 @@ enum CityLatticeGenerator {
             //   mouth   centre  mouth       edge (band position 0 or 2)
             //   corner  mouth   corner      mouth  = one axis is the lane
             //
-            // CYBERPUN-17-28: every position in that 3x3 reads as plain
-            // `.asphalt`.
             // - Centre (both axes on the driving lane): the plain driving
-            //   surface, as before.
+            //   surface.
             // - Lane mouth (one axis the centre lane, the other a band
-            //   edge): previously painted a `.junctionStopLine` stop-line
-            //   marking, which rendered as an untinted, out-of-place
-            //   striped tile (only `.asphalt` is black-tinted by
-            //   `GroundTileRenderer`, per CYBERPUN-17-27) \u2014 that marking
-            //   is dropped, so a mouth now reads as `.asphalt` too.
+            //   edge): CYBERPUN-17-28 \u2014 previously painted a
+            //   `.junctionStopLine` stop-line marking, which rendered as an
+            //   untinted, out-of-place striped tile (only `.asphalt` is
+            //   black-tinted by `GroundTileRenderer`, per CYBERPUN-17-27)
+            //   \u2014 that marking is dropped, so a mouth reads as `.asphalt`.
             // - Corner (both axes on a band edge): only ever touches the
             //   block it borders *diagonally* \u2014 every orthogonal
             //   (edge-sharing) neighbour of a corner tile is itself a
-            //   street tile, never `.buildingFootprint`. Requiring true
-            //   edge (4-connectivity) adjacency for `.kerbSidewalk` means
-            //   a corner can never legitimately kerb a sidewalk, so it
-            //   also reads as `.asphalt` rather than consulting the one
-            //   block it only corners (`blockBorderedByEdge`).
-            return .asphalt
+            //   street tile, never `.buildingFootprint`. CYBERPUN-17-28
+            //   requires true edge (4-connectivity) adjacency for
+            //   `.kerbSidewalk`, so a corner can never legitimately earn
+            //   that case. But CYBERPUN-17-30: leaving every corner plain
+            //   `.asphalt` means a corner beside a real building renders as
+            //   a fully black-tinted tile \u2014 a visually jarring gap at the
+            //   building's corner. So a corner consults the one block it
+            //   only touches diagonally (`blockBorderedByEdge`, same
+            //   lookup the straight-edge case below uses) and reads as the
+            //   dedicated `.cornerSidewalk` case \u2014 never `.kerbSidewalk`
+            //   itself \u2014 when that block is built, keeping
+            //   `.kerbSidewalk`'s true-4-connectivity invariant intact.
+            if xBandPosition == 1 || yBandPosition == 1 {
+                // Centre or lane mouth: not a true corner.
+                return .asphalt
+            }
+            return blockBorderedByEdge(
+                tileX: tileX, tileY: tileY, xBandPosition: xBandPosition, yBandPosition: yBandPosition, seed: seed
+            ) == .buildingFootprint ? .cornerSidewalk : .asphalt
         }
 
         // Exactly one axis is in the street band: a straight corridor

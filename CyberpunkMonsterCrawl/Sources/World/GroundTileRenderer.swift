@@ -141,6 +141,8 @@ enum GroundTileRenderer {
             return .junctionStopLine
         case .kerbSidewalk:
             return .kerbSidewalk
+        case .cornerSidewalk:
+            return .cornerSidewalk
         case .lot:
             return .lot
         case .buildingFootprint:
