@@ -112,14 +112,13 @@ enum GroundTileKind: CaseIterable {
 ///   is a measurable question with a two-valued answer, and a swapped pair
 ///   fails it.
 /// - **`.junctionStopLine` -> `.intersection`**: which tiles of a crossing
-///   carry junction paint is not this file's decision at all —
-///   `CityLatticeGenerator.streetTileKind` already pins it (the four lane
-///   *mouths* of a 3x3 crossing are `.junctionStopLine`, the centre is plain
-///   `.asphalt`, and each corner continues the `kerbSidewalk` ring only
-///   where the block interior it borders is built). This
-///   catalog only names the art for a kind the lattice has already decided;
-///   moving junction paint onto the crossing centre would mean changing the
-///   lattice, not the crop table. See `GroundTileRenderer
+///   carry junction paint is not this file's decision at all — and as of
+///   CYBERPUN-17-28, `CityLatticeGenerator.streetTileKind` never emits
+///   `TileKind.junctionStopLine` any more (every position in a 3x3
+///   crossing reads as plain `.asphalt`, since the painted stop-line
+///   marking rendered as an untinted, out-of-place striped tile). This
+///   mapping is kept only for the enum's exhaustive-mapping contract;
+///   production code should never actually hit it. See `GroundTileRenderer
 ///   .asphaltOrientation(at:)` for the crossing-centre case.
 enum GroundTileCatalog {
     /// The `AtlasGroundDiamond` backing `kind`.

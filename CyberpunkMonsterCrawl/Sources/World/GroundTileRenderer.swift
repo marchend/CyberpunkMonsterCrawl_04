@@ -163,15 +163,13 @@ enum GroundTileRenderer {
     ///
     /// The centre tile deliberately does **not** take
     /// `GroundTileKind.junctionStopLine`'s art, and that is not this file's
-    /// call to make: `CityLatticeGenerator.streetTileKind` already pins which
-    /// tiles of a 3x3 crossing carry junction paint — the four lane *mouths*
-    /// are `TileKind.junctionStopLine` ("this is literally where a stop line
-    /// is painted, across the lane at the mouth of the junction"), the centre
-    /// is plain `.asphalt`, and each corner continues the kerb ring only
-    /// where the block interior it borders is built (beside an empty lot it
-    /// stays `.asphalt`). The
-    /// ground plane renders the kind it is handed; moving junction paint onto
-    /// the crossing centre would mean changing that lattice decision (and its
+    /// call to make: CYBERPUN-17-28 removed junction-paint tiles from the
+    /// lattice entirely — `CityLatticeGenerator.streetTileKind` now reads
+    /// every position in a 3x3 crossing (mouths and corners alike, not just
+    /// the centre) as plain `.asphalt`, since the painted stop-line marking
+    /// rendered as an untinted, out-of-place striped tile. The ground plane
+    /// renders the kind it is handed; reintroducing junction paint anywhere
+    /// in a crossing would mean changing that lattice decision (and its
     /// tests), not the crop table.
     private static func asphaltOrientation(at tileCoordinate: TileCoordinate) -> GroundTileKind {
         let xMod = mod(tileCoordinate.tileX, CityLatticeGenerator.period)

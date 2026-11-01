@@ -104,25 +104,23 @@ enum CityLatticeGenerator {
     /// Sub-classifies a tile already known to be street (i.e.
     /// `isStreetX || isStreetY`) into asphalt / stop-line / kerb-sidewalk.
     ///
-    /// This consults `seed` for exactly one purpose: a street-band edge
-    /// tile (band position 0 or 2 on a straight corridor, or one of the
-    /// four corners of a lattice crossing) only reads as `.kerbSidewalk`
-    /// when the specific block interior it borders actually has a
-    /// building edge to kerb (`.buildingFootprint`); an edge bordering an
-    /// empty `.lot` interior has nothing to kerb and reads as `.asphalt`
-    /// instead. That lookup (`isEmptyLotBlock`) is itself a pure function
-    /// of block coordinates derived from `tileX`/`tileY` plus `seed` \u2014 the
-    /// same three inputs `classify` already takes \u2014 so this stays a pure
-    /// function of its inputs and the chunk-boundary agreement
-    /// (`CYBERPUN-17-3-t3`) still holds. The *structural* decisions \u2014
-    /// which tiles are street at all, and the lane/stop-line/corner
-    /// layout within a crossing \u2014 remain 100% seed-independent, which is
-    /// what guarantees the intersection rule and the lattice's
-    /// seed-independent connectivity. (A corner/edge tile's *kind* is not
-    /// part of that structural layout: which of a crossing's nine
-    /// positions is a corner never changes, but whether a given corner
-    /// reads as `.kerbSidewalk` or `.asphalt` follows the one block
-    /// interior it borders.)
+    /// This consults `seed` for exactly one purpose: a straight-corridor
+    /// street-band edge tile (band position 0 or 2) only reads as
+    /// `.kerbSidewalk` when the specific block interior it borders
+    /// actually has a building edge to kerb (`.buildingFootprint`); an edge
+    /// bordering an empty `.lot` interior has nothing to kerb and reads as
+    /// `.asphalt` instead. CYBERPUN-17-28: a lattice crossing (both axes
+    /// street) never reaches that lookup at all \u2014 every position in a
+    /// crossing's 3x3 area reads as plain `.asphalt`, since a crossing
+    /// corner only ever borders its nearest block diagonally, never through
+    /// a true edge-sharing neighbour. That lookup (`isEmptyLotBlock`) is
+    /// itself a pure function of block coordinates derived from
+    /// `tileX`/`tileY` plus `seed` \u2014 the same three inputs `classify`
+    /// already takes \u2014 so this stays a pure function of its inputs and the
+    /// chunk-boundary agreement (`CYBERPUN-17-3-t3`) still holds. The
+    /// *structural* decision \u2014 which tiles are street at all \u2014 remains
+    /// 100% seed-independent, which is what guarantees the intersection
+    /// rule and the lattice's seed-independent connectivity.
     private static func streetTileKind(
         tileX: Int, tileY: Int, xMod: Int, yMod: Int, isStreetX: Bool, isStreetY: Bool, seed: WorldSeed
     ) -> TileKind {
@@ -135,35 +133,31 @@ enum CityLatticeGenerator {
 
         if isStreetX && isStreetY {
             // Inside a lattice crossing: both axes' bands are street, so
-            // this tile sits in the full 3x3 intersection area. The three
-            // roles within that 3x3 are distinct, and the ground-plane
-            // renderer cannot recover them later, so they are pinned here:
+            // this tile sits in the full 3x3 intersection area.
             //
             //   corner  mouth   corner      corner = both axes on a band
             //   mouth   centre  mouth       edge (band position 0 or 2)
             //   corner  mouth   corner      mouth  = one axis is the lane
             //
-            // - Centre (both axes on the driving lane): clear asphalt.
-            // - Lane mouth (one axis is the centre lane, the other a band
-            //   edge): this is literally where a stop line is painted,
-            //   across the lane at the mouth of the junction.
-            // - Corner (both axes on a band edge): the continuation of the
-            //   `kerbSidewalk` band running down each corridor \u2014 but only
-            //   where the one block interior this specific corner borders
-            //   (`blockBorderedByEdge`) actually has a building to kerb;
-            //   otherwise it continues as `.asphalt`, since an empty lot
-            //   has no building edge for the sidewalk to serve.
-            let xIsLane = xBandPosition == 1
-            let yIsLane = yBandPosition == 1
-            if xIsLane && yIsLane {
-                return .asphalt
-            }
-            if xIsLane || yIsLane {
-                return .junctionStopLine
-            }
-            return blockBorderedByEdge(
-                tileX: tileX, tileY: tileY, xBandPosition: xBandPosition, yBandPosition: yBandPosition, seed: seed
-            ) == .buildingFootprint ? .kerbSidewalk : .asphalt
+            // CYBERPUN-17-28: every position in that 3x3 reads as plain
+            // `.asphalt`.
+            // - Centre (both axes on the driving lane): the plain driving
+            //   surface, as before.
+            // - Lane mouth (one axis the centre lane, the other a band
+            //   edge): previously painted a `.junctionStopLine` stop-line
+            //   marking, which rendered as an untinted, out-of-place
+            //   striped tile (only `.asphalt` is black-tinted by
+            //   `GroundTileRenderer`, per CYBERPUN-17-27) \u2014 that marking
+            //   is dropped, so a mouth now reads as `.asphalt` too.
+            // - Corner (both axes on a band edge): only ever touches the
+            //   block it borders *diagonally* \u2014 every orthogonal
+            //   (edge-sharing) neighbour of a corner tile is itself a
+            //   street tile, never `.buildingFootprint`. Requiring true
+            //   edge (4-connectivity) adjacency for `.kerbSidewalk` means
+            //   a corner can never legitimately kerb a sidewalk, so it
+            //   also reads as `.asphalt` rather than consulting the one
+            //   block it only corners (`blockBorderedByEdge`).
+            return .asphalt
         }
 
         // Exactly one axis is in the street band: a straight corridor
