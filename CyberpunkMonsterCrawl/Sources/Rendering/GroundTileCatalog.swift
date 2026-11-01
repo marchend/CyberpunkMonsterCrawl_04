@@ -22,18 +22,18 @@ enum GroundTileKind: CaseIterable {
     case asphaltNorthSouth
     /// The painted stop-line dash at a lattice crossing's lane mouths.
     case junctionStopLine
-    /// The kerb/sidewalk band bordering a street corridor.
+    /// The kerb/sidewalk band bordering a street corridor. CYBERPUN-17-30:
+    /// this is also what a lattice crossing's building-adjacent *corner*
+    /// (`TileKind.cornerSidewalk`) draws with. The two stay separate
+    /// `TileKind`s because they carry different adjacency invariants
+    /// (edge-sharing vs diagonal), but they are the same *picture*: the
+    /// shipped `tileset_ground` sheet has exactly six measured diamonds
+    /// and no spare art for a dedicated diagonal corner-wrap graphic, so
+    /// adding a seventh `GroundTileKind` would have broken this enum's
+    /// one-case-per-diamond contract to express a distinction the ground
+    /// plane cannot draw. The mapping lives in
+    /// `GroundTileRenderer.groundTileKind(for:at:)` instead.
     case kerbSidewalk
-    /// CYBERPUN-17-30: a lattice crossing's corner, read as sidewalk when
-    /// it diagonally touches a built block. Deliberately crops the *same*
-    /// `kerbTransition` art `.kerbSidewalk` does \u2014 the shipped
-    /// `tileset_ground` sheet has exactly six measured diamonds and no
-    /// spare art for a dedicated diagonal corner-wrap graphic, so this is
-    /// an intentional, documented reuse rather than a new asset. Kept as
-    /// its own `GroundTileKind` (not folded into `.kerbSidewalk`) so the
-    /// `TileKind` split tracking the two cases' different adjacency
-    /// invariants is preserved all the way to the render layer.
-    case cornerSidewalk
     /// A seed-chosen empty block interior: bare walkable ground.
     case lot
     /// A block interior reserved for a building: ground drawn *under* the
@@ -94,9 +94,6 @@ enum GroundTileKind: CaseIterable {
 /// - `.junctionStopLine`  -> `AtlasGroundDiamond.intersection`   (x:288, 96x60)
 /// - `.kerbSidewalk`      -> `AtlasGroundDiamond.kerbTransition` (x:384, 96x60)
 /// - `.buildingFootprint` -> `AtlasGroundDiamond.overhangLot`    (x:480, 112x60)
-/// - `.cornerSidewalk`    -> `AtlasGroundDiamond.kerbTransition` (x:384, 96x60) \u2014
-///   CYBERPUN-17-30's deliberate reuse of `.kerbSidewalk`'s own diamond;
-///   see that case's doc comment above for why.
 ///
 /// ## Geometry is measured; *meaning* is what this table adds
 ///
@@ -144,10 +141,6 @@ enum GroundTileCatalog {
         case .junctionStopLine:
             return .intersection
         case .kerbSidewalk:
-            return .kerbTransition
-        case .cornerSidewalk:
-            // CYBERPUN-17-30: intentional reuse of the same diamond as
-            // `.kerbSidewalk` \u2014 see that case's doc comment above.
             return .kerbTransition
         case .lot:
             return .plainLot
