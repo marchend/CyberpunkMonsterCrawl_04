@@ -79,47 +79,26 @@ final class CityLatticeGeneratorTests: XCTestCase {
     // MARK: - Intersection sub-classification
 
     /// The sub-kind inside a 3x3 crossing is a data-model decision the
-    /// ground-plane renderer cannot undo, so it is pinned here by name:
-    /// centre = driving lane, the four mouths = painted stop line, the four
-    /// corners = the sidewalk band continuing through the junction. Swept
-    /// over crossings on both sides of the origin (period offsets are
-    /// hard-coded from the ticket's stated 6/3 constants, deliberately not
-    /// read off the generator).
+    /// ground-plane renderer cannot undo. CYBERPUN-17-28: every position in
+    /// the crossing \u2014 centre (driving lane), the four mouths, and the four
+    /// corners \u2014 now reads as plain `.asphalt`: a mouth no longer paints a
+    /// stop line, and a corner only ever touches the block it borders
+    /// *diagonally* (never through a true edge-sharing neighbour), so it can
+    /// never legitimately kerb a sidewalk either. Swept over crossings on
+    /// both sides of the origin (period offsets are hard-coded from the
+    /// ticket's stated 6/3 constants, deliberately not read off the
+    /// generator).
     func test_classify_crossing_pinsCentreLaneMouthAndCornerSubKinds() {
         // Local (0, 0) of the 3x3 crossing block: tile (3, 3) modulo the
         // 6-tile period. `-3` and `-9` exercise the negative-side `mod()`
         // phase, `3` and `9` the positive side.
         let crossingOrigins = [(3, 3), (3, -3), (-3, 3), (-3, -3), (9, -9), (-9, 9)]
 
-        /// Local, source-independent floor division \u2014 mirrors
-        /// `CityLatticeGenerator`'s private `floorDiv`, needed here to
-        /// derive which block a crossing corner borders (see
-        /// `expectedKind`'s corner case) without reaching into the
-        /// generator's internals.
-        func localFloorDiv(_ value: Int, _ divisor: Int) -> Int {
-            let quotient = value / divisor
-            let remainder = value % divisor
-            if remainder != 0 && (remainder < 0) != (divisor < 0) {
-                return quotient - 1
-            }
-            return quotient
-        }
-
         /// Expected kind per (xBandPosition, yBandPosition) inside a
-        /// crossing. A corner's kind now depends on whether the one block
-        /// interior it borders has a building edge to kerb
-        /// (`CityLatticeGenerator.isEmptyLotBlock`) \u2014 this is the
-        /// CYBERPUN-17-22 fix: an empty-lot-bordering corner reads as
-        /// `.asphalt`, not an unconditional `.kerbSidewalk`.
-        func expectedKind(tileX: Int, tileY: Int, xBand: Int, yBand: Int, seed: WorldSeed) -> TileKind {
-            let xIsLane = (xBand == 1)
-            let yIsLane = (yBand == 1)
-            if xIsLane && yIsLane { return .asphalt }
-            if xIsLane || yIsLane { return .junctionStopLine }
-            let blockX = localFloorDiv(tileX, 6) + (xBand == 2 ? 1 : 0)
-            let blockY = localFloorDiv(tileY, 6) + (yBand == 2 ? 1 : 0)
-            let isEmpty = CityLatticeGenerator.isEmptyLotBlock(blockX: blockX, blockY: blockY, seed: seed)
-            return isEmpty ? .asphalt : .kerbSidewalk
+        /// crossing: unconditionally `.asphalt` (CYBERPUN-17-28) regardless
+        /// of which of the nine positions it is or what block it borders.
+        func expectedKind(xBand: Int, yBand: Int) -> TileKind {
+            .asphalt
         }
 
         for seed in someSeeds(5) {
@@ -136,7 +115,7 @@ final class CityLatticeGeneratorTests: XCTestCase {
                         )
                         XCTAssertEqual(
                             info.kind,
-                            expectedKind(tileX: tileX, tileY: tileY, xBand: xBand, yBand: yBand, seed: seed),
+                            expectedKind(xBand: xBand, yBand: yBand),
                             "Crossing tile (\(tileX), \(tileY)) [band (\(xBand), \(yBand))] under seed "
                                 + "\(seed.rawValue) was \(info.kind)"
                         )
@@ -146,13 +125,19 @@ final class CityLatticeGeneratorTests: XCTestCase {
         }
     }
 
-    /// CYBERPUN-17-22: the ring of street-band edge/corner tiles
-    /// immediately surrounding one block interior all border *that same*
-    /// block (by construction of the band-position offsets), so the ring
-    /// must be uniformly `.kerbSidewalk` when the block has a building
-    /// edge to kerb (`.buildingFootprint`) and uniformly `.asphalt` when
-    /// the block is an empty `.lot` with nothing to kerb \u2014 never an
-    /// unconditional sidewalk ring regardless of what the block holds.
+    /// CYBERPUN-17-22/CYBERPUN-17-28: the *straight-edge* street-band tiles
+    /// immediately surrounding one block interior (not the four lattice
+    /// crossing corners, which only ever touch a block diagonally - see
+    /// below) all border *that same* block (by construction of the
+    /// band-position offsets), so they must be uniformly `.kerbSidewalk`
+    /// when the block has a building edge to kerb (`.buildingFootprint`)
+    /// and uniformly `.asphalt` when the block is an empty `.lot` with
+    /// nothing to kerb \u2014 never an unconditional sidewalk ring regardless of
+    /// what the block holds. The ring's four true corner tiles (where
+    /// `local` hits the -1/3 extreme on *both* axes at once) are a
+    /// lattice-crossing corner: CYBERPUN-17-28 established those can never
+    /// have a true edge-sharing `.buildingFootprint` neighbour, so they
+    /// always read as `.asphalt`, independent of the block's own state.
     func test_classify_sidewalkRingAroundABlockInterior_matchesItsOwnBuildingFootprintState() {
         let seed = WorldSeed(rawValue: 31_337)
         var sawLotRing = false
@@ -173,6 +158,13 @@ final class CityLatticeGeneratorTests: XCTestCase {
                 }
 
                 for local in -1...3 {
+                    // `local == -1`/`3` combined with the line's own fixed
+                    // -1/3 coordinate lands on one of the ring's four true
+                    // corners (a lattice-crossing corner), which never
+                    // kerbs regardless of the block's own state.
+                    let isCorner = local == -1 || local == 3
+                    let expectedKind: TileKind = isCorner ? .asphalt : expected
+
                     let ringTiles = [
                         (originX + local, originY - 1),
                         (originX + local, originY + 3),
@@ -182,9 +174,9 @@ final class CityLatticeGeneratorTests: XCTestCase {
                     for (tileX, tileY) in ringTiles {
                         let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
                         XCTAssertEqual(
-                            info.kind, expected,
+                            info.kind, expectedKind,
                             "Ring tile (\(tileX), \(tileY)) around block (\(blockX), \(blockY)) was \(info.kind), "
-                                + "expected \(expected) to match the block's own building-footprint state"
+                                + "expected \(expectedKind)"
                         )
                     }
                 }
@@ -288,7 +280,7 @@ final class CityLatticeGeneratorTests: XCTestCase {
         XCTAssertTrue(anyDifference, "Two different seeds produced identical block decisions everywhere sampled")
     }
 
-    // MARK: - CYBERPUN-17-26 regression: kerb tiles are never floating
+    // MARK: - CYBERPUN-17-26/CYBERPUN-17-28 regression: kerb tiles are never floating
 
     /// The 8 neighbour offsets (orthogonal + diagonal) a kerb tile is
     /// checked against below \u2014 a lattice-crossing corner tile only ever

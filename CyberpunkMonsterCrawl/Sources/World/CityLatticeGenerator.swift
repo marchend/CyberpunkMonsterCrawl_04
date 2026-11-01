@@ -135,35 +135,31 @@ enum CityLatticeGenerator {
 
         if isStreetX && isStreetY {
             // Inside a lattice crossing: both axes' bands are street, so
-            // this tile sits in the full 3x3 intersection area. The three
-            // roles within that 3x3 are distinct, and the ground-plane
-            // renderer cannot recover them later, so they are pinned here:
+            // this tile sits in the full 3x3 intersection area.
             //
             //   corner  mouth   corner      corner = both axes on a band
             //   mouth   centre  mouth       edge (band position 0 or 2)
             //   corner  mouth   corner      mouth  = one axis is the lane
             //
-            // - Centre (both axes on the driving lane): clear asphalt.
-            // - Lane mouth (one axis is the centre lane, the other a band
-            //   edge): this is literally where a stop line is painted,
-            //   across the lane at the mouth of the junction.
-            // - Corner (both axes on a band edge): the continuation of the
-            //   `kerbSidewalk` band running down each corridor \u2014 but only
-            //   where the one block interior this specific corner borders
-            //   (`blockBorderedByEdge`) actually has a building to kerb;
-            //   otherwise it continues as `.asphalt`, since an empty lot
-            //   has no building edge for the sidewalk to serve.
-            let xIsLane = xBandPosition == 1
-            let yIsLane = yBandPosition == 1
-            if xIsLane && yIsLane {
-                return .asphalt
-            }
-            if xIsLane || yIsLane {
-                return .junctionStopLine
-            }
-            return blockBorderedByEdge(
-                tileX: tileX, tileY: tileY, xBandPosition: xBandPosition, yBandPosition: yBandPosition, seed: seed
-            ) == .buildingFootprint ? .kerbSidewalk : .asphalt
+            // CYBERPUN-17-28: every position in that 3x3 reads as plain
+            // `.asphalt`.
+            // - Centre (both axes on the driving lane): the plain driving
+            //   surface, as before.
+            // - Lane mouth (one axis the centre lane, the other a band
+            //   edge): previously painted a `.junctionStopLine` stop-line
+            //   marking, which rendered as an untinted, out-of-place
+            //   striped tile (only `.asphalt` is black-tinted by
+            //   `GroundTileRenderer`, per CYBERPUN-17-27) \u2014 that marking
+            //   is dropped, so a mouth now reads as `.asphalt` too.
+            // - Corner (both axes on a band edge): only ever touches the
+            //   block it borders *diagonally* \u2014 every orthogonal
+            //   (edge-sharing) neighbour of a corner tile is itself a
+            //   street tile, never `.buildingFootprint`. Requiring true
+            //   edge (4-connectivity) adjacency for `.kerbSidewalk` means
+            //   a corner can never legitimately kerb a sidewalk, so it
+            //   also reads as `.asphalt` rather than consulting the one
+            //   block it only corners (`blockBorderedByEdge`).
+            return .asphalt
         }
 
         // Exactly one axis is in the street band: a straight corridor
