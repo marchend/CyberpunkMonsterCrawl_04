@@ -4,9 +4,18 @@ import CoreGraphics
 /// separate from `TileKind` (the world generator's walkability/lattice
 /// vocabulary) because `TileKind.asphalt` alone does not say which way the
 /// street corridor runs, and the ground plane needs that to pick between
-/// the sheet's two lane diamonds. `GroundTileRenderer` is the one place
-/// that maps a `TileKind` (plus its tile coordinate, for asphalt's
-/// orientation) onto one of these six cases.
+/// `.asphaltEastWest` and `.asphaltNorthSouth`. `GroundTileRenderer` is the
+/// one place that maps a `TileKind` (plus its tile coordinate, for
+/// asphalt's orientation) onto one of these six cases.
+///
+/// As of CYBERPUN-17-29, `GroundTileRenderer.configure(_:for:at:)` crops
+/// `AtlasGroundDiamond.plainLot` for *both* asphalt orientations (the
+/// lane diamonds' yellow divider paint is never safe to render, tinted or
+/// not -- see that method's doc comment), so the orientation pick no
+/// longer selects between two visually distinct diamonds. It is retained
+/// for the exhaustive 1:1 `GroundTileKind` <-> `AtlasGroundDiamond`
+/// correspondence below, and because it would matter again if the art
+/// regains a lane marking that is safe to ship.
 ///
 /// This intentionally covers exactly the sheet's six diamonds — no more,
 /// no fewer — so `GroundTileCatalogTests` can assert a 1:1, exhaustive

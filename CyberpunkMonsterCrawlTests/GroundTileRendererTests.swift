@@ -236,6 +236,15 @@ final class GroundTileRendererTests: XCTestCase {
     /// `UIExtendedGrayColorSpace 0 1`; `UIColor` equality is colour-space
     /// sensitive, so that assertion fails for a node that is in fact
     /// perfectly black.
+    ///
+    /// This test pins **which rect** the renderer crops -- that it is
+    /// `plainLot` and never a lane diamond -- not that `plainLot` itself is
+    /// free of the forbidden yellow lane-divider paint. That art fact is a
+    /// property of the sheet, not of this renderer's wiring, and is measured
+    /// separately by `GroundTileSemanticsTests
+    /// .test_plainLot_hasNoSaturatedYellowPixels_measuredFromPixels` (and its
+    /// companion alpha-mask-parity test), which has the pixel-sampling
+    /// machinery this test deliberately does not duplicate.
     func test_asphaltKinds_renderAsBlackTintOverPlainLotCrop_neverTheLaneCrop() throws {
         // tileX:4, tileY:0 maps to .asphaltNorthSouth; tileX:0, tileY:4 maps
         // to .asphaltEastWest (see test_asphalt_onXAxisStreetBand_mapsToNorthSouthLane

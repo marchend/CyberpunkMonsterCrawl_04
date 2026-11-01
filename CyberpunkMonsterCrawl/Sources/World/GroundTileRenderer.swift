@@ -97,14 +97,21 @@ enum GroundTileRenderer {
             // report recurred twice more (CYBERPUN-17-28, CYBERPUN-17-29)
             // even after that fix landed. CYBERPUN-17-29: street corridors
             // now crop `AtlasGroundDiamond.plainLot` instead of the lane
-            // diamonds -- the same measured 96x60 diamond silhouette, but
-            // carrying no painted marking at all -- so the forbidden
-            // lane-divider pixels are never sampled or composited in the
-            // first place. The black tint is kept anyway, defensively, so a
-            // street corridor still reads as solid black even if
-            // `plainLot`'s own base art is not already pure black.
-            let pixelRect = GroundTileCatalog.pixelRect(for: .lot)
-            let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: pixelRect)
+            // diamonds. The two claims that matter here are measured, not
+            // inferred from the `plainLot` case name:
+            // `GroundTileSemanticsTests
+            // .test_plainLot_alphaMaskMatchesLaneDiamonds_measuredFromPixels`
+            // pins that `plainLot`'s opaque-pixel silhouette matches the lane
+            // diamonds' (so swapping the crop does not change the tile's
+            // outline against its neighbours), and `GroundTileSemanticsTests
+            // .test_plainLot_hasNoSaturatedYellowPixels_measuredFromPixels`
+            // pins that `plainLot` carries no saturated-yellow paint for the
+            // forbidden lane-divider pixels to come from. The black tint is
+            // kept anyway, defensively, so a street corridor still reads as
+            // solid black even if `plainLot`'s own base art is not already
+            // pure black.
+            let cropRect = GroundTileCatalog.pixelRect(for: .lot)
+            let texture = AtlasSheet.groundTiles.sheet.texture(forPixelRect: cropRect)
             node.texture = texture
             node.color = .black
             node.colorBlendFactor = 1
@@ -176,6 +183,17 @@ enum GroundTileRenderer {
     /// renders the kind it is handed; reintroducing junction paint anywhere
     /// in a crossing would mean changing that lattice decision (and its
     /// tests), not the crop table.
+    ///
+    /// As of CYBERPUN-17-29, `configure(_:for:at:)` crops
+    /// `AtlasGroundDiamond.plainLot` for *both* `.asphaltEastWest` and
+    /// `.asphaltNorthSouth` (see the comment in `configure(_:for:at:)`), so
+    /// the two `GroundTileKind`s this method picks between no longer
+    /// produce visually distinct nodes -- both branches render identically.
+    /// This mapping is retained anyway for the exhaustive six-case
+    /// `GroundTileKind` contract (`GroundTileCatalogTests`) and because it
+    /// would matter again if the art regains a safe, non-yellow lane marking
+    /// (the same way CYBERPUN-17-28 kept `junctionStopLine` in the catalog
+    /// after removing its only caller).
     private static func asphaltOrientation(at tileCoordinate: TileCoordinate) -> GroundTileKind {
         let xMod = mod(tileCoordinate.tileX, CityLatticeGenerator.period)
         let yMod = mod(tileCoordinate.tileY, CityLatticeGenerator.period)

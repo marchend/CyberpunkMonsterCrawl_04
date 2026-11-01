@@ -85,6 +85,15 @@ final class GroundTileSemanticsTests: XCTestCase {
     /// corridor along tile Y to the *other* (`IsometricProjection
     /// .tileToScreen`), so the two readings are opposite and a swapped pair
     /// cannot satisfy both assertions.
+    ///
+    /// As of CYBERPUN-17-29, `GroundTileRenderer.configure(_:for:at:)` no
+    /// longer crops `laneEastWest`/`laneNorthSouth` for either asphalt
+    /// orientation (it crops `plainLot` for both, to keep the yellow
+    /// lane-divider paint these two crops carry off the screen entirely --
+    /// see `GroundTileRenderer`'s doc comments). So this test now pins the
+    /// *art's* lane-pair semantics against a production consumer that no
+    /// longer exists; a red run here means the sheet's lane-pair art
+    /// changed, not that any on-screen tile rendered incorrectly.
     func test_eachLaneCrop_carriesPaintElongatedAlongTheAxisItsCaseNameClaims() throws {
         let pixels = try groundPixels()
 
@@ -123,6 +132,77 @@ final class GroundTileSemanticsTests: XCTestCase {
             "The two lane crops measure the same dominant paint axis, so they are not the two corridor "
                 + "orientations the catalog treats them as."
         )
+    }
+
+    // MARK: - No forbidden lane-divider paint on a street tile (CYBERPUN-17-29)
+
+    /// `GroundTileRenderer.configure(_:for:at:)` crops `plainLot` for both
+    /// asphalt orientations specifically because the lane diamonds' alpha
+    /// silhouette has to survive the swap -- a street corridor must keep the
+    /// exact outline it always had against its four neighbours, or the tint
+    /// becomes a visible seam. This is the measurement
+    /// `GroundTileRenderer`'s own comment cites, rather than asserting "the
+    /// same measured silhouette" by name alone.
+    func test_plainLot_alphaMaskMatchesLaneDiamonds_measuredFromPixels() throws {
+        let pixels = try groundPixels()
+
+        let lot = Crop(kind: .lot, pixels: pixels).opaqueOffsets
+        let laneEastWest = Crop(kind: .asphaltEastWest, pixels: pixels).opaqueOffsets
+        let laneNorthSouth = Crop(kind: .asphaltNorthSouth, pixels: pixels).opaqueOffsets
+
+        XCTAssertEqual(
+            lot, laneEastWest,
+            "plainLot's opaque-pixel silhouette differs from laneEastWest's -- cropping plainLot instead "
+                + "of the lane diamond would change a street corridor's outline against its neighbours."
+        )
+        XCTAssertEqual(
+            lot, laneNorthSouth,
+            "plainLot's opaque-pixel silhouette differs from laneNorthSouth's -- cropping plainLot "
+                + "instead of the lane diamond would change a street corridor's outline against its "
+                + "neighbours."
+        )
+    }
+
+    /// The actual acceptance criterion behind CYBERPUN-17-27/-28/-29: no
+    /// street tile may carry a yellow lane-divider pixel, under any tint.
+    /// Unlike `GroundTileRendererTests
+    /// .test_asphaltKinds_renderAsBlackTintOverPlainLotCrop_neverTheLaneCrop`,
+    /// this does not compare `textureRect()`s (which can only confirm
+    /// *which* rect was cropped, not whether that rect's art is safe) -- it
+    /// scans the actual decoded pixels `plainLot` crops.
+    func test_plainLot_hasNoSaturatedYellowPixels_measuredFromPixels() throws {
+        let pixels = try groundPixels()
+        let lot = Crop(kind: .lot, pixels: pixels)
+
+        XCTAssertEqual(
+            lot.saturatedYellowPixelCount, 0,
+            "plainLot's crop carries \(lot.saturatedYellowPixelCount) saturated-yellow pixel(s) -- "
+                + "GroundTileRenderer crops this diamond for every asphalt tile, so any such pixel is a "
+                + "lane-divider mark that will render on a street tile."
+        )
+    }
+
+    /// Scans every `GroundTileKind`'s crop, not just `plainLot`'s, for the
+    /// same saturated-yellow signature. CYBERPUN-17-27 and -28 each "fixed"
+    /// the asphalt branch and shipped green while the symptom recurred,
+    /// which is evidence the yellow was never conclusively tied to the
+    /// asphalt crop at all -- this is the check that would name the real
+    /// offender (`kerbSidewalk`'s `kerbTransition` crop, `buildingFootprint`'s
+    /// `overhangLot` crop, or `lot`'s own `plainLot` crop) if it turns out to
+    /// be one of the untinted kinds instead.
+    func test_noGroundTileKind_cropsSaturatedYellowPixels_measuredFromPixels() throws {
+        let pixels = try groundPixels()
+
+        for kind in GroundTileKind.allCases {
+            let crop = Crop(kind: kind, pixels: pixels)
+            XCTAssertEqual(
+                crop.saturatedYellowPixelCount, 0,
+                "\(kind)'s crop \(crop.rect) carries \(crop.saturatedYellowPixelCount) saturated-yellow "
+                    + "pixel(s). Every GroundTileKind can end up rendered untinted (only "
+                    + ".asphaltEastWest/.asphaltNorthSouth are tinted black), so any kind with yellow "
+                    + "paint is a potential source of the forbidden lane-divider marks."
+            )
+        }
     }
 
     /// Pins the axis frame the measurement above is expressed in, straight
@@ -185,6 +265,44 @@ final class GroundTileSemanticsTests: XCTestCase {
                 }
             }
             return result
+        }
+
+        /// Every opaque pixel's coordinate, relative to the crop's own
+        /// top-left corner rather than the sheet's -- so two crops at
+        /// different sheet offsets can be compared for silhouette parity
+        /// (used by `test_plainLot_alphaMaskMatchesLaneDiamonds_measuredFromPixels`
+        /// to confirm `plainLot`'s alpha mask matches the lane diamonds').
+        var opaqueOffsets: Set<CGPoint> {
+            var result: Set<CGPoint> = []
+            let originX = Int(rect.minX)
+            let originY = Int(rect.minY)
+            for y in rows {
+                for x in columns where pixels.isOpaque(x: x, y: y) {
+                    result.insert(CGPoint(x: CGFloat(x - originX), y: CGFloat(y - originY)))
+                }
+            }
+            return result
+        }
+
+        /// Count of opaque pixels that read as "saturated yellow
+        /// lane-divider paint" (high red, high green, low blue) -- the
+        /// signature CYBERPUN-17-27, -28 and -29 all trace back to. Used to
+        /// pin that a given crop carries none of that paint, independent of
+        /// any tint applied at render time.
+        var saturatedYellowPixelCount: Int {
+            var count = 0
+            for y in rows {
+                for x in columns where pixels.isOpaque(x: x, y: y) {
+                    let base = (y * pixels.width + x) * 4
+                    let red = pixels.rgba[base]
+                    let green = pixels.rgba[base + 1]
+                    let blue = pixels.rgba[base + 2]
+                    if red >= 200, green >= 180, blue <= 100 {
+                        count += 1
+                    }
+                }
+            }
+            return count
         }
 
         /// Content fingerprint of just this crop's pixels.
