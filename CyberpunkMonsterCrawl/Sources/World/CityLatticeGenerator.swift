@@ -104,25 +104,23 @@ enum CityLatticeGenerator {
     /// Sub-classifies a tile already known to be street (i.e.
     /// `isStreetX || isStreetY`) into asphalt / stop-line / kerb-sidewalk.
     ///
-    /// This consults `seed` for exactly one purpose: a street-band edge
-    /// tile (band position 0 or 2 on a straight corridor, or one of the
-    /// four corners of a lattice crossing) only reads as `.kerbSidewalk`
-    /// when the specific block interior it borders actually has a
-    /// building edge to kerb (`.buildingFootprint`); an edge bordering an
-    /// empty `.lot` interior has nothing to kerb and reads as `.asphalt`
-    /// instead. That lookup (`isEmptyLotBlock`) is itself a pure function
-    /// of block coordinates derived from `tileX`/`tileY` plus `seed` \u2014 the
-    /// same three inputs `classify` already takes \u2014 so this stays a pure
-    /// function of its inputs and the chunk-boundary agreement
-    /// (`CYBERPUN-17-3-t3`) still holds. The *structural* decisions \u2014
-    /// which tiles are street at all, and the lane/stop-line/corner
-    /// layout within a crossing \u2014 remain 100% seed-independent, which is
-    /// what guarantees the intersection rule and the lattice's
-    /// seed-independent connectivity. (A corner/edge tile's *kind* is not
-    /// part of that structural layout: which of a crossing's nine
-    /// positions is a corner never changes, but whether a given corner
-    /// reads as `.kerbSidewalk` or `.asphalt` follows the one block
-    /// interior it borders.)
+    /// This consults `seed` for exactly one purpose: a straight-corridor
+    /// street-band edge tile (band position 0 or 2) only reads as
+    /// `.kerbSidewalk` when the specific block interior it borders
+    /// actually has a building edge to kerb (`.buildingFootprint`); an edge
+    /// bordering an empty `.lot` interior has nothing to kerb and reads as
+    /// `.asphalt` instead. CYBERPUN-17-28: a lattice crossing (both axes
+    /// street) never reaches that lookup at all \u2014 every position in a
+    /// crossing's 3x3 area reads as plain `.asphalt`, since a crossing
+    /// corner only ever borders its nearest block diagonally, never through
+    /// a true edge-sharing neighbour. That lookup (`isEmptyLotBlock`) is
+    /// itself a pure function of block coordinates derived from
+    /// `tileX`/`tileY` plus `seed` \u2014 the same three inputs `classify`
+    /// already takes \u2014 so this stays a pure function of its inputs and the
+    /// chunk-boundary agreement (`CYBERPUN-17-3-t3`) still holds. The
+    /// *structural* decision \u2014 which tiles are street at all \u2014 remains
+    /// 100% seed-independent, which is what guarantees the intersection
+    /// rule and the lattice's seed-independent connectivity.
     private static func streetTileKind(
         tileX: Int, tileY: Int, xMod: Int, yMod: Int, isStreetX: Bool, isStreetY: Bool, seed: WorldSeed
     ) -> TileKind {

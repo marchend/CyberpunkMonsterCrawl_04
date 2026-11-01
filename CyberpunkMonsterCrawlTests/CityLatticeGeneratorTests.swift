@@ -282,27 +282,23 @@ final class CityLatticeGeneratorTests: XCTestCase {
 
     // MARK: - CYBERPUN-17-26/CYBERPUN-17-28 regression: kerb tiles are never floating
 
-    /// The 8 neighbour offsets (orthogonal + diagonal) a kerb tile is
-    /// checked against below \u2014 a lattice-crossing corner tile only ever
-    /// touches the block it kerbs *diagonally*, never orthogonally (it sits
-    /// one tile off on both axes from the block's own corner tile), so
-    /// 4-connectivity alone would under-report and fail every legitimate
-    /// corner.
+    /// The 4 orthogonal (edge-sharing) neighbour offsets a kerb tile is
+    /// checked against below.
     ///
-    /// OPEN QUESTION (CYBERPUN-17-26 review): this 8-connectivity
-    /// definition was chosen specifically because the implementation's
-    /// crossing-corner tiles (e.g. `(6b+3, 6c+3)` for built block `(b,
-    /// c)`) touch their block's nearest interior tile (`(6b+2, 6c+2)`)
-    /// only diagonally \u2014 all four orthogonal neighbours of such a corner
-    /// are themselves street tiles, never `.buildingFootprint`. In the
-    /// isometric renderer those two diamonds meet at a single point, which
-    /// is a plausible match for the ticket's "floating sidewalk square"
-    /// screenshot. Whether that diagonal-only corner touch is the intended
-    /// visual design (sidewalks wrap corners) or the reported defect
-    /// (sidewalks must only ever edge-share with a building) is a product
-    /// call this test cannot make on its own \u2014 see the fix plan.
+    /// RESOLVED (CYBERPUN-17-28): a lattice-crossing corner tile only ever
+    /// touches the block it borders *diagonally* (e.g. `(6b+3, 6c+3)` for
+    /// built block `(b, c)` touches its nearest interior tile `(6b+2,
+    /// 6c+2)` only diagonally \u2014 all four orthogonal neighbours of such a
+    /// corner are themselves street tiles, never `.buildingFootprint`).
+    /// That diagonal-only touch is the reported defect ("floating sidewalk
+    /// square"), not an intended visual design, so `.kerbSidewalk` now
+    /// requires a true edge (4-connectivity) adjacency to a building
+    /// footprint \u2014 `CityLatticeGenerator.streetTileKind` enforces this by
+    /// routing every crossing corner to `.asphalt` instead. This test pins
+    /// that decision using only orthogonal offsets, so a regression back to
+    /// diagonal-only kerbing would fail it.
     private var neighborOffsets: [(Int, Int)] {
-        [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+        [(0, -1), (-1, 0), (1, 0), (0, 1)]
     }
 
     /// Black-box regression for CYBERPUN-17-26 (\"building sidewalks not
@@ -336,13 +332,35 @@ final class CityLatticeGeneratorTests: XCTestCase {
                     XCTAssertTrue(
                         hasBuildingNeighbor,
                         "(\(tileX), \(tileY)) under seed \(seed.rawValue) rendered .kerbSidewalk with no "
-                            + ".buildingFootprint tile among its 8 neighbours - a floating sidewalk square."
+                            + ".buildingFootprint tile among its 4 orthogonal neighbours - a floating sidewalk square."
                     )
                 }
             }
         }
 
         XCTAssertTrue(sawAnyKerbTile, "Test fixture sampled no .kerbSidewalk tile at all - strengthen the range/seed")
+    }
+
+    /// CYBERPUN-17-28: `TileKind.junctionStopLine` is kept only for the
+    /// ground-plane catalog/enum's exhaustive-mapping contract; `classify`
+    /// must never actually emit it (it rendered as an untinted,
+    /// out-of-place striped tile). This sweeps the same wide coordinate
+    /// range and seed set as the other structural tests above so a future
+    /// change that starts re-emitting the case fails here rather than
+    /// shipping.
+    func test_classify_neverEmitsJunctionStopLine_acrossManySeeds() {
+        for seed in someSeeds(8) {
+            for tileX in stride(from: -24, through: 24, by: 1) {
+                for tileY in stride(from: -24, through: 24, by: 1) {
+                    let info = CityLatticeGenerator.classify(tileX: tileX, tileY: tileY, seed: seed)
+                    XCTAssertNotEqual(
+                        info.kind, .junctionStopLine,
+                        "(\(tileX), \(tileY)) under seed \(seed.rawValue) emitted .junctionStopLine, "
+                            + "which CYBERPUN-17-28 requires classify to never produce."
+                    )
+                }
+            }
+        }
     }
 
     // Note: a sibling "street edges/corners bordering an empty-lot block
