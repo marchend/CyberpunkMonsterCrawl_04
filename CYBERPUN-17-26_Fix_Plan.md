@@ -1,91 +1,24 @@
-# CYBERPUN-17-26 Fix Plan — building sidewalks not rendered correctly
+# CYBERPUN-17-26 — Fix plan
+
+**Bug:** building sidewalks not rendered correctly
 
 ## Root cause
 
-No production defect was found. `CityLatticeGenerator.classify` (via
-`streetTileKind` / `blockBorderedByEdge`) already enforces the exact
-invariant the ticket describes: a street-band edge tile, or a
-lattice-crossing corner tile, looks up the single block interior it
-actually borders (`blockBorderedByEdge`) and only emits `.kerbSidewalk`
-when that block is non-empty (`.buildingFootprint`); an edge/corner
-beside an empty `.lot` already renders `.asphalt`.
+Exhaustive review of CityLatticeGenerator.classify/streetTileKind/blockBorderedByEdge (plus GroundTileRenderer/GroundTileCatalog and BuildingPlacement/BuildingFootprintReservation) shows the adjacency invariant the ticket describes is already enforced: every street-band edge or crossing-corner tile looks up the single block interior it actually borders via blockBorderedByEdge and only emits .kerbSidewalk when that block is non-empty (.buildingFootprint); an edge/corner beside an empty .lot already renders .asphalt. This was the CYBERPUN-17-22 fix, and it is independently corroborated by existing tests (test_classify_sidewalkRingAroundABlockInterior_matchesItsOwnBuildingFootprintState, the two GroundTileRendererTests cross-section tests) and by docs/evidence's gate-04 city-read audit ("no offender found"). Manual proof of every straight-edge/crossing-corner/negative-coordinate case confirms no current defect. The remaining gap is test coverage, not logic: existing tests re-derive the same internal block-arithmetic the generator uses rather than independently verifying, tile-by-tile via classify() on actual neighboring tiles, that no .kerbSidewalk tile is emitted without a true .buildingFootprint neighbor — the literal, black-box statement of the ticket's acceptance criteria.
 
-This was fixed under `CYBERPUN-17-22`, is already covered by
-`CityLatticeGeneratorTests` / `GroundTileRendererTests`
-(`test_classify_sidewalkRingAroundABlockInterior_matchesItsOwnBuildingFootprintState`,
-`test_threeTileStreetCrossSection_besideBuiltBlocks_readsAsphaltFlankedBySidewalks`,
-`test_threeTileStreetCrossSection_besideEmptyLots_readsAsUnbrokenAsphalt`),
-and is independently corroborated by `docs/evidence`'s gate-04 city-read
-audit ("no offender found").
+## Plan
 
-Manual proof across straight north-south and east-west corridors, all
-four lattice-crossing corners (via `blockBorderedByEdge`'s
-`xBandPosition`/`yBandPosition` offset arithmetic), and negative-coordinate
-`floorDiv`/`mod` cases confirms the logic holds for every case the AC
-names. `GroundTileRenderer` / `GroundTileCatalog` / `BuildingPlacement` /
-`BuildingFootprintReservation` were also reviewed and introduce no
-mismatch (every lot of a non-empty block is guaranteed a building by
-`BuildingPlacement.generate`'s row-major walk with 2x2-overlap fallback,
-so `TileKind.buildingFootprint` never disagrees with what is actually
-drawn).
+## Fix Plan — CYBERPUN-17-26
 
-**The remaining gap is test coverage, not behavior.** The existing tests
-re-derive the generator's own internal block-index arithmetic
-(`localFloorDiv`, `xBand == 2 ? 1 : 0`, etc.) rather than independently
-checking — via `classify()` called on the tile's *actual* neighboring
-coordinates — that every emitted `.kerbSidewalk` tile is genuinely
-adjacent to a `.buildingFootprint` tile. That is the literal, black-box
-statement of the ticket's acceptance criteria, and it is not yet pinned
-that way anywhere in the suite.
+**Root cause:** No production defect found. `CityLatticeGenerator.classify` (via `streetTileKind`/`blockBorderedByEdge`) already enforces the exact invariant the ticket describes: a street-band edge or lattice-crossing corner tile looks up the single block interior it borders and only emits `.kerbSidewalk` when that block is non-empty (`.buildingFootprint`); an edge/corner beside an empty `.lot` already renders `.asphalt`. This was fixed under CYBERPUN-17-22, is already covered by `CityLatticeGeneratorTests`/`GroundTileRendererTests`, and is independently corroborated by the `docs/evidence` gate-04 city-read audit ("no offender found"). Manual proof across straight corridors, all four crossing corners, and negative-coordinate `floorDiv`/`mod` cases confirms the logic holds. The gap is coverage, not behavior: existing tests re-derive the generator's own internal block-index arithmetic rather than independently checking, via `classify()` on real neighboring tiles, that every `.kerbSidewalk` tile is genuinely adjacent to a `.buildingFootprint` tile — the literal, black-box statement of the AC.
 
-## Changes
+**Changes (test-only, 1 file):**
+- `CyberpunkMonsterCrawlTests/CityLatticeGeneratorTests.swift`: add one new test that:
+  - Sweeps `CityLatticeGenerator.classify` over a wide tile range (e.g. -24...24 on both axes) across several seeds.
+  - For every tile that classifies `.kerbSidewalk`, independently calls `classify` on all 8 surrounding neighbor coordinates and asserts at least one neighbor is `.buildingFootprint` — proving the AC ("no `.kerbSidewalk` tile unless adjacent to a `.buildingFootprint` tile") directly from real neighbor lookups, not from re-deriving `blockBorderedByEdge`'s formula.
+  - Also asserts, for a swept set of street edges/corners known to border an empty-lot block (reusing `isEmptyLotBlock` only to pick fixture coordinates, not to compute the expected kind), that the resulting kind is `.asphalt`, never `.kerbSidewalk`.
 
-**File:** `CyberpunkMonsterCrawlTests/CityLatticeGeneratorTests.swift`
-(test-only; no production code changes)
-
-Add one new regression test, `test_everyKerbSidewalkTile_hasAnActualBuildingFootprintNeighbor_acrossManySeeds`,
-that:
-
-1. Sweeps `CityLatticeGenerator.classify(tileX:tileY:seed:)` over a wide
-   tile range (e.g. `-24...24` on both axes) across several seeds (reuse
-   the file's existing `someSeeds(_:)` helper).
-2. For every tile that classifies as `.kerbSidewalk`, independently calls
-   `classify` on all 8 real surrounding neighbor coordinates
-   `(tileX + dx, tileY + dy)` for `dx, dy in -1...1` (excluding `(0,0)`)
-   and asserts **at least one** neighbor's kind is `.buildingFootprint`.
-   This proves the AC directly from real neighbor lookups rather than
-   from re-deriving `blockBorderedByEdge`'s internal formula — if a
-   future change ever regresses the adjacency guarantee, this test fails
-   even if it also breaks in a way that coincidentally keeps the
-   formula-mirroring tests green.
-3. Additionally sweeps a representative set of street edges/corners that
-   border blocks `CityLatticeGenerator.isEmptyLotBlock` reports as empty
-   (using `isEmptyLotBlock` only to *pick* fixture coordinates to probe,
-   never to compute the expected kind) and asserts the resulting
-   `classify(...).kind` is `.asphalt`, never `.kerbSidewalk` — the
-   ticket's second bullet, stated independently of the first.
-
-## Tests
-
-- New black-box regression test added as above — the "test that should
-  have caught this bug" per the guiding principle, now pinning the AC in
-  an implementation-independent way.
-- All existing `CityLatticeGeneratorTests` and `GroundTileRendererTests`
-  invariants are expected to continue passing unchanged, since no
-  production code is touched.
-- `code_run_tests` is a no-op signal in this sandboxed environment (no
-  native iOS toolchain), so correctness here rests on: (a) the new test
-  calling only the public, already-pure `classify` API with no
-  reimplementation of its internals, and (b) the manual, from-first-
-  principles proof recorded in the Jira findings that the invariant holds
-  for every structural case (straight corridors on both axes, all four
-  crossing corners, negative-coordinate wraparound).
-
-## Non-goals (per ticket)
-
-- No change to lattice period/street-width structure.
-- No change to which blocks are chosen as empty lots.
-- No production code changes — investigation found the invariant already
-  correctly implemented; this plan only closes the test-coverage gap the
-  ticket explicitly asked for ("add a regression test covering the
-  reported mismatch").
+**Tests:**
+- New regression test added to `CityLatticeGeneratorTests.swift` per above — this is the "test that should have caught this bug" per the guiding principle, now verifying the AC in a implementation-independent (black-box) way.
+- Confirm all existing `CityLatticeGeneratorTests` and `GroundTileRendererTests` invariants continue to pass unchanged (no production code touched).
+- No new production files; `code_run_tests` is a no-op signal in this environment (native iOS toolchain unavailable), so correctness rests on the independent, from-first-principles manual proof plus the new black-box test's logic being self-consistent (it calls only public `classify`, no internal re-implementation).

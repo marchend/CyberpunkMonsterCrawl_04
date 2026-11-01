@@ -1,5 +1,6 @@
 import CoreGraphics
 import SpriteKit
+import UIKit
 import XCTest
 @testable import CyberpunkMonsterCrawl
 
@@ -195,18 +196,115 @@ final class GroundTileRendererTests: XCTestCase {
         }
     }
 
-    func test_everyProducedNode_isPixelCrisp() {
+    func test_everyProducedNode_isPixelCrisp() throws {
         let nodes = allProducedNodes()
         XCTAssertFalse(nodes.isEmpty)
 
         for node in nodes {
-            XCTAssertEqual(node.texture?.filteringMode, .nearest)
-            XCTAssertEqual(node.texture?.usesMipmaps, false)
+            // Every ground kind -- asphalt included, which is tinted black
+            // rather than rendered textureless (CYBERPUN-17-27) -- carries
+            // an atlas crop, so the filtering checks are unconditional.
+            let texture = try XCTUnwrap(node.texture, "Every ground node must carry its atlas crop.")
+            XCTAssertEqual(texture.filteringMode, .nearest)
+            XCTAssertEqual(texture.usesMipmaps, false)
             assertIsWholeNumber(node.xScale, label: "xScale")
             assertIsWholeNumber(node.yScale, label: "yScale")
             assertIsWholeNumber(node.position.x, label: "position.x")
             assertIsWholeNumber(node.position.y, label: "position.y")
         }
+    }
+
+    // MARK: - Asphalt renders solid black (CYBERPUN-17-27)
+
+    /// The street tiles' yellow lane-divider dash read as visually wrong
+    /// on-device, so both asphalt orientations must render solid black --
+    /// as a **full-strength black tint over the lane crop**, not as a
+    /// textureless colour fill. Keeping the texture is what preserves the
+    /// diamond's alpha silhouette: an untextured `SKSpriteNode` fills its
+    /// whole rectangular `size`, so a 96x60 opaque black rectangle would
+    /// overpaint the corners of the four neighbouring diamonds.
+    ///
+    /// Blackness is asserted on the **RGBA components**, never with
+    /// `XCTAssertEqual(node.color, .black)`. `SKSpriteNode` normalises an
+    /// assigned colour into extended sRGB, so the value read back is
+    /// `UIExtendedSRGBColorSpace 0 0 0 1` while `UIColor.black` is
+    /// `UIExtendedGrayColorSpace 0 1`; `UIColor` equality is colour-space
+    /// sensitive, so that assertion fails for a node that is in fact
+    /// perfectly black.
+    func test_asphaltKinds_renderAsBlackTintOverTheirLaneCrop() throws {
+        // tileX:4, tileY:0 maps to .asphaltNorthSouth; tileX:0, tileY:4 maps
+        // to .asphaltEastWest (see test_asphalt_onXAxisStreetBand_mapsToNorthSouthLane
+        // / test_asphalt_onYAxisStreetBand_mapsToEastWestLane above).
+        let northSouthCoordinate = TileCoordinate(tileX: 4, tileY: 0)
+        let eastWestCoordinate = TileCoordinate(tileX: 0, tileY: 4)
+
+        for (coordinate, groundKind) in [
+            (northSouthCoordinate, GroundTileKind.asphaltNorthSouth),
+            (eastWestCoordinate, GroundTileKind.asphaltEastWest),
+        ] {
+            let node = GroundTileRenderer.node(for: .asphalt, at: coordinate)
+
+            XCTAssertNotNil(
+                node.texture,
+                "\(groundKind) must keep its lane crop so the tint inherits the diamond's alpha mask."
+            )
+            XCTAssertEqual(node.colorBlendFactor, 1, "\(groundKind) must tint its crop at full strength.")
+            assertIsBlack(node.color, label: "\(groundKind)'s tint")
+            XCTAssertEqual(
+                node.size, GroundTileCatalog.pixelRect(for: groundKind).size,
+                "\(groundKind) must keep the lane diamond's measured footprint."
+            )
+        }
+    }
+
+    /// A pooled node that last rendered asphalt must not keep its
+    /// full-strength black tint when `GroundPlaneStreamer` recycles it as
+    /// another kind -- `configure(_:for:at:)` has to be total over the node
+    /// it is handed, not merely additive. Without the `default:` branch
+    /// resetting `colorBlendFactor`, a recycled kerb would draw as a black
+    /// silhouette.
+    func test_recycledAsphaltNode_reconfiguredAsAnotherKind_dropsItsBlackTint() throws {
+        let asphaltCoordinate = TileCoordinate(tileX: 4, tileY: 0)
+        let node = GroundTileRenderer.node(for: .asphalt, at: asphaltCoordinate)
+        XCTAssertEqual(node.colorBlendFactor, 1, "Precondition: the node starts out as a fully tinted lane.")
+
+        let kerbCoordinate = TileCoordinate(tileX: 3, tileY: 0)
+        GroundTileRenderer.configure(node, for: .kerbSidewalk, at: kerbCoordinate)
+
+        let texture = try XCTUnwrap(node.texture, "A recycled node must be re-cropped to its new kind's diamond.")
+        XCTAssertEqual(
+            node.colorBlendFactor, 0,
+            "A pooled asphalt node recycled as a kerb must drop the lane's black tint, not paint the kerb black."
+        )
+        XCTAssertEqual(node.size, texture.size())
+        XCTAssertEqual(
+            node.size, GroundTileCatalog.pixelRect(for: .kerbSidewalk).size,
+            "A recycled node must take its new kind's measured footprint."
+        )
+    }
+
+    /// Asserts `color` is black by reading its RGBA **components**, which is
+    /// colour-space agnostic, rather than comparing `UIColor` instances --
+    /// see `test_asphaltKinds_renderAsBlackTintOverTheirLaneCrop` for why
+    /// the equality form is unusable on a colour read back off a node.
+    private func assertIsBlack(
+        _ color: UIColor,
+        label: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var red: CGFloat = -1
+        var green: CGFloat = -1
+        var blue: CGFloat = -1
+        var alpha: CGFloat = -1
+        XCTAssertTrue(
+            color.getRed(&red, green: &green, blue: &blue, alpha: &alpha),
+            "\(label): \(color) could not be read as RGBA.", file: file, line: line
+        )
+        XCTAssertEqual(red, 0, accuracy: 1e-6, "\(label): red component is \(red), not 0.", file: file, line: line)
+        XCTAssertEqual(green, 0, accuracy: 1e-6, "\(label): green component is \(green), not 0.", file: file, line: line)
+        XCTAssertEqual(blue, 0, accuracy: 1e-6, "\(label): blue component is \(blue), not 0.", file: file, line: line)
+        XCTAssertEqual(alpha, 1, accuracy: 1e-6, "\(label): alpha is \(alpha), not fully opaque.", file: file, line: line)
     }
 
     private func assertIsWholeNumber(
